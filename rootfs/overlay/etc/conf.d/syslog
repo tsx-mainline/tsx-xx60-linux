@@ -1,0 +1,2 @@
+# keep logs small on the SD-class flash: 1 MiB x 3 rotations
+SYSLOGD_OPTS="-t -s 1024 -b 3"

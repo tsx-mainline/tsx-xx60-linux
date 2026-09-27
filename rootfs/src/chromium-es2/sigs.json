@@ -1,0 +1,14 @@
+{
+  "alpine-v3.24-armv7-chromium-152.0.7977.82-r0": {
+    "package": "chromium-152.0.7977.82-r0 (Alpine v3.24 community, armv7)",
+    "sha256_orig": "bd982025b66855e1f3be759a6f4278ca1a3320343584476dc28512b9cfbb5514",
+    "sha256_patched": "bb683d8f414e302bd4ae55b324159a140b8d3d32cb4da3c13f8178d4107b3ff3",
+    "offset": "0x77c8712",
+    "vaddr": "0x77d8712",
+    "kind": "beq",
+    "target": "0x77d87d6",
+    "context_before": "98f814000028",
+    "orig": "60d0",
+    "patched": "00bf"
+  }
+}

@@ -1,0 +1,43 @@
+--- a/output.c
++++ b/output.c
+@@ -12,7 +12,9 @@
+ #include "config.h"
+ 
+ #include <assert.h>
++#include <drm_fourcc.h>
+ #include <stdlib.h>
++#include <string.h>
+ #include <unistd.h>
+ #include <wayland-server-core.h>
+ #include <wlr/backend.h>
+@@ -21,6 +23,8 @@
+ #if WLR_HAS_X11_BACKEND
+ #include <wlr/backend/x11.h>
+ #endif
++#include <wlr/render/allocator.h>
++#include <wlr/render/drm_format_set.h>
+ #include <wlr/render/swapchain.h>
+ #include <wlr/render/wlr_renderer.h>
+ #include <wlr/types/wlr_compositor.h>
+@@ -281,6 +285,21 @@
+ 
+ 	struct wlr_output_state state = {0};
+ 	wlr_output_state_set_enabled(&state, true);
++
++	/* xx60 (Meson8m2): the OSD primary plane offers ARGB8888 but no
++	 * XRGB8888, and wlroots renders XRGB8888 by default without a fallback
++	 * ("Failed to pick primary buffer format"). Use ARGB8888 when the primary
++	 * plane lacks XRGB8888, or when CAGE_RENDER_FORMAT=argb8888. */
++	const struct wlr_drm_format_set *primary_formats =
++		wlr_output_get_primary_formats(wlr_output, server->allocator->buffer_caps);
++	const char *force_format = getenv("CAGE_RENDER_FORMAT");
++	if ((force_format && strcmp(force_format, "argb8888") == 0) ||
++	    (primary_formats && !wlr_drm_format_set_get(primary_formats, DRM_FORMAT_XRGB8888) &&
++	     wlr_drm_format_set_get(primary_formats, DRM_FORMAT_ARGB8888))) {
++		wlr_log(WLR_INFO, "Output %s: using the ARGB8888 render format", wlr_output->name);
++		wlr_output_state_set_render_format(&state, DRM_FORMAT_ARGB8888);
++	}
++
+ 	if (!wl_list_empty(&wlr_output->modes)) {
+ 		struct wlr_output_mode *preferred_mode = wlr_output_preferred_mode(wlr_output);
+ 		if (preferred_mode) {

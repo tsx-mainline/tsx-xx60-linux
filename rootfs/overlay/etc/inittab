@@ -1,0 +1,9 @@
+# /etc/inittab (TSX kiosk). The panel screen belongs to the kiosk (cage on the
+# active VT via seatd), so there is no getty on tty1..6; login on the serial
+# console or over ssh.
+::sysinit:/sbin/openrc sysinit
+::sysinit:/sbin/openrc boot
+::wait:/sbin/openrc default
+ttyAML0::respawn:/sbin/getty -L 115200 ttyAML0 vt100
+::ctrlaltdel:/sbin/reboot
+::shutdown:/sbin/openrc shutdown

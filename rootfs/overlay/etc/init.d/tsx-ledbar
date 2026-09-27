@@ -1,0 +1,10 @@
+#!/sbin/openrc-run
+description="RGB LED bar: boot colour and screen-blank following (/etc/tsx/ledbar.conf)"
+supervisor=supervise-daemon
+command=/usr/local/sbin/tsx-ledbard
+respawn_delay=5
+respawn_max=0
+output_log=/var/log/tsx-ledbar.log
+error_log=/var/log/tsx-ledbar.log
+depend() { after udev-settle tsx-idled; }
+start_pre() { checkpath -d -m 0755 /run/tsx; }

@@ -1,0 +1,29 @@
+#!/sbin/openrc-run
+# Sendspin player (Music Assistant) on the panel speakers. Off by default: not
+# in a runlevel until the audio path works (the sendspin bring-up notes).
+description="Sendspin synchronized-audio player (/etc/tsx/sendspin.conf)"
+supervisor=supervise-daemon
+command=/usr/local/bin/sendspin-cli
+respawn_delay=10
+respawn_max=0
+output_log=/var/log/tsx-sendspin.log
+error_log=/var/log/tsx-sendspin.log
+command_user="kiosk:audio"
+depend() { need net; use avahi-daemon; after tsx-setup; }
+start_pre() {
+	# supervise-daemon opens the log after switching to command_user: it must exist and be writable by kiosk
+	checkpath -f -m 0644 -o kiosk:audio /var/log/tsx-sendspin.log
+	[ -x "$command" ] || { eerror "$command missing (rootfs/src/sendspin/build.sh)"; return 1; }
+	[ -e /proc/asound/TSW1060 ] || ewarn "no TSW1060 sound card (audio not brought up yet)"
+	SENDSPIN_NAME= SENDSPIN_ID= SENDSPIN_OUTPUT=alsa:media SENDSPIN_FORMATS= SENDSPIN_BUFFER_MS=300
+	SENDSPIN_STATIC_DELAY=0 SENDSPIN_SERVER= SENDSPIN_ARGS=
+	[ -r /etc/tsx/sendspin.conf ] && . /etc/tsx/sendspin.conf
+	checkpath -d -m 0755 -o kiosk:audio /run/sendspin-cli
+	checkpath -d -m 0755 -o kiosk:audio /var/lib/sendspin
+	command_args="-n \"${SENDSPIN_NAME:-$(hostname)}\" -o $SENDSPIN_OUTPUT --buffer-ms $SENDSPIN_BUFFER_MS --static-delay $SENDSPIN_STATIC_DELAY --control-socket /run/sendspin-cli/control.sock --state-dir /var/lib/sendspin --manufacturer Crestron --product-name xx60"
+	[ -n "$SENDSPIN_ID" ] && command_args="$command_args --id $SENDSPIN_ID"
+	[ -n "$SENDSPIN_FORMATS" ] && command_args="$command_args --audio-format $SENDSPIN_FORMATS"
+	[ -n "$SENDSPIN_SERVER" ] && command_args="$command_args -s $SENDSPIN_SERVER"
+	command_args="$command_args $SENDSPIN_ARGS"
+	return 0
+}

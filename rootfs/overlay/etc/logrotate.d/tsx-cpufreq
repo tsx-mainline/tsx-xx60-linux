@@ -1,0 +1,8 @@
+/var/log/tsx-cpufreq.log {
+	size 1M
+	rotate 2
+	compress
+	missingok
+	notifempty
+	copytruncate
+}

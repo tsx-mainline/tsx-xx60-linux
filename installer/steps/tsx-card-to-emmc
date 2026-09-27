@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# eMMC migration: move a unit that boots the mainline kiosk from the SD card
+# (the card stage: root p2, /data p4, p1 = tsxboot.img + rescue) to the eMMC
+# boot, the way it was first done on unit B (installer/emmc migration, see
+# its NOTES.md "Result"). This is an internal step of tsx-install-mainline;
+# calling it directly is an expert/debug path.
+#   1 inputs: emmc/out/tsxboot-emmc.img (+ .sha256), emmc/migrate-to-emmc.sh,
+#     emmc/tsx-update-boot; the panel answers mainline ssh with root = mmcblk0p2
+#   2 copy them to /data/tmp on the panel; tsx-update-boot puts tsxboot-emmc.img on
+#     p1 (golden/rescue boot.img verified unchanged)
+#   3 reboot; the eMMC-aware kernel (blkdevparts) shows mmcblk1p1..p8; root still p2
+#   4 migrate-to-emmc.sh: discard eMMC cache/recovery, mkfs p8 tsxroot-emmc, copy the
+#     root, fstab, write the image into p7 (readback verified)
+#   5 p1:tsxboot.off; reboot: U-Boot's stock bootcmd boots eMMC p7, root = p8
+#   6 finalise p1 (only boot.img = rescue, tsxenv.bak, tsxlayout.done stay); reboot;
+#     verify: eMMC boot, root p8, 6 binds from p4, services, DSP, boot_retry reset,
+#     kiosk time from the serial log
+#   7 optional --wake-local: WAKE=local in /etc/tsx/voice.conf, restart tsx-voice,
+#     log check, 30 s CPU sample
+#   tsx-card-to-emmc PANEL_IP [--img FILE] [--from-step N] [--to-step N] [--wake-local]
+#                    [--results FILE] [--dry-run]
+#   --img   the eMMC boot image (default emmc/out/tsxboot-emmc.img). Its sha256 comes
+#           from FILE.sha256 if that exists (as the default's does), else it is computed.
+set -euo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd); WORK=$(cd "$HERE/.." && pwd)
+IMG=$WORK/emmc/out/tsxboot-emmc.img; MIG=$WORK/emmc/migrate-to-emmc.sh; P1U=$WORK/emmc/tsx-update-boot
+SERLOG=$WORK/../tools/bench/boot-2200.log
+PANEL= FROM=1 TO=7 RESULTS= DRY=0 WAKE=0
+while [ $# -gt 0 ]; do case "$1" in --from-step) FROM=$2; shift 2;; --to-step) TO=$2; shift 2;; --results) RESULTS=$2; shift 2;; --dry-run) DRY=1; shift;; --wake-local) WAKE=1; shift;; --img) IMG=$2; shift 2;; -h|--help) sed -n '2,22p' "$0"; exit 0;; --*) echo "unknown $1" >&2; exit 2;; *) PANEL=$1; shift;; esac; done
+[ -n "$PANEL" ] || { sed -n '2,22p' "$0" >&2; exit 2; }
+[ -n "$RESULTS" ] || RESULTS=$HERE/results/tsx-card-to-emmc-$(date +%Y%m%d-%H%M).txt; mkdir -p "$(dirname "$RESULTS")"
+log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$RESULTS" >&2; }
+logblock() { log "-- $1 --"; printf '%s\n' "$2" | while IFS= read -r l; do log "  $l"; done; log "-- end $1 --"; }
+die() { log "ERROR: $*"; exit 1; }
+SSH="sshpass -p tsx ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$PANEL"
+SCP="sshpass -p tsx scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+root_dev() { $SSH "awk '\$2==\"/\"{print \$1}' /proc/mounts" 2>/dev/null | tail -n 1; }
+wait_ssh() { local w=0; log "  waiting for ssh root@$PANEL"; sleep 20; until $SSH true >/dev/null 2>&1; do sleep 5; w=$((w + 5)); [ $((w % 30)) -eq 0 ] && log "  still waiting for ssh root@$PANEL: ${w}/${1:-240} s"; [ $w -lt "${1:-240}" ] || die "ssh did not come back in ${1:-240}s"; done; log "  ssh up after ~$((w + 20)) s"; }
+# stream a long-running remote command's output live (via log) instead of
+# capturing it silently until ssh returns; leaves the full text in $out for any
+# later grep and returns the remote command's exit status (set -o pipefail is
+# on, so the if-condition reflects $SSH's status, not tee/while's).
+run_stream() {  # CMD
+	local cmd=$1 tmp rc
+	tmp=$(mktemp "$RESULTS.XXXXXX")
+	if $SSH "$cmd" 2>&1 | tee "$tmp" | while IFS= read -r l; do log "  $l"; done; then rc=0; else rc=$?; fi
+	out=$(cat "$tmp"); rm -f "$tmp"
+	return $rc
+}
+step() { [ "$FROM" -le "$1" ] && [ "$TO" -ge "$1" ]; }
+[ -f "$IMG" ] && [ -f "$MIG" ] && [ -f "$P1U" ] || die "missing inputs ($IMG, $MIG, $P1U)"
+if [ -f "$IMG.sha256" ]; then SHA=$(awk '{print $1}' "$IMG.sha256")
+else SHA=$(sha256sum < "$IMG" | cut -d' ' -f1); log "  no $IMG.sha256: computed sha256 $SHA"
+fi
+log "== tsx-card-to-emmc: PANEL=$PANEL image $(basename "$IMG") $SHA from=$FROM to=$TO dry=$DRY"
+[ "$(sha256sum < "$IMG" | cut -d' ' -f1)" = "$SHA" ] || die "$IMG does not match its .sha256"
+if [ "$DRY" = 1 ]; then
+	log "[dry-run] 2: scp image + migrate-to-emmc.sh + tsx-update-boot -> /data/tmp; sh tsx-update-boot IMG SHA"
+	log "[dry-run] 3: reboot; wait ssh; expect mmcblk1p8 in /proc/partitions, root mmcblk0p2"
+	log "[dry-run] 4: sh migrate-to-emmc.sh /data/tmp/tsxboot-emmc.img SHA"
+	log "[dry-run] 5: touch p1:tsxboot.off; reboot; expect root /dev/mmcblk1p8"
+	log "[dry-run] 6: p1 keeps boot.img tsxenv.bak tsxlayout.done; reboot; verify binds/services/DSP/boot_retry/kiosk time"
+	log "[dry-run] 7: --wake-local: WAKE=local in /etc/tsx/voice.conf, restart tsx-voice, log + 30 s top"; exit 0
+fi
+if step 2; then
+	log "== step 2: tsx-update-boot with the eMMC image"
+	r=$(root_dev); [ "$r" = /dev/mmcblk0p2 ] || die "root is $r, expected /dev/mmcblk0p2 (R1 card boot)"
+	$SSH 'mkdir -p /data/tmp' >/dev/null
+	$SCP "$IMG" "$MIG" "$P1U" "root@$PANEL:/data/tmp/" >/dev/null
+	log "  tsx-update-boot (streaming live):"
+	run_stream "sh /data/tmp/tsx-update-boot /data/tmp/tsxboot-emmc.img $SHA" || die "tsx-update-boot failed (see output above)"
+fi
+if step 3; then
+	log "== step 3: reboot on the eMMC-aware kernel from the card"
+	n=$(wc -l < "$SERLOG"); $SSH '(sleep 1; reboot) >/dev/null 2>&1 &' >/dev/null 2>&1 || true
+	wait_ssh 300
+	out=$($SSH 'uname -r; grep -c "mmcblk1p" /proc/partitions; awk "\$2==\"/\"{print \$1}" /proc/mounts; cat /sys/class/block/mmcblk1p8/size' 2>&1); logblock "after reboot" "$out"
+	grep -qx 8 <<<"$out" || die "the kernel does not show 8 eMMC partitions (blkdevparts)"
+	grep -qx 6004736 <<<"$out" || die "mmcblk1p8 size unexpected"
+	[ "$(root_dev)" = /dev/mmcblk0p2 ] || die "root is not p2 after the reboot"
+fi
+if step 4; then
+	log "== step 4: migrate-to-emmc.sh"
+	[ "$(root_dev)" = /dev/mmcblk0p2 ] || die "root must be /dev/mmcblk0p2"
+	log "  migrate-to-emmc.sh (streaming live):"
+	run_stream "sh /data/tmp/migrate-to-emmc.sh /data/tmp/tsxboot-emmc.img $SHA" || die "migrate failed (see output above)"
+	grep -q "boot partition verified" <<<"$out" || die "no 'boot partition verified'"
+fi
+if step 5; then
+	log "== step 5: tsxboot.off, reboot into the eMMC boot"
+	$SSH 'mount /media/bootfat 2>/dev/null || mount -t vfat /dev/mmcblk0p1 /media/bootfat; touch /media/bootfat/tsxboot.off; sync; umount /media/bootfat; (sleep 1; reboot) >/dev/null 2>&1 &' >/dev/null 2>&1 || true
+	n=$(wc -l < "$SERLOG"); wait_ssh 300
+	tail -n +$((n + 1)) "$SERLOG" | tr -d '\0' | grep -q 'tsx: mainline disabled' && log "  serial: 'tsx: mainline disabled' (hook skipped, stock bootcmd)" || log "  WARNING: no 'tsx: mainline disabled' on the serial log"
+	r=$(root_dev); [ "$r" = /dev/mmcblk1p8 ] || die "root is $r, expected /dev/mmcblk1p8"
+	logblock "emmc root" "$($SSH 'cat /etc/tsx/emmc-root.info; df -h / /data | tail -2')"
+fi
+if step 6; then
+	log "== step 6: finalise p1 and verify"
+	[ "$(root_dev)" = /dev/mmcblk1p8 ] || die "root must be /dev/mmcblk1p8"
+	log "  finalise p1 (streaming live):"
+	run_stream 'set -e; mount /media/bootfat 2>/dev/null || mount -t vfat /dev/mmcblk0p1 /media/bootfat; cd /media/bootfat; for f in * .[!.]*; do case "$f" in boot.img|tsxenv.bak|tsxlayout.done|"*"|".[!.]*") ;; *) rm -rf "$f"; echo "removed $f";; esac; done; sync; ls -la; sha256sum boot.img; df -k . | tail -1; cd /; umount /media/bootfat; (sleep 1; reboot) >/dev/null 2>&1 &' || die "finalise failed (see output above)"
+	n=$(wc -l < "$SERLOG"); wait_ssh 300; sleep 75
+	kt=$(tail -n +$((n + 1)) "$SERLOG" | tr -d '\0' | grep -a -o 'tsx: starting kiosk.*uptime [0-9.]*' | tail -n 1)
+	out=$($SSH 'echo "root $(awk "\$2==\"/\"{print \$1}" /proc/mounts)"; echo "kernel $(uname -r)"; for d in var/log var/lib/tsx var/lib/sendspin root home var/lib/kiosk; do grep -q " /$d ext4" /proc/mounts && echo "bind /$d=ok" || echo "bind /$d=MISSING"; done; for s in kiosk tsx-data tsx-audio tsx-tfa-dsp tsx-sendspin tsx-voice; do echo "$s:$(rc-service $s status 2>/dev/null | awk "{print \$NF}")"; done; tsx-tfa-dsp status 2>&1 | head -2; tsx-boot-ok --status 2>&1 | head -3; df -h / /data | tail -2; uptime' 2>&1)
+	logblock "verify (kiosk: ${kt:-not seen on serial})" "$out"
+	grep -q '^root /dev/mmcblk1p8$' <<<"$out" || die "root is not mmcblk1p8"
+	grep -q 'MISSING' <<<"$out" && die "a bind mount is missing"
+	grep -q 'boot_retry=0' <<<"$out" || log "  WARNING: boot_retry not 0 yet"
+fi
+if step 7 && [ "$WAKE" = 1 ]; then
+	log "== step 7: voice wake word (WAKE=local)"
+	out=$($SSH 'sed -i "s/^WAKE=.*/WAKE=local/" /etc/tsx/voice.conf; grep -E "^WAKE" /etc/tsx/voice.conf; rc-service tsx-voice restart >/dev/null 2>&1; sleep 25; tail -n 15 /var/log/tsx-voice.log 2>/dev/null; echo "--- cpu 30 s"; top -b -d 30 -n 2 2>/dev/null | grep -E "^(CPU|Mem|.*(voice|lva|python|wyoming|chrom))" | tail -n 8' 2>&1)
+	logblock "voice" "$out"
+fi
+log "== done"

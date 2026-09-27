@@ -1,0 +1,54 @@
+#!/sbin/openrc-run
+# Browser kiosk: cage (single-app Wayland compositor) + Chromium, restarted on crash.
+description="TSX kiosk (cage + browser)"
+supervisor=supervise-daemon
+command=/usr/local/bin/kiosk-session
+command_user="kiosk:kiosk"
+respawn_delay=3
+respawn_max=0
+output_log=/var/log/kiosk.log
+error_log=/var/log/kiosk.log
+extra_started_commands="reload"
+
+depend() {
+	need seatd localmount
+	want tsx-setup
+	after udev-settle networking chronyd tsx-idled
+}
+
+start_pre() {
+	uid=$(id -u kiosk)
+	checkpath -d -m 0755 /run/user
+	checkpath -d -m 0700 -o kiosk:kiosk /run/user/$uid
+	checkpath -d -m 0755 -o kiosk:kiosk /var/lib/kiosk
+	checkpath -f -m 0644 -o kiosk:kiosk /var/log/kiosk.log
+	. /etc/kiosk.conf
+	# TLS needs a correct clock: wait for NTP, but start anyway after the limit
+	/usr/local/sbin/tsx-wait-time "${KIOSK_TIME_WAIT:-20}" || ewarn "starting without NTP sync"
+	# token handed over by install.sh --token-file: seed it once
+	if [ -s /var/lib/kiosk/pending-token ]; then
+		if NO_SERVICE=1 /usr/local/bin/kiosk-set-token --file /var/lib/kiosk/pending-token; then
+			rm -f /var/lib/kiosk/pending-token
+		else
+			ewarn "kiosk-set-token failed, will retry at the next start"
+		fi
+	fi
+	# daily restart entry in root's crontab
+	sed -i '/# tsx-kiosk-restart$/d' /etc/crontabs/root
+	if [ -n "${KIOSK_RESTART_AT:-}" ]; then
+		h=${KIOSK_RESTART_AT%%:*}; m=${KIOSK_RESTART_AT##*:}; h=${h#0}; m=${m#0}
+		echo "$m $h * * * /sbin/rc-service kiosk restart >/dev/null 2>&1 # tsx-kiosk-restart" >> /etc/crontabs/root
+	fi
+	# marker on the serial console (boot timing)
+	# (OpenRC's dmesg service sets the console loglevel to 1, so also write
+	# the serial port directly)
+	m="tsx: starting kiosk (KIOSK_GPU=${KIOSK_GPU:-auto}) uptime $(cut -d' ' -f1 /proc/uptime)"
+	echo "$m" > /dev/kmsg 2>/dev/null; [ -c /dev/ttyAML0 ] && echo "$m" > /dev/ttyAML0 2>/dev/null
+	return 0
+}
+
+reload() {
+	ebegin "Reloading kiosk (restarting browser)"
+	supervise-daemon "$RC_SVCNAME" --signal TERM
+	eend $?
+}

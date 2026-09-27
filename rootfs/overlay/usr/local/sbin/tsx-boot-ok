@@ -1,0 +1,92 @@
+#!/bin/sh
+# tsx-boot-ok [--status|--dry-run]: after a good boot, put U-Boot's env (the copy
+# U-Boot really reads) into the "healthy mainline" state:
+#   boot_retry=0, golden_boot_retry=0 (if set)  so the hook keeps booting mainline
+#   DataRecoveryDone=1    so Crestron's golden recovery image
+#       does not format p5/p7 and empty /data if it ever runs (its crestInit.sh
+#       reformats when DataRecoveryDone != 1; stock Android's logBootComplete.sh
+#       sets it back to 0 on every good Android boot, so it is re-set here).
+#       DEFUSE_GOLDEN=no in /etc/tsx/uboot-env.conf turns this part off.
+# One env write at most (fw_setenv --script), none if everything is already
+# right. The write is read back: CRC valid, the new values present, every other
+# variable unchanged. Refuses to write unless /etc/tsx/uboot-env.conf is marked
+# ENV_VERIFIED=yes and the env read before has a valid CRC and looks like this
+# board's env.
+set -eu
+CONF=${TSX_ENV_CONF:-/etc/tsx/uboot-env.conf}   # override for host tests only
+. "$CONF"
+mode=${1:-write}
+die() { echo "tsx-boot-ok: $*" >&2; exit 1; }
+
+# find the disk: "emmc" = the MMC-type device that has boot0 hw partitions;
+# "sd" = the SD-class device holding the Crestron MBR or layout R1
+disk=
+for d in /sys/block/mmcblk[0-9]; do
+	[ -e "$d" ] || continue
+	t=$(cat "$d/device/type" 2>/dev/null || true)
+	case "$ENV_DISK" in
+	emmc) [ "$t" = MMC ] && [ -e "${d}boot0" ] && disk=/dev/${d##*/};;
+	# p1 at 81920 and p2 at 206849: the Crestron MBR (p5 = rootfs) and layout R1
+	# (p2 = rootfs, no p5; installer) alike
+	sd) [ -e "$d/${d##*/}p2" ] && [ "$(cat "$d/${d##*/}p1/start" 2>/dev/null)" = 81920 ] && [ "$(cat "$d/${d##*/}p2/start")" = 206849 ] && disk=/dev/${d##*/};;
+	/dev/*) disk=$ENV_DISK;;
+	esac
+	[ -n "$disk" ] && break
+done
+case "$ENV_DISK" in /dev/*) disk=$ENV_DISK;; esac
+defuse=${DEFUSE_GOLDEN:-yes}
+
+if [ "$mode" = --status ]; then
+	echo "env disk: ${disk:-not found} ($ENV_DISK) offset $ENV_OFFSET size $ENV_SIZE verified=$ENV_VERIFIED defuse_golden=$defuse"
+fi
+[ "$ENV_VERIFIED" = yes ] && [ "$ENV_OFFSET" != TODO ] || die "U-Boot env location not verified (edit /etc/tsx/uboot-env.conf, see REPORT.md). boot_retry NOT reset."
+[ -n "$disk" ] && [ -b "$disk" ] || die "env disk ($ENV_DISK) not found; does the kernel DT enable that MMC controller?"
+
+run=${TSX_RUN:-/run}
+cfg=$run/tsx-fw_env.config
+echo "$disk $ENV_OFFSET $ENV_SIZE" > "$cfg"
+readenv() {   # full env text; dies on a read error, a bad CRC or a foreign env
+	out=$(fw_printenv -c "$cfg" 2>&1) || die "fw_printenv failed: $out"
+	echo "$out" | grep -qi 'bad crc' && die "env CRC bad at $disk $ENV_OFFSET: refusing to write"
+	echo "$out" | grep -q '^bootcmd=' && echo "$out" | grep -q '^aml_dt=yushan_one' || die "env at $disk $ENV_OFFSET does not look like the yushan_one U-Boot env"
+	printf '%s\n' "$out"
+}
+getv() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
+env0=$(readenv)
+br=$(getv "$env0" boot_retry); gr=$(getv "$env0" golden_boot_retry); drd=$(getv "$env0" DataRecoveryDone)
+
+# what has to change (name value per line = fw_setenv --script syntax)
+want=
+[ "$br" = 0 ] || want="${want}boot_retry 0
+"
+[ -n "$gr" ] && [ "$gr" != 0 ] && want="${want}golden_boot_retry 0
+"
+[ "$defuse" = yes ] && [ "$drd" != 1 ] && want="${want}DataRecoveryDone 1
+"
+names=$(printf '%s' "$want" | cut -d' ' -f1 | tr '\n' ' ')
+
+case "$mode" in
+--status) echo "boot_retry=$br golden_boot_retry=$gr DataRecoveryDone=$drd"; exit 0;;
+--dry-run)
+	if [ -n "$want" ]; then echo "would set: $(printf '%s' "$want" | tr ' \n' '=,' | sed 's/,$//') (now boot_retry=$br golden_boot_retry=$gr DataRecoveryDone=$drd) on $disk"
+	else echo "nothing to do (boot_retry=$br golden_boot_retry=$gr DataRecoveryDone=$drd)"; fi
+	exit 0;;
+esac
+if [ -z "$want" ]; then echo "env already good (boot_retry=$br golden_boot_retry=$gr DataRecoveryDone=$drd): nothing written"; exit 0; fi
+
+scr=$run/tsx-boot-ok.setenv
+printf '%s' "$want" > "$scr"
+fw_setenv -c "$cfg" -s "$scr" || die "fw_setenv failed (wanted: $names)"
+rm -f "$scr"
+# verify: CRC + board check (readenv), new values, every other variable unchanged
+env1=$(readenv)
+while read -r n v; do
+	[ -n "$n" ] || continue
+	[ "$(getv "$env1" "$n")" = "$v" ] || die "readback: $n is '$(getv "$env1" "$n")', not '$v' after the write"
+done <<EOF
+$want
+EOF
+set --; for n in $names; do set -- "$@" -e "^$n="; done
+[ "$(printf '%s\n' "$env0" | grep -v "$@" || true)" = "$(printf '%s\n' "$env1" | grep -v "$@" || true)" ] \
+	|| die "readback: variables other than $names changed after the write"
+echo "env updated and verified: $(printf '%s' "$want" | tr ' \n' '=,' | sed 's/,$//') (was boot_retry=$br golden_boot_retry=$gr DataRecoveryDone=$drd)"

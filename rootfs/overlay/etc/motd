@@ -1,0 +1,7 @@
+
+ xx60 mainline kiosk (Alpine Linux)
+   config:      /etc/kiosk.conf        then: rc-service kiosk restart
+   login token: kiosk-set-token <long-lived-token>
+   screen:      tsx-blank on|off       logs: /var/log/messages
+   env/boot:    /usr/local/sbin/tsx-boot-ok --status
+

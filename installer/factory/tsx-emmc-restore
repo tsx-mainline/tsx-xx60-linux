@@ -1,0 +1,157 @@
+#!/bin/sh
+# tsx-emmc-restore: put the xx60 eMMC (mmcblk1) back to stock Android from a
+# bundle made by mkbundle.sh (Crestron .puf images, plus this unit's own
+# eMMC backup regions if a backup exists; without one the unused regions are
+# zeroed and cache gets an empty ext4). Runs in the mainline RESCUE system (everything in RAM),
+# as root, busybox sh. Companion of tsx-factory-restore (the SD card).
+#
+#   tsx-emmc-restore check BUNDLE_DIR
+#   tsx-emmc-restore run   BUNDLE_DIR [--yes]
+#
+# Writes only the regions listed in BUNDLE_DIR/emmc.manifest, by offset on the
+# whole device (no partition table needed), in the manifest's order, each read
+# back and compared with the manifest's sha256 (the whole region, including the
+# zero padding). The U-Boot areas (bootloader 0..4M, reserved 36M+64M) and
+# boot0/boot1 are NEVER written; boot0 is hashed and must match the manifest
+# (proves this is the right unit and its U-Boot is untouched). A bundle made
+# without a backup has boot0_sha256=any: boot0 is then hashed before and after
+# the run and must not change.
+# Region sources: zero | FILE+zero | FILE.gz | keep:FILE (whole region, rewritten
+# from FILE + zero padding if it differs) | head:FILE (only the first size(FILE)
+# bytes are compared and written; the rest of the region is left alone).
+# Test hooks: TSX_EMMC (device or image file), TSX_BOOT0 (device or file),
+# TSX_EMMC_SECTORS (skip the sysfs size check), TSX_RUN.
+set -eu
+RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
+say() { echo "tsx-emmc-restore: $(date +%T) $*" >&2; }
+die() { say "ERROR: $*"; exit 1; }
+CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,20p' "$0"; exit 2; }
+YES=0
+while [ $# -gt 0 ]; do case "$1" in --yes) YES=1;; *) die "unknown option $1";; esac; shift; done
+case "$CMD" in check|run) ;; *) sed -n '2,20p' "$0"; exit 2;; esac
+M=$B/emmc.manifest
+[ -f "$M" ] && grep -q '^format=tsx-emmc-bundle-1$' "$M" || die "$B has no emmc.manifest (mkbundle.sh)"
+MiB=1048576
+BIGMIB=64   # regions >= this get a "checking/verifying" line before their sha256 pass
+sha_of() { sha256sum < "$1" | cut -d' ' -f1; }
+
+# ---- live progress for a background dd (BusyBox dd has no status=progress) ----
+# pr_dd DEST OFF_MIB LEN_MIB NAME -- DD_ARGS...
+# dd's own stdin (pipe or redirect, as set up by the caller) is inherited as-is;
+# its stdout is pointed at a pre-opened (non-truncating) fd on DEST so that
+# /proc/<ddpid>/fdinfo/1 'pos:' tracks the destination write offset. Every ~15s
+# (while dd is still alive) prints one progress line to fd 2. Prints nothing
+# once dd has exited, and returns dd's own exit status.
+pr_dd() {
+	_pd_dev=$1; _pd_off=$2; _pd_len=$3; _pd_name=$4; shift 4; [ "${1:-}" = -- ] && shift
+	exec 8<>"$_pd_dev"
+	# ash (busybox, the rescue) gives a background job /dev/null as stdin unless it is
+	# redirected explicitly (bash does not): keep the caller's stdin (the pipe) on fd 7
+	exec 7<&0
+	dd "$@" <&7 1>&8 2>/dev/null 7<&- 8<&- &
+	_pd_dp=$!
+	( _pd_t0=$(date +%s)
+	  while kill -0 $_pd_dp 2>/dev/null; do
+		_pd_i=0
+		while [ $_pd_i -lt 15 ] && kill -0 $_pd_dp 2>/dev/null; do sleep 1; _pd_i=$((_pd_i + 1)); done
+		kill -0 $_pd_dp 2>/dev/null || break
+		_pd_pos=$(sed -n 's/^pos:[[:space:]]*//p' "/proc/$_pd_dp/fdinfo/1" 2>/dev/null) || break
+		[ -n "$_pd_pos" ] || continue
+		_pd_now=$(date +%s); _pd_dt=$((_pd_now - _pd_t0)); [ $_pd_dt -lt 1 ] && _pd_dt=1
+		awk -v pos="$_pd_pos" -v off="$_pd_off" -v mib="$MiB" -v len="$_pd_len" -v dt="$_pd_dt" -v name="$_pd_name" 'BEGIN{
+			d = (pos - off * mib) / mib; if (d < 0) d = 0;
+			pct = len > 0 ? d * 100 / len : 0; rate = d / dt;
+			if (rate > 0.01) {
+				left = (len - d) / rate;
+				if (left >= 60) printf "  %s: %.0f/%.0f MiB (%.0f%%), %.1f MiB/s, ~%.0f min left\n", name, d, len, pct, rate, left / 60;
+				else printf "  %s: %.0f/%.0f MiB (%.0f%%), %.1f MiB/s, ~%.0f s left\n", name, d, len, pct, rate, left;
+			} else printf "  %s: %.0f/%.0f MiB (%.0f%%), %.1f MiB/s\n", name, d, len, pct, rate;
+		}' >&2
+	  done
+	) &
+	_pd_rp=$!
+	wait $_pd_dp; _pd_rc=$?
+	# no explicit "kill $_pd_rp" here: the reporter already notices dd's exit via
+	# its own kill -0 check (within ~1s) and self-terminates; killing a PID that
+	# may by now have already exited and been recycled by the OS is what a
+	# background dd + reporter design must avoid (a stray signal to an unrelated,
+	# reused PID has been observed to take down the whole script)
+	wait $_pd_rp 2>/dev/null
+	exec 7<&- 8<&-
+	return $_pd_rc
+}
+
+# the eMMC: the mmcblk with a boot0 sibling (the card has none)
+if [ -n "${TSX_EMMC:-}" ]; then DEV=$TSX_EMMC; B0=${TSX_BOOT0:?TSX_BOOT0}
+else
+	DEV=; for d in /sys/block/mmcblk[0-9]; do n=${d##*/}; [ -e "/sys/block/${n}boot0" ] && { DEV=/dev/$n; B0=/dev/${n}boot0; break; }; done
+	[ -n "$DEV" ] || die "no mmcblk with a boot0 area (the eMMC) found"
+fi
+WANT_SECT=$(sed -n 's/^emmc_sectors=//p' "$M")
+if [ -n "${TSX_EMMC_SECTORS:-}" ]; then GOT_SECT=$TSX_EMMC_SECTORS
+elif [ -b "$DEV" ]; then GOT_SECT=$(cat "/sys/block/${DEV##*/}/size")
+else GOT_SECT=$(( $(stat -c %s "$DEV") / 512 )); fi
+[ "$GOT_SECT" = "$WANT_SECT" ] || die "$DEV has $GOT_SECT sectors, the manifest wants $WANT_SECT"
+say "eMMC $DEV ($((GOT_SECT / 2048)) MiB), boot0 $B0"
+if [ -b "$DEV" ]; then
+	grep -q "^$DEV" /proc/mounts && die "$DEV (a partition of it) is mounted: run this from the rescue system"
+fi
+say "checking the bundle (sha256 of every file)"
+grep '^file ' "$M" | while read -r _ f sz sha; do
+	[ "$(stat -c %s "$B/$f")" = "$sz" ] && [ "$(sha_of "$B/$f")" = "$sha" ] || { echo "BAD $f"; exit 1; }
+done | grep -q BAD && die "bundle file(s) do not match emmc.manifest"
+B0WANT=$(sed -n 's/^boot0_sha256=//p' "$M"); B0SHA=$(sha_of "$B0")
+if [ "$B0WANT" = any ]; then say "boot0 (U-Boot, never written) = $B0SHA (bundle without a backup: checked again after the run)"
+else
+	say "checking boot0 (U-Boot, never written) against the manifest"
+	[ "$B0SHA" = "$B0WANT" ] || die "boot0 sha256 differs from the manifest: wrong unit or U-Boot changed"
+fi
+say "unit $(sed -n 's/^unit=//p' "$M"), regions: $(grep '^region ' "$M" | awk '{printf "%s(%sM@%sM) ", $2, $4, $3}')"
+region_sha() { dd if="$DEV" bs=$MiB skip=$1 count=$2 2>/dev/null | sha256sum | cut -d' ' -f1; }
+src_sha() {  # OFF LEN SRC: the hash the manifest line compares (head:FILE = the first size(FILE) bytes only)
+	case "$3" in head:*) dd if="$DEV" bs=$MiB skip=$1 count=$2 2>/dev/null | head -c "$(stat -c %s "$B/${3#head:}")" | sha256sum | cut -d' ' -f1;;
+	*) region_sha "$1" "$2";; esac
+}
+if [ "$CMD" = check ]; then
+	grep '^region ' "$M" | while read -r _ name off len src want; do
+		[ "$len" -ge $BIGMIB ] && say "  checking $name ($len MiB)..."
+		got=$(src_sha "$off" "$len" "$src")
+		[ "$got" = "$want" ] && st="already as wanted" || st="differs (will be written)"
+		case "$src" in keep:*) [ "$got" = "$want" ] || st="differs (keep: rewritten from ${src#keep:})";; esac
+		say "  $name: $st"
+	done
+	say "check OK (nothing written)"; exit 0
+fi
+if [ $YES != 1 ]; then printf 'Rewrite the eMMC regions above to stock Android (U-Boot untouched)? Type EMMC: ' >&2; read -r a; [ "$a" = EMMC ] || die "not confirmed"; fi
+
+wr() { pr_dd "$DEV" "$1" "$WRLEN" "$WRNAME" -- bs=$MiB seek="$1" conv=notrunc,fsync; }
+zero() { head -c $(( $1 * MiB )) /dev/zero; }
+n=0; total=$(grep -c '^region ' "$M")
+grep '^region ' "$M" | while read -r _ name off len src want; do
+	n=$((n + 1))
+	[ "$len" -ge $BIGMIB ] && say "$n/$total $name: checking ($len MiB)..."
+	got=$(src_sha "$off" "$len" "$src")
+	if [ "$got" = "$want" ]; then say "$n/$total $name: already as wanted, skipped"; continue; fi
+	WRNAME=$name; WRLEN=$len
+	case "$src" in
+	zero) say "$n/$total writing region $name: $len MiB at $off MiB (zero)"
+		zero "$len" | wr "$off";;
+	keep:*) f=$B/${src#keep:}; say "$n/$total writing region $name: $len MiB at $off MiB (differs, from ${src#keep:} + zero padding)"
+		{ cat "$f"; zero "$len" | head -c $(( len * MiB - $(stat -c %s "$f") )); } | wr "$off";;
+	head:*) f=$B/${src#head:}; [ "$(stat -c %s "$f")" -le $(( len * MiB )) ] || die "$f is larger than $name"
+		say "$n/$total writing region $name: $(( $(stat -c %s "$f") / MiB )) MiB at $off MiB (from ${src#head:})"
+		wr "$off" < "$f";;
+	*.gz) say "$n/$total writing region $name: $len MiB at $off MiB (from $src, gunzip)"
+		gzip -dc "$B/$src" | wr "$off";;
+	*+zero) f=$B/${src%+zero}; say "$n/$total writing region $name: $len MiB at $off MiB (from ${src%+zero} + zero padding)"
+		{ cat "$f"; head -c $(( len * MiB - $(stat -c %s "$f") )) /dev/zero; } | wr "$off";;
+	*) die "unknown source $src for $name";;
+	esac
+	sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+	[ "$len" -ge $BIGMIB ] && say "$n/$total $name: verifying readback ($len MiB)..."
+	got=$(src_sha "$off" "$len" "$src")
+	[ "$got" = "$want" ] || die "$name: readback $got != $want"
+	say "$n/$total $name ($len MiB @ $off MiB) <- $src, verified"
+done
+[ "$(sha_of "$B0")" = "$B0SHA" ] || die "boot0 CHANGED during the run (was $B0SHA): this tool never writes it, investigate"
+say "DONE: eMMC regions restored (U-Boot untouched: boot0 still $(echo "$B0SHA" | cut -c1-16)...)"

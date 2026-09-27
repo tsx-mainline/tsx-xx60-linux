@@ -1,0 +1,11 @@
+#!/sbin/openrc-run
+description="Ambient light sensor -> backlight level (/etc/tsx/als.conf)"
+supervisor=supervise-daemon
+command=/usr/local/sbin/tsx-als
+respawn_delay=5
+respawn_max=0
+output_log=/var/log/tsx-als.log
+error_log=/var/log/tsx-als.log
+depend() { after udev-settle tsx-idled; }
+start_pre() { checkpath -d -m 0755 /run/tsx; }
+stop_post() { rm -f /run/tsx/als-level; }

@@ -1,0 +1,11 @@
+# Serial port for serlog.py and other tools/bench scripts.
+#
+# Point TSX_SERIAL at wherever the UART adapter is actually attached, e.g.:
+#   a local device:                TSX_SERIAL=/dev/ttyUSB0
+#   a socat TCP bridge on some other host running the adapter:
+#                                   TSX_SERIAL=socket://<host>:<port>
+#
+# There is no default: fill in the value below, then `source tools/bench/env`
+# (or export TSX_SERIAL yourself). Without it, serlog.py falls back to
+# scanning /dev/ttyUSB*.
+#TSX_SERIAL=socket://<host>:<port>

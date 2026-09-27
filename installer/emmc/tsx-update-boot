@@ -1,0 +1,27 @@
+#!/bin/sh
+# ON THE PANEL (running kiosk system): replace p1:tsxboot.img only, same steps as
+# rootfs/install.sh step 2 (golden boot.img untouched, verified before/after).
+#   tsx-update-boot IMG SHA256
+#   tsx-update-boot --help
+set -eu
+case "${1:-}" in -h|--help) sed -n '2,4p' "$0"; exit 0;; esac
+IMG=${1:?IMG}; SHA=${2:?SHA256}; P1=/dev/mmcblk0p1 M=/media/bootfat
+[ "$(sha256sum < "$IMG" | cut -d' ' -f1)" = "$SHA" ] || { echo "image sha mismatch"; exit 1; }
+mkdir -p $M; mount -t vfat $P1 $M
+trap 'umount $M 2>/dev/null || true' EXIT
+[ -f $M/boot.img ] || { echo "no golden boot.img on $P1"; exit 1; }
+echo "--- p1 before"; ls -l $M; df -k $M | tail -1
+gsha=$(sha256sum < $M/boot.img | cut -d' ' -f1); echo "golden boot.img sha256 before: $gsha"
+[ -f $M/tsxboot.img ] && echo "old tsxboot.img sha256: $(sha256sum < $M/tsxboot.img | cut -d' ' -f1)"
+need=$(( $(stat -c %s "$IMG") / 1024 + 1024 )); free=$(df -k $M | awk 'NR==2{print $4}')
+old=0; [ -f $M/tsxboot.img ] && old=$(( $(stat -c %s $M/tsxboot.img) / 1024 ))
+[ $((free + old)) -gt $need ] || { echo "not enough space"; exit 1; }
+if [ "$free" -le "$need" ] && [ "$old" -gt 0 ]; then echo "no room side by side: removing old tsxboot.img first"; rm -f $M/tsxboot.img; sync; fi
+cp "$IMG" $M/tsxboot.new && sync
+[ "$(sha256sum < $M/tsxboot.new | cut -d' ' -f1)" = "$SHA" ] || { rm -f $M/tsxboot.new; echo "copy corrupt"; exit 1; }
+mv $M/tsxboot.new $M/tsxboot.img; sync
+echo 3 > /proc/sys/vm/drop_caches
+echo "--- p1 after"; ls -l $M
+echo "tsxboot.img sha256 after (re-read): $(sha256sum < $M/tsxboot.img | cut -d' ' -f1)"
+g2=$(sha256sum < $M/boot.img | cut -d' ' -f1); echo "golden boot.img sha256 after: $g2"
+[ "$g2" = "$gsha" ] && echo "golden unchanged: OK" || { echo "WARNING golden changed"; exit 1; }

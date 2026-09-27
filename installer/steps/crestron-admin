@@ -1,0 +1,34 @@
+#!/bin/bash
+# Host: make sure a stock-Android xx60 has a Crestron admin account, the
+# way the web UI's first-run page does it. A factory-fresh /data has none: every
+# page of https://PANEL/ then redirects to /createUser.html, whose form posts
+#   POST /Device/Authentication
+#   {"Device":{"Authentication":{"AuthenticationState":{"AdminUsername":U,"AdminPassword":P,"IsEnabled":true}}}}
+# (answer: StatusId 0, "Authentication enabled successfully"; done on unit B
+# 2026-09-27 07:55). If an account already exists nothing is changed.
+# Afterwards the Crestron SSH console must answer `ver` with that login.
+#
+#   steps/crestron-admin PANEL     (user $TSX_ADMIN_USER, default admin;
+#                                      password: required, $TSX_ADMIN_PW)
+# Exit 0 = the console answers with that login; 1 = it does not; 2 = usage.
+set -uo pipefail
+H=${1:?PANEL}; U=${TSX_ADMIN_USER:-admin}
+PW=${TSX_ADMIN_PW:?set TSX_ADMIN_PW to the Crestron console/web-UI admin password to use}
+say() { echo "crestron-admin: $*" >&2; }
+JAR=$(mktemp); trap 'rm -f "$JAR"' EXIT
+loc=$(curl -sk -m 15 -c "$JAR" -b "$JAR" -o /dev/null -w '%{redirect_url}' "https://$H/index_device.html") || { say "web UI https://$H/ does not answer"; exit 1; }
+case "$loc" in
+*createUser.html)
+	say "no Crestron account yet (web UI first-run page): creating '$U'"
+	body=$(printf '{"Device":{"Authentication":{"AuthenticationState":{"AdminUsername":"%s","AdminPassword":"%s","IsEnabled":true}}}}' "$U" "$PW")
+	ans=$(curl -sk -m 30 -c "$JAR" -b "$JAR" -H 'Content-Type: application/json' -H 'X-Requested-With: XMLHttpRequest' \
+		-H "Origin: https://$H" -H "Referer: https://$H/createUser.html" --data "$body" "https://$H/Device/Authentication")
+	say "answer: $ans"
+	grep -q '"StatusId":0' <<<"$ans" || { say "account creation refused"; exit 1; }
+	sleep 3;;
+*) say "web UI does not ask for a first account (redirect: ${loc:-none}): an account exists, not changing it";;
+esac
+out=$(printf 'ver\r\nbye\r\n' | timeout 30 sshpass -p "$PW" ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 "$U@$H" 2>&1 | tr -d '\r')
+v=$(printf '%s\n' "$out" | grep -E '\[v[0-9]' | head -n 1)
+[ -n "$v" ] && { say "ok: console login $U works: $v"; exit 0; }
+say "the Crestron SSH console does not accept $U with that password"; exit 1

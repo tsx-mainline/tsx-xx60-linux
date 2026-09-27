@@ -1,0 +1,122 @@
+# Home Assistant dashboard for the Crestron TSW-1060 kiosk (1280x800, touch,
+# Cortex-A9 + Mali-450; see dashboard-README.md).
+# How to use: Settings -> Dashboards -> Add dashboard -> "New dashboard from
+# scratch", title "Wall panel", URL "wall-panel" (needs a hyphen). Open it,
+# three dots -> Edit dashboard -> three dots -> Raw configuration editor, paste
+# this file, replace the example entity ids with yours, Save.
+# Then on the panel: KIOSK_URL="https://<ha>/wall-panel/home" in /etc/kiosk.conf.
+#
+# Rules this layout follows (the panel renders everything the page does on a
+# 4-core 1.6 GHz Cortex-A9):
+#  - sections view, tile cards, heading cards: light, no history fetches
+#  - no history-graph / statistics-graph / trend-graph features, no camera
+#    streams, no map, no iframe, no energy cards, no animated backgrounds
+#  - 3 section columns at 1280 px (max_columns 3) so nothing needs a sideways
+#    scroll; short views instead of one long page (scrolling costs CPU)
+#  - everything reachable with one finger; tap targets from the tile card
+title: Wall panel
+views:
+  - title: Home
+    path: home
+    type: sections
+    max_columns: 3
+    badges:
+      - type: entity
+        entity: sensor.outdoor_temperature        # example
+        show_name: false
+      - type: entity
+        entity: person.someone                    # example
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Lights
+            icon: mdi:lightbulb-group
+          - type: tile
+            entity: light.living_room             # example
+            features:
+              - type: light-brightness
+            grid_options: {columns: 6}
+          - type: tile
+            entity: light.kitchen                 # example
+            features:
+              - type: light-brightness
+            grid_options: {columns: 6}
+          - type: tile
+            entity: light.hallway                 # example
+            grid_options: {columns: 6}
+          - type: tile
+            entity: light.porch                   # example
+            grid_options: {columns: 6}
+      - type: grid
+        cards:
+          - type: heading
+            heading: Climate
+            icon: mdi:thermostat
+          - type: tile
+            entity: climate.house                 # example
+            features:
+              - type: target-temperature
+              - type: climate-hvac-modes
+                style: dropdown
+            grid_options: {columns: 12}
+          - type: tile
+            entity: sensor.living_room_temperature   # example
+            grid_options: {columns: 6}
+          - type: tile
+            entity: sensor.living_room_humidity      # example
+            grid_options: {columns: 6}
+      - type: grid
+        cards:
+          - type: heading
+            heading: House
+            icon: mdi:home
+          - type: tile
+            entity: lock.front_door               # example
+            features:
+              - type: lock-commands
+            grid_options: {columns: 12}
+          - type: tile
+            entity: cover.garage_door             # example
+            features:
+              - type: cover-open-close
+            grid_options: {columns: 12}
+          - type: tile
+            entity: scene.good_night              # example
+            tap_action: {action: perform-action, perform_action: scene.turn_on, target: {entity_id: scene.good_night}}
+            grid_options: {columns: 6}
+          - type: tile
+            entity: script.leave_home             # example
+            tap_action: {action: perform-action, perform_action: script.turn_on, target: {entity_id: script.leave_home}}
+            grid_options: {columns: 6}
+  - title: Media
+    path: media
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Speakers
+            icon: mdi:speaker
+          - type: tile
+            entity: media_player.living_room      # example
+            features:
+              - type: media-player-playback
+              - type: media-player-volume-slider
+            grid_options: {columns: 12}
+  - title: Weather
+    path: weather
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Weather
+            icon: mdi:weather-partly-cloudy
+          # a static forecast card; no radar map or animated weather cards
+          - type: weather-forecast
+            entity: weather.home                  # example
+            forecast_type: daily
+            grid_options: {columns: 12}

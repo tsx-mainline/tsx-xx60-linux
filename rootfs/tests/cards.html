@@ -1,0 +1,45 @@
+<!doctype html>
+<!-- browser scroll benchmark page: a long Home-Assistant-like dashboard
+     (sections of tile cards with icons, rounded corners, shadows, toggles,
+     a few text-heavy cards). Static by default; ?live=1 changes 20 values
+     per second like HA state updates. Served from the panel (file://). -->
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>tsx perf cards</title>
+<style>
+:root{--bg:#f1f1f1;--card:#fff;--txt:#212121;--sec:#727272;--acc:#03a9f4;--on:#ffc107}
+*{box-sizing:border-box}
+body{margin:0;font-family:"DejaVu Sans",sans-serif;background:var(--bg);color:var(--txt)}
+header{position:sticky;top:0;z-index:2;height:56px;background:var(--acc);color:#fff;display:flex;align-items:center;padding:0 16px;font-size:20px;box-shadow:0 2px 4px rgba(0,0,0,.3)}
+header span{margin-left:auto;font-size:14px}
+main{padding:8px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+section{display:contents}
+h2{grid-column:1/-1;margin:16px 4px 0;font-size:18px;font-weight:500}
+.card{background:var(--card);border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.2),0 2px 8px rgba(0,0,0,.08);padding:12px;display:flex;align-items:center;gap:12px;min-height:72px;border:1px solid #e0e0e0}
+.card.wide{grid-column:span 2;min-height:120px;align-items:flex-start;flex-direction:column}
+.ic{width:40px;height:40px;border-radius:50%;background:rgba(3,169,244,.15);display:flex;align-items:center;justify-content:center;flex:none}
+.ic svg{width:24px;height:24px;fill:var(--acc)}
+.on .ic{background:rgba(255,193,7,.2)} .on .ic svg{fill:var(--on)}
+.t{flex:1;min-width:0}.n{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.s{font-size:12px;color:var(--sec)}
+.sw{width:36px;height:20px;border-radius:10px;background:#bbb;position:relative;flex:none}.on .sw{background:var(--acc)}
+.sw:after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.4)}.on .sw:after{left:18px}
+.bar{height:6px;border-radius:3px;background:linear-gradient(90deg,var(--acc),#8bc34a);width:100%}
+p{margin:4px 0;font-size:13px;line-height:1.35;color:var(--sec)}
+</style></head><body>
+<header>Home <span id="clock">--:--:--</span></header>
+<main id="m"></main>
+<script>
+const icons=["M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2zm-3 17h6v1a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2z",
+"M12 3 2 12h3v8h5v-6h4v6h5v-8h3z","M15 13V5a3 3 0 0 0-6 0v8a5 5 0 1 0 6 0zm-3-9a1 1 0 0 1 1 1v3h-2V5a1 1 0 0 1 1-1z",
+"M3 17v2h6v-2zM3 5v2h10V5zm10 16v-2h8v-2h-8v-2h-2v6zM7 9v2H3v2h4v2h2V9zm14 4v-2H11v2zm-6-4h2V7h4V5h-4V3h-2z",
+"M16 7V3h-2v4h-4V3H8v4h-.01C6.9 7 6 7.9 6 8.99v5.49L9.5 18v3h5v-3l3.5-3.51v-5.5c0-1.1-.9-1.99-2-1.99z"];
+const names=["Kitchen light","Living room","Hallway","Bedroom lamp","Office","Garage door","Thermostat","Porch","Dining","Bathroom fan","Patio","Studio"];
+const m=document.getElementById("m"); let html="", id=0;
+for(let s=0;s<16;s++){html+=`<h2>Area ${s+1}</h2>`;
+ for(let i=0;i<14;i++,id++){const on=(id*7)%3==0;
+  if(i==13){html+=`<div class="card wide"><div class="n">Energy summary ${s+1}</div><div class="bar"></div><p>Today 12.${id%10} kWh, solar 8.${id%7} kWh, grid 4.${id%5} kWh. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p></div>`;continue}
+  html+=`<div class="card ${on?"on":""}"><div class="ic"><svg viewBox="0 0 24 24"><path d="${icons[id%icons.length]}"/></svg></div><div class="t"><div class="n">${names[id%names.length]} ${s+1}.${i}</div><div class="s" id="v${id}">${on?"On":"Off"} · ${(18+id%9)}.${id%10} °C</div></div><div class="sw"></div></div>`}}
+m.innerHTML=html;
+const clk=document.getElementById("clock");
+setInterval(()=>{clk.textContent=new Date().toTimeString().slice(0,8)},1000);
+if(new URLSearchParams(location.search).get("live")){let k=0;setInterval(()=>{for(let j=0;j<20;j++){const e=document.getElementById("v"+((k++*37)%id));if(e)e.textContent=(Math.random()<.5?"On":"Off")+" · "+(18+Math.random()*6).toFixed(1)+" °C"}},1000)}
+</script></body></html>

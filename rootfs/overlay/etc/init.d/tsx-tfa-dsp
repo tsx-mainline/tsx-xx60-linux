@@ -1,0 +1,39 @@
+#!/sbin/openrc-run
+# TSW-1060 TFA9890 CoolFlux DSP loader : runs the userspace loader
+# (tsx-tfa-dsp start) once at boot, after tsx-audio has set up the sound
+# card. Needs a kernel built with snd_soc_tfa989x.dsp=1; does nothing, and
+# never fails the boot, if that is not the case, if the TSW1060 sound card
+# is missing, or if the load itself fails (the amplifiers then stay in the
+# kernel's own bypass setup). Variant/vstep/profile: /etc/tsx/tfa-dsp.conf.
+# Log: /var/log/tsx-tfa-dsp.log.
+#
+# On success, writes /run/tsx/tfa-dsp.ok so tsx-audio knows the
+# "Amp Input" mixer controls are already set to DSP and leaves them alone
+# on a later "tsx-audio init" (e.g. a manual re-init after editing
+# audio.conf), instead of resetting them to the plain Left/Right bypass.
+description="Load the TFA9890 CoolFlux DSP once at boot (see /etc/tsx/tfa-dsp.conf)"
+depend() {
+	after tsx-audio
+	need localmount
+}
+start() {
+	ebegin "Loading the TFA9890 CoolFlux DSP"
+	rm -f /run/tsx/tfa-dsp.ok
+	if [ "$(cat /sys/module/snd_soc_tfa989x/parameters/dsp 2>/dev/null)" != Y ]; then
+		einfo "kernel not built with snd_soc_tfa989x.dsp=1: nothing to do"
+		eend 0
+		return 0
+	fi
+	if [ ! -e /proc/asound/TSW1060 ]; then
+		einfo "no sound card TSW1060: nothing to do"
+		eend 0
+		return 0
+	fi
+	mkdir -p /run/tsx "$(dirname /var/log/tsx-tfa-dsp.log)"
+	if /usr/local/sbin/tsx-tfa-dsp start >>/var/log/tsx-tfa-dsp.log 2>&1; then
+		date > /run/tsx/tfa-dsp.ok
+	else
+		echo "$(date): tsx-tfa-dsp start failed, amplifiers stay in bypass" >>/var/log/tsx-tfa-dsp.log
+	fi
+	eend 0
+}

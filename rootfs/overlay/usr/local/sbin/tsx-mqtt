@@ -1,0 +1,258 @@
+#!/bin/sh
+# tsx-mqtt: MQTT bridge between the xx60 kiosk and Home Assistant .
+#
+# Publishes HA MQTT discovery (retained) for one device with:
+#   light  "LED bar"      RGB (tsx-ledbar; HA 0..255 <-> bar 0..100 per channel)
+#   light  "Key LEDs"     brightness 0..255 (tsx-keypad led N|off)
+#   switch "Screen"       ON = lit, OFF = blanked (tsx-blank)
+#   number "Backlight"    1..BACKLIGHT_MAX of /etc/kiosk.conf (tsx-idled override)
+#   event  "Key NAME"     per front-panel key: short / long / hold
+#   device triggers       per key: button_short_press / button_long_press
+#   sensor "Illuminance"  lux of the MAX44009 (tsx-als; only with /etc/tsx/als.conf)
+#   switch "Auto brightness"  tsx-als auto on|off
+#   number "Volume"       0..100 % of the ALSA "Master" softvol (only when the
+#                         TSW1060 sound card exists; /etc/asound.conf)
+# State/commands under $BASE (default tsx/<hostname>); availability with LWT.
+#
+# Config /etc/tsx/mqtt.conf (empty BROKER = exit quietly). Needs mosquitto-clients.
+# Key presses come from the "last" line of /run/tsx/buttons.state
+# (tsx-buttons); two identical presses within the same second are one event.
+#
+# Env overrides for tests: TSX_MQTT_CONF, TSX_RUN_DIR, TSX_IDLED_STATE,
+# TSX_BUTTONS_CONF, TSX_KIOSK_CONF, TSX_BACKLIGHT_DIR, TSX_MQTT_DRY=1 (print instead of publish,
+# read commands from stdin, one pass).
+set -u
+CONF=${TSX_MQTT_CONF:-/etc/tsx/mqtt.conf}
+R=${TSX_RUN_DIR:-/run/tsx}
+IDLED=${TSX_IDLED_STATE:-/run/tsx-idled.state}
+BCONF=${TSX_BUTTONS_CONF:-/etc/tsx/buttons.conf}
+KCONF=${TSX_KIOSK_CONF:-/etc/kiosk.conf}
+ACONF=${TSX_ALS_CONF:-/etc/tsx/als.conf}
+CARD=${TSX_SOUND_CARD:-TSW1060}
+ASOUND=${TSX_ASOUND_DIR:-/proc/asound}
+DRY=${TSX_MQTT_DRY:-0}
+
+BROKER= PORT=1883 USER= PASSWORD= CAFILE= DISCOVERY_PREFIX=homeassistant NODE_ID= BASE_TOPIC= DEVICE_NAME=
+[ -r "$CONF" ] && . "$CONF"
+if [ -z "$BROKER" ] && [ "$DRY" != 1 ]; then
+	echo "tsx-mqtt: BROKER not set in $CONF, nothing to do"; exit 0
+fi
+command -v mosquitto_pub >/dev/null || [ "$DRY" = 1 ] || { echo "tsx-mqtt: mosquitto_pub missing (apk add mosquitto-clients)"; exit 1; }
+
+HOST=$(hostname)
+NODE=$(printf '%s' "${NODE_ID:-$HOST}" | tr -c 'A-Za-z0-9_-' '_')
+BASE=${BASE_TOPIC:-tsx/$NODE}
+DP=$DISCOVERY_PREFIX
+DNAME=${DEVICE_NAME:-TSX $HOST}
+M=$R/mqtt
+mkdir -p "$M" && chmod 700 "$M"
+log() { echo "$(date '+%F %T') tsx-mqtt: $*"; }
+
+# mosquitto client options in files (XDG_CONFIG_HOME), not on the command line
+export XDG_CONFIG_HOME=$M
+{
+	echo "-h $BROKER"; echo "-p $PORT"
+	[ -n "$USER" ] && echo "-u $USER"
+	[ -n "$PASSWORD" ] && echo "-P $PASSWORD"
+	[ -n "$CAFILE" ] && echo "--cafile $CAFILE"
+} > "$M/mosquitto_pub"
+cp "$M/mosquitto_pub" "$M/mosquitto_sub"
+chmod 600 "$M/mosquitto_pub" "$M/mosquitto_sub"
+
+pub() {  # pub [-r] TOPIC PAYLOAD
+	r=; [ "$1" = -r ] && { r=-r; shift; }
+	if [ "$DRY" = 1 ]; then echo "PUB${r:+ (retained)} $1 $2"; return 0; fi
+	mosquitto_pub -i "$NODE-pub-$$" -q 1 $r -t "$1" -m "$2" || log "publish $1 failed"
+}
+
+# ---- helpers ---------------------------------------------------------------
+BL_MAX=23
+[ -r "$KCONF" ] && BL_MAX=$(sed -n 's/^BACKLIGHT_MAX=\([0-9][0-9]*\).*/\1/p' "$KCONF" | tail -1)
+[ -n "$BL_MAX" ] || BL_MAX=23
+
+keys() {  # names of the "button NAME KEY" lines of buttons.conf
+	[ -r "$BCONF" ] && sed -n 's/^[[:space:]]*button[[:space:]]\{1,\}\([A-Za-z0-9_-]\{1,\}\)[[:space:]].*/\1/p' "$BCONF"
+}
+
+field() {  # field FILE KEY -> rest of the first line "KEY ..."
+	[ -r "$1" ] && sed -n "s/^$2 //p" "$1" | head -1
+}
+
+# ---- discovery ---------------------------------------------------------------
+DEV="\"dev\":{\"ids\":[\"tsx_$NODE\"],\"name\":\"$DNAME\",\"mf\":\"Crestron\",\"mdl\":\"xx60 (mainline Linux)\"}"
+AV="\"avty_t\":\"$BASE/availability\""
+
+discovery() {
+	pub -r "$DP/light/$NODE/ledbar/config" "{\"name\":\"LED bar\",\"uniq_id\":\"${NODE}_ledbar\",\"cmd_t\":\"$BASE/ledbar/set\",\"stat_t\":\"$BASE/ledbar/state\",\"bri_cmd_t\":\"$BASE/ledbar/brightness/set\",\"bri_stat_t\":\"$BASE/ledbar/brightness\",\"bri_scl\":255,\"rgb_cmd_t\":\"$BASE/ledbar/rgb/set\",\"rgb_stat_t\":\"$BASE/ledbar/rgb\",\"on_cmd_type\":\"last\",\"icon\":\"mdi:led-strip-variant\",$AV,$DEV}"
+	pub -r "$DP/light/$NODE/keypad/config" "{\"name\":\"Key LEDs\",\"uniq_id\":\"${NODE}_keypad\",\"cmd_t\":\"$BASE/keypad/set\",\"stat_t\":\"$BASE/keypad/state\",\"bri_cmd_t\":\"$BASE/keypad/brightness/set\",\"bri_stat_t\":\"$BASE/keypad/brightness\",\"bri_scl\":255,\"on_cmd_type\":\"brightness\",\"icon\":\"mdi:gesture-tap-button\",$AV,$DEV}"
+	pub -r "$DP/switch/$NODE/screen/config" "{\"name\":\"Screen\",\"uniq_id\":\"${NODE}_screen\",\"cmd_t\":\"$BASE/screen/set\",\"stat_t\":\"$BASE/screen/state\",\"icon\":\"mdi:monitor\",$AV,$DEV}"
+	pub -r "$DP/number/$NODE/backlight/config" "{\"name\":\"Backlight\",\"uniq_id\":\"${NODE}_backlight\",\"cmd_t\":\"$BASE/backlight/set\",\"stat_t\":\"$BASE/backlight/state\",\"min\":1,\"max\":$BL_MAX,\"step\":1,\"mode\":\"slider\",\"icon\":\"mdi:brightness-6\",$AV,$DEV}"
+	if [ -r "$ACONF" ]; then
+		pub -r "$DP/sensor/$NODE/illuminance/config" "{\"name\":\"Illuminance\",\"uniq_id\":\"${NODE}_illuminance\",\"stat_t\":\"$BASE/als/lux\",\"dev_cla\":\"illuminance\",\"unit_of_meas\":\"lx\",\"stat_cla\":\"measurement\",$AV,$DEV}"
+		pub -r "$DP/switch/$NODE/als_auto/config" "{\"name\":\"Auto brightness\",\"uniq_id\":\"${NODE}_als_auto\",\"cmd_t\":\"$BASE/als_auto/set\",\"stat_t\":\"$BASE/als_auto/state\",\"icon\":\"mdi:brightness-auto\",$AV,$DEV}"
+	fi
+	if [ -e "$ASOUND/$CARD" ]; then
+		pub -r "$DP/number/$NODE/volume/config" "{\"name\":\"Volume\",\"uniq_id\":\"${NODE}_volume\",\"cmd_t\":\"$BASE/volume/set\",\"stat_t\":\"$BASE/volume/state\",\"min\":0,\"max\":100,\"step\":1,\"unit_of_meas\":\"%\",\"mode\":\"slider\",\"icon\":\"mdi:volume-high\",$AV,$DEV}"
+	fi
+	for k in $(keys); do
+		pub -r "$DP/event/$NODE/key_$k/config" "{\"name\":\"Key $k\",\"uniq_id\":\"${NODE}_key_$k\",\"stat_t\":\"$BASE/key/$k\",\"evt_typ\":[\"short\",\"long\",\"hold\"],\"dev_cla\":\"button\",$AV,$DEV}"
+		pub -r "$DP/device_automation/$NODE/key_${k}_short/config" "{\"atype\":\"trigger\",\"t\":\"$BASE/trigger/$k/short\",\"type\":\"button_short_press\",\"stype\":\"$k\",\"pl\":\"short\",$DEV}"
+		pub -r "$DP/device_automation/$NODE/key_${k}_long/config" "{\"atype\":\"trigger\",\"t\":\"$BASE/trigger/$k/long\",\"type\":\"button_long_press\",\"stype\":\"$k\",\"pl\":\"long\",$DEV}"
+	done
+}
+
+# ---- state -----------------------------------------------------------------
+# LED bar: panel keeps "want R G B" (0..100); HA sees rgb (max channel 255) + brightness
+ledbar_state() {
+	w=$(field "$R/ledbar.state" want); [ -n "$w" ] || w="0 0 0"
+	set -- $w
+	mx=$1; [ "$2" -gt "$mx" ] && mx=$2; [ "$3" -gt "$mx" ] && mx=$3
+	if [ "$mx" -gt 0 ]; then
+		echo "ON $(( (mx * 255 + 50) / 100 )) $(( ($1 * 255 + mx / 2) / mx )),$(( ($2 * 255 + mx / 2) / mx )),$(( ($3 * 255 + mx / 2) / mx ))"
+	else
+		echo "OFF 0 0,0,0"
+	fi
+}
+keypad_state() {
+	l=$(field "$R/buttons.state" led); set -- ${l:-0 unknown}
+	[ "${1:-0}" -gt 0 ] 2>/dev/null && echo "ON $1" || echo "OFF 0"
+}
+screen_state() {
+	s=; [ -r "$IDLED" ] && read -r s lvl < "$IDLED"
+	if [ "$s" = blank ]; then echo "OFF"; else echo "ON ${lvl:-}"; fi
+}
+
+als_state() {  # "LUX ON|OFF" from tsx-als (lux with a reporting deadband)
+	l=$(field "$R/als.state" report); a=$(field "$R/als.state" auto)
+	[ -n "$l" ] && echo "$l $( [ "$a" = on ] && echo ON || echo OFF)"
+}
+
+volume_state() {  # "NN" percent of the Master softvol
+	[ -e "$ASOUND/$CARD" ] || return 0
+	amixer -c "$CARD" sget Master 2>/dev/null | sed -n 's/.*\[\([0-9]\{1,3\}\)%\].*/\1/p' | head -1
+}
+
+P_LED= P_KP= P_SCR= P_BL= P_ALS= P_VOL=
+publish_states() {  # $1 = force
+	v=$(ledbar_state); if [ "$v" != "$P_LED" ] || [ -n "${1:-}" ]; then
+		set -- $v; pub -r "$BASE/ledbar/state" "$1"; pub -r "$BASE/ledbar/brightness" "$2"; pub -r "$BASE/ledbar/rgb" "$3"; P_LED=$v; fi
+	v=$(keypad_state); if [ "$v" != "$P_KP" ] || [ -n "${1:-}" ]; then
+		set -- $v; pub -r "$BASE/keypad/state" "$1"; pub -r "$BASE/keypad/brightness" "$2"; P_KP=$v; fi
+	v=$(screen_state); if [ "$v" != "$P_SCR" ] || [ -n "${1:-}" ]; then
+		set -- $v; pub -r "$BASE/screen/state" "$1"; P_SCR=$v
+		if [ -n "${2:-}" ] && [ "$2" != none ] && [ "$2" != "$P_BL" ]; then pub -r "$BASE/backlight/state" "$2"; P_BL=$2; fi
+	fi
+	v=$(als_state); if [ -n "$v" ] && { [ "$v" != "$P_ALS" ] || [ -n "${1:-}" ]; }; then
+		set -- $v; pub -r "$BASE/als/lux" "$1"; pub -r "$BASE/als_auto/state" "$2"; P_ALS=$v; fi
+	v=$(volume_state); if [ -n "$v" ] && { [ "$v" != "$P_VOL" ] || [ -n "${1:-}" ]; }; then
+		pub -r "$BASE/volume/state" "$v"; P_VOL=$v; fi
+}
+
+# ---- commands --------------------------------------------------------------
+# HA rgb "r,g,b" 0..255 + brightness 0..255 -> bar 0..100 per channel
+ledbar_set() {  # r g b bri
+	tsx-ledbar set $(( ($1 * $4 * 100 + 32512) / 65025 )) $(( ($2 * $4 * 100 + 32512) / 65025 )) $(( ($3 * $4 * 100 + 32512) / 65025 ))
+}
+led_rgb() { c=$(cat "$M/rgb" 2>/dev/null); echo "${c:-255,255,255}"; }
+split_rgb() { c=$1; r=${c%%,*}; c=${c#*,}; g=${c%%,*}; b=${c#*,}; }
+led_bri() { b=$(cat "$M/bri" 2>/dev/null); echo "${b:-255}"; }
+
+handle() {  # topic payload
+	t=${1#"$BASE"/}; p=$2
+	case $t in
+	ledbar/set)
+		case $p in
+		OFF) tsx-ledbar off;;
+		ON)  if [ -e "$M/pending" ]; then rm -f "$M/pending"
+		     else
+			cur=$(ledbar_state); [ "${cur%% *}" = ON ] || tsx-ledbar on
+		     fi;;
+		esac;;
+	ledbar/brightness/set)
+		case $p in *[!0-9]*|'') return;; esac
+		echo "$p" > "$M/bri"; split_rgb "$(led_rgb)"
+		ledbar_set "$r" "$g" "$b" "$p"; : > "$M/pending";;
+	ledbar/rgb/set)
+		split_rgb "$p"
+		case "$r$g$b" in *[!0-9]*|'') return;; esac
+		echo "$r,$g,$b" > "$M/rgb"
+		cur=$(ledbar_state); set -- $cur
+		bri=$(led_bri); [ "$1" = ON ] && bri=$2; [ "$bri" -gt 0 ] || bri=255
+		ledbar_set "$r" "$g" "$b" "$bri"; : > "$M/pending";;
+	keypad/set)
+		case $p in OFF) tsx-keypad led off;; ON) tsx-keypad led auto;; esac;;
+	keypad/brightness/set)
+		case $p in *[!0-9]*|'') return;; esac
+		tsx-keypad led "$p";;
+	volume/set)
+		p=${p%%.*}; case $p in *[!0-9]*|'') return;; esac
+		[ "$p" -le 100 ] || p=100
+		amixer -q -c "$CARD" sset Master "$p%";;
+	als_auto/set)
+		case $p in ON) tsx-als auto on;; OFF) tsx-als auto off;; esac;;
+	screen/set)
+		case $p in ON) tsx-blank off;; OFF) tsx-blank on;; esac;;
+	backlight/set)
+		p=${p%%.*}; case $p in *[!0-9]*|'') return;; esac
+		[ "$p" -ge 1 ] || p=1; [ "$p" -le "$BL_MAX" ] || p=$BL_MAX
+		echo "$p" > "$R/brightness"          # tsx-idled level override (as the up/down keys)
+		s=; [ -r "$IDLED" ] && read -r s _ < "$IDLED"
+		if [ "$s" != blank ]; then for d in ${TSX_BACKLIGHT_DIR:-/sys/class/backlight}/*; do [ -w "$d/brightness" ] && echo "$p" > "$d/brightness"; break; done; fi;;
+	*) return;;
+	esac
+	: > "$M/poke"
+}
+
+# ---- key events --------------------------------------------------------------
+P_KEY=
+check_keys() {
+	v=$(field "$R/buttons.state" last)
+	[ "$v" = "$P_KEY" ] && return
+	old=$P_KEY; P_KEY=$v
+	[ -n "$old" ] || return 0            # first read after start: no event
+	set -- $v; [ $# -ge 2 ] || return 0
+	case $1 in none) return 0;; esac
+	pub "$BASE/key/$1" "{\"event_type\":\"$2\"}"
+	case $2 in short|long) pub "$BASE/trigger/$1/$2" "$2";; esac
+}
+
+# ---- main ------------------------------------------------------------------
+if [ "$DRY" = 1 ]; then
+	discovery; publish_states force
+	while read -r topic payload; do handle "$topic" "$payload"; done
+	P_KEY=${TSX_MQTT_PREV_KEY:-}; check_keys
+	exit 0
+fi
+
+rm -f "$M/pending" "$M/poke" "$M/republish"
+mkfifo "$M/sub.fifo" 2>/dev/null || { rm -f "$M/sub.fifo"; mkfifo "$M/sub.fifo"; }
+mosquitto_sub -i "$NODE-sub" -q 1 -v -t "$BASE/+/set" -t "$BASE/+/+/set" -t "$DP/status" \
+	--will-topic "$BASE/availability" --will-payload offline --will-retain > "$M/sub.fifo" &
+SUB=$!
+trap 'kill $SUB 2>/dev/null; pub -r "$BASE/availability" offline; rm -f "$M/sub.fifo"; exit 0' INT TERM
+( while read -r topic payload; do
+	if [ "$topic" = "$DP/status" ]; then [ "$payload" = online ] && : > "$M/republish"; continue; fi
+	handle "$topic" "$payload" 2>&1 | sed 's/^/cmd: /'
+  done < "$M/sub.fifo" ) &
+HANDLER=$!
+
+sleep 1
+kill -0 $SUB 2>/dev/null || { log "cannot connect to $BROKER:$PORT"; exit 1; }
+discovery
+pub -r "$BASE/availability" online
+publish_states force
+P_KEY=$(field "$R/buttons.state" last)
+log "connected to $BROKER:$PORT as $BASE ($(keys | wc -l) keys)"
+
+i=0
+while kill -0 $SUB 2>/dev/null; do
+	check_keys
+	i=$((i + 1))
+	if [ -e "$M/republish" ]; then rm -f "$M/republish"; sleep 1; discovery; pub -r "$BASE/availability" online; publish_states force
+	elif [ -e "$M/poke" ] || [ $i -ge 8 ]; then rm -f "$M/poke"; i=0; publish_states
+	fi
+	sleep 0.25
+done
+log "subscriber ended (broker gone?); restarting"
+kill $HANDLER 2>/dev/null
+exit 1

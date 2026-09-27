@@ -1,0 +1,71 @@
+#!/bin/bash
+# Host unit test for tsx-idled: fake MP3309C backlight (0..31) in a temp dir,
+# a FIFO as input device, events in the host's struct input_event layout.
+# Usage: tests/test-idled.sh [path-to-tsx-idled-binary]   (default: builds it with host gcc)
+set -euo pipefail
+HERE=$(cd "$(dirname "$0")/.." && pwd)
+T=$(mktemp -d); PID=; trap '[ -n "$PID" ] && kill $PID 2>/dev/null; rm -rf $T' EXIT
+BIN=${1:-}
+if [ -z "$BIN" ]; then gcc -O2 -Wall -o $T/tsx-idled $HERE/src/tsx-idled.c; BIN=$T/tsx-idled; fi
+mkdir -p $T/bl/mp3309c $T/input
+echo 31 > $T/bl/mp3309c/max_brightness; echo 17 > $T/bl/mp3309c/brightness
+mkfifo $T/input/event0
+cat > $T/kiosk.conf <<C
+BLANK_TIMEOUT=2
+BRIGHTNESS_DAY=10
+BRIGHTNESS_NIGHT=10
+BACKLIGHT_MAX=23
+NIGHT_START=0
+NIGHT_END=0
+WAKE_SWALLOW_MS=300
+POWER_KEY=blank
+OSK_GESTURE=threefinger
+OSK_TAP_MS=500
+OSK_TOGGLE_CMD="echo x >> $T/osk"
+C
+exec 7<>$T/input/event0     # keep a writer open so the FIFO does not hit EOF
+ev() { python3 -c 'import struct,sys,time; t=time.time(); sys.stdout.buffer.write(struct.pack("llHHi",int(t),0,int(sys.argv[1]),int(sys.argv[2]),int(sys.argv[3]))+struct.pack("llHHi",int(t),0,0,0,0))' "$@" >&7; }
+# evs "type code value" ... : one frame, SYN_REPORT at the end
+evs() { python3 -c 'import struct,sys,time; t=time.time(); sys.stdout.buffer.write(b"".join(struct.pack("llHHi",int(t),0,*map(int,a.split())) for a in sys.argv[1:]+["0 0 0"]))' "$@" >&7; }
+# two-finger tap: slots 0/1 down at (x,y) (x2,y2), then up after $1 s; $2 = move finger 2 by px
+tap2() { evs "3 47 0" "3 57 11" "3 53 100" "3 54 100" "3 47 1" "3 57 12" "3 53 300" "3 54 100" "1 330 1"
+	 [ "$2" != 0 ] && evs "3 47 1" "3 53 $((300 + $2))"
+	 sleep $1; evs "3 47 0" "3 57 -1" "3 47 1" "3 57 -1" "1 330 0"; }
+# three-finger tap (the default OSK_GESTURE), up after $1 s; $2 = move finger 3 by px
+tap3() { evs "3 47 0" "3 57 21" "3 53 100" "3 54 100" "3 47 1" "3 57 22" "3 53 300" "3 54 100" "3 47 2" "3 57 23" "3 53 500" "3 54 100" "1 330 1"
+	 [ "${2:-0}" != 0 ] && evs "3 47 2" "3 53 $((500 + $2))"
+	 sleep $1; evs "3 47 0" "3 57 -1" "3 47 1" "3 57 -1" "3 47 2" "3 57 -1" "1 330 0"; }
+osk() { [ -f $T/osk ] && wc -l < $T/osk || echo 0; }
+TSX_INPUT_DIR=$T/input TSX_BACKLIGHT_DIR=$T/bl TSX_STATE_FILE=$T/state $BIN -c $T/kiosk.conf -v 2>$T/log &
+PID=$!
+fail() { echo "FAIL: $*"; cat $T/log; exit 1; }
+b() { cat $T/bl/mp3309c/brightness; }
+sleep 0.5; [ "$(b)" = 10 ] || fail "initial level $(b), want 10"
+sleep 2.2; [ "$(b)" = 0 ] || fail "not blanked after timeout: $(b)"; grep -q blank $T/state || fail state
+ev 1 330 1                  # BTN_TOUCH down
+sleep 0.3; [ "$(b)" = 10 ] || fail "no wake on touch: $(b)"
+sleep 0.5
+ev 1 116 1; sleep 0.2; [ "$(b)" = 0 ] || fail "power key press did not blank: $(b)"
+ev 1 116 0; sleep 0.3; [ "$(b)" = 0 ] || fail "power key release woke the screen: $(b)"
+ev 1 116 1; sleep 0.3; [ "$(b)" = 10 ] || fail "second power key press did not wake: $(b)"
+kill -USR2 $PID; sleep 1.2; [ "$(b)" = 0 ] || fail "USR2 did not blank"
+kill -USR1 $PID; sleep 0.4; [ "$(b)" = 10 ] || fail "USR1 did not wake"
+# front-panel race: tsx-buttons blanks (USR2) on a front key, then its release arrives
+kill -USR2 $PID; sleep 1.2; ev 1 183 0; sleep 0.3; [ "$(b)" = 0 ] || fail "key release (KEY_F13 0) woke the screen: $(b)"
+kill -USR1 $PID; sleep 0.4; [ "$(b)" = 10 ] || fail "USR1 did not wake (after release test)"
+tap2 0.1 0; sleep 0.3; [ "$(osk)" = 0 ] || fail "two-finger tap ran OSK_TOGGLE_CMD (OSK_GESTURE=threefinger)"
+tap3 0.1; sleep 0.3; [ "$(osk)" = 1 ] || fail "three-finger tap did not run OSK_TOGGLE_CMD ($(osk))"
+evs "3 47 0" "3 57 13" "3 53 50" "3 54 50" "1 330 1"; sleep 0.1; evs "3 57 -1" "1 330 0"
+sleep 0.3; [ "$(osk)" = 1 ] || fail "one-finger tap ran OSK_TOGGLE_CMD"
+tap3 0.8; sleep 0.3; [ "$(osk)" = 1 ] || fail "slow three-finger press ran OSK_TOGGLE_CMD"
+tap3 0.1 80; sleep 0.3; [ "$(osk)" = 1 ] || fail "three-finger swipe ran OSK_TOGGLE_CMD"
+kill -USR2 $PID; sleep 0.3; tap3 0.1; sleep 0.9; [ "$(osk)" = 1 ] || fail "wake touch (three fingers) ran OSK_TOGGLE_CMD"
+[ "$(b)" = 10 ] || fail "three-finger wake: $(b)"
+echo 16 > $T/bl/mp3309c/brightness   # drm unblank restores 16 behind our back
+for i in 1 2 3 4 5 6; do ev 1 330 1; sleep 1; done
+[ "$(b)" = 10 ] || fail "external change not corrected: $(b)"
+sed -i 's/BRIGHTNESS_DAY=10/BRIGHTNESS_DAY=40/;s/BRIGHTNESS_NIGHT=10/BRIGHTNESS_NIGHT=40/' $T/kiosk.conf
+kill -HUP $PID; sleep 0.4; [ "$(b)" = 23 ] || fail "HUP reload / cap: $(b), want 23 (cap)"
+kill $PID; wait $PID || true; PID=
+[ "$(b)" = 23 ] || fail "exit did not leave the backlight on"
+echo "PASS tsx-idled"; sed 's/^/  log: /' $T/log

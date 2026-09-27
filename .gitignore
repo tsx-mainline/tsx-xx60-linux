@@ -1,0 +1,40 @@
+# generated
+out/
+out-*/
+build/
+build-*/
+cache/
+results/
+# tools/build/ is a source directory (kernel/rootfs build scripts), not
+# generated output -- keep it out of the generic "build/" ignore above.
+!/tools/build/
+!/tools/build/**
+/tools/build/state/
+*.o
+*.ko
+*.dtb
+# proprietary / unit-specific (never commit)
+vendor-local/
+vendor-cache/
+vendor-bin/
+dl/
+captures/
+backups/
+secrets/
+bundle-*/
+factory-*/
+*.img
+*.ext4
+*.gz
+*.xz
+*.puf
+*.cnt
+*.bin
+*.core
+*.wav
+__pycache__/
+tools/regs/regdump
+tools/regs/i2crd/i2crd
+# built from source by voice/build-tflite.sh, never committed (SHA256SUMS/
+# BUILDINFO next to it are tracked and pin what a local build must produce)
+/rootfs/voice/tflite/libtensorflowlite_c.so

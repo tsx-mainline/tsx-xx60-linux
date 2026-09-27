@@ -1,0 +1,39 @@
+#!/sbin/openrc-run
+description="TSX early setup: time zone, eth0 MAC, zram swap, CPU governor"
+depend() { need localmount; before networking kiosk; }
+start() {
+	ebegin "TSX setup"
+	. /etc/kiosk.conf
+	if [ -n "${TZ_NAME:-}" ] && [ -f "/usr/share/zoneinfo/$TZ_NAME" ]; then
+		ln -sf "/usr/share/zoneinfo/$TZ_NAME" /etc/localtime
+		echo "$TZ_NAME" > /etc/timezone
+	fi
+	# stable eth0 MAC: mainline has no MAC source on this board (stmmac picks a
+	# random one each boot, so the DHCP address changed every boot). Use
+	# /etc/tsx/eth0.mac if present, else the U-Boot env "ethaddr" (the MAC
+	# U-Boot itself uses for DHCP), read only from mmcblk0 at 1 MiB (the live
+	# env, verified 2026-09-26), else a random locally administered one that
+	# is saved to /etc/tsx/eth0.mac.
+	mac=
+	[ -s /etc/tsx/eth0.mac ] && mac=$(head -1 /etc/tsx/eth0.mac)
+	if [ -z "$mac" ] && [ -b /dev/mmcblk0 ]; then
+		mac=$(dd if=/dev/mmcblk0 bs=64k skip=16 count=1 2>/dev/null | tr '\0' '\n' | sed -n 's/^ethaddr=//p' | head -1)
+	fi
+	echo "$mac" | grep -qiE '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$' || mac=
+	if [ -z "$mac" ]; then
+		mac=$(od -An -N5 -tx1 /dev/urandom | tr -s ' ' ':' | sed 's/^:/02:/; s/:$//')
+		mkdir -p /etc/tsx && echo "$mac" > /etc/tsx/eth0.mac
+	fi
+	ip link set dev eth0 address "$mac" 2>/dev/null && einfo "eth0 MAC $mac"
+	# compressed swap in RAM (needs CONFIG_ZRAM; the panel kernel lacks it today)
+	if [ ! -e /sys/block/zram0 ]; then modprobe zram num_devices=1 2>/dev/null || true; fi
+	if [ -e /sys/block/zram0/disksize ] && ! grep -q zram0 /proc/swaps; then
+		mem=$(awk '/MemTotal/{print $2}' /proc/meminfo)
+		for a in zstd lz4 lzo-rle lzo; do grep -qw "$a" /sys/block/zram0/comp_algorithm && { echo $a > /sys/block/zram0/comp_algorithm; break; }; done
+		echo $((mem / 2))K > /sys/block/zram0/disksize && mkswap /dev/zram0 >/dev/null && swapon -p 100 /dev/zram0
+	fi
+	for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+		[ -w "$g" ] && { grep -qw schedutil "${g%/*}/scaling_available_governors" && echo schedutil > "$g" || echo ondemand > "$g"; } 2>/dev/null
+	done
+	eend 0
+}

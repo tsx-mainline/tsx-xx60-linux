@@ -1,0 +1,49 @@
+name: rootfs
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: register the armv7 qemu-user binfmt (docker --platform linux/arm/v7)
+        uses: docker/setup-qemu-action@v3
+
+      - name: build sendspin-cli from source (rootfs/src/sendspin/build.sh)
+        run: rootfs/src/sendspin/build.sh
+
+      # No Crestron file is ever fetched or bundled here: TFA_VENDOR_FETCH=no
+      # and TFA_VENDOR_SRC unset means mkrootfs.sh leaves the TFA9890 DSP
+      # tuning containers out of the image entirely (a local build run by a
+      # user, on their own machine, keeps fetching them by default). The
+      # no-proprietary-files step below checks this on the build's output,
+      # not just this env var.
+      - name: build rootfs + initramfs (rootfs/build-rootfs.sh all)
+        env:
+          TFA_VENDOR_FETCH: "no"
+        run: rootfs/build-rootfs.sh all
+
+      - name: manifest / sizes / sha256
+        run: |
+          cat rootfs/out/rootfs.manifest
+          cat rootfs/out/rootfs.sizes
+          cat rootfs/out/rootfs.sha256
+
+      - name: no proprietary files in the build output (ci/check-no-proprietary.sh)
+        run: ci/check-no-proprietary.sh rootfs/out/rootfs.tar.gz rootfs/out/rootfs.ext4
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rootfs
+          path: |
+            rootfs/out/rootfs.tar.gz
+            rootfs/out/rootfs.ext4
+            rootfs/out/rootfs.manifest
+            rootfs/out/rootfs.sizes
+            rootfs/out/rootfs.sha256
+            rootfs/out/initramfs-switchroot.cpio.gz
+          if-no-files-found: error

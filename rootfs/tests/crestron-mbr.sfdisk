@@ -1,0 +1,14 @@
+label: dos
+label-id: 0x0dc9276f
+
+unit: sectors
+sector-size: 512
+
+/dev/sdx1 : start=       81920, size=       81920, type=83
+/dev/sdx2 : start=      206849, size=     1638400, type=83
+/dev/sdx3 : start=        2048, size=        2048, type=83
+/dev/sdx4 : start=     1845249, size=     5928959, type=5
+/dev/sdx5 : start=     1847297, size=     3055616, type=83
+/dev/sdx6 : start=     4904961, size=     1024000, type=83
+/dev/sdx7 : start=     5931009, size=      204800, type=83
+/dev/sdx8 : start=     6137857, size=      614400, type=83

@@ -1,0 +1,47 @@
+#!/bin/sh
+# tsx-tfa-dsp: bring the TFA9890 CoolFlux DSPs up on the TSW-1060 (mainline).
+# Needs the kernel with snd_soc_tfa989x.dsp=1 (else the driver bypasses the
+# DSP on every power-up anyway) and /usr/local/lib/tsx/tfa_dsp.py.
+#   tsx-tfa-dsp start [VARIANT] [VSTEP]   VARIANT: yushan | yushan_2nd | yushan_3rd
+#   tsx-tfa-dsp status | stop | bypass
+# Config: /etc/tsx/tfa-dsp.conf (TFA_VARIANT=, TFA_VSTEP=, TFA_PROFILE=)
+set -e
+LIB=${TFA_LIB:-/usr/local/lib/tsx/tfa_dsp.py}
+DIR=${TFA_DIR:-/usr/local/share/tsx/tfa9890}
+BUS=${TFA_BUS:-1}
+TFA_VARIANT= TFA_VSTEP=0 TFA_PROFILE=0
+[ -r /etc/tsx/tfa-dsp.conf ] && . /etc/tsx/tfa-dsp.conf
+log() { echo "tsx-tfa-dsp: $*"; logger -t tsx-tfa-dsp "$*" 2>/dev/null || true; }
+param=/sys/module/snd_soc_tfa989x/parameters/dsp
+
+case "${1:-status}" in
+start)
+	v=${2:-$TFA_VARIANT}; s=${3:-$TFA_VSTEP}
+	[ -n "$v" ] || { log "no variant (set TFA_VARIANT in /etc/tsx/tfa-dsp.conf)"; exit 2; }
+	cnt=$DIR/settings_$v/stereo.cnt
+	[ -r "$cnt" ] || { log "missing $cnt"; exit 2; }
+	[ "$(cat $param 2>/dev/null)" = Y ] || { log "kernel not in dsp mode (snd_soc_tfa989x.dsp=1)"; exit 2; }
+	# the DSP needs the I2S clocks: keep a silent stream running while loading
+	tsx-audio speaker hold >/dev/null 2>&1 || true
+	aplay -q -D default -t raw -f S16_LE -r 48000 -c 2 /dev/zero 2>/dev/null &
+	ap=$!
+	sleep 1
+	rc=0
+	python3 "$LIB" start "$cnt" --bus "$BUS" --profile "$TFA_PROFILE" --vstep "$s" --yes || rc=$?
+	kill $ap 2>/dev/null || true; wait $ap 2>/dev/null || true
+	tsx-audio speaker release >/dev/null 2>&1 || true
+	if [ $rc = 0 ]; then
+		amixer -q -c TSW1060 cset name='Left Amp Input' DSP
+		amixer -q -c TSW1060 cset name='Right Amp Input' DSP
+		log "DSP running ($v, profile $TFA_PROFILE, vstep $s)"
+	else
+		log "DSP load failed (rc $rc): amplifiers stay in bypass"
+	fi
+	exit $rc ;;
+status) exec python3 "$LIB" status --bus "$BUS" ${2:+--state} ;;
+stop|bypass)
+	amixer -q -c TSW1060 cset name='Left Amp Input' Left || true
+	amixer -q -c TSW1060 cset name='Right Amp Input' Right || true
+	exec python3 "$LIB" "$1" --bus "$BUS" --yes ;;
+*) echo "usage: $0 start [VARIANT] [VSTEP] | status [state] | stop | bypass" >&2; exit 2 ;;
+esac

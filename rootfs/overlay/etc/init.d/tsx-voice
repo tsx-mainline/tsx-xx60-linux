@@ -1,0 +1,29 @@
+#!/sbin/openrc-run
+# Home Assistant Assist voice satellite: linux-voice-assistant (ESPHome native
+# API, port 6053; replaces wyoming-satellite), /etc/tsx/voice.conf.
+# Not in a runlevel by default: "tsx-audio enable voice".
+description="Assist voice satellite (linux-voice-assistant, ESPHome API)"
+supervisor=supervise-daemon
+command=/usr/local/bin/tsx-voice-run
+command_user="kiosk:audio"
+output_log=/var/log/tsx-voice.log
+error_log=/var/log/tsx-voice.log
+respawn_delay=10
+respawn_max=0
+depend() { need net; after tsx-audio tsx-setup; }
+start_pre() {
+	# supervise-daemon opens the log after switching to command_user: it must exist and be writable by kiosk
+	checkpath -f -m 0644 -o kiosk:audio /var/log/tsx-voice.log
+	STATE_DIR=/var/lib/tsx-voice
+	[ -r /etc/tsx/voice.conf ] && . /etc/tsx/voice.conf
+	[ -x /usr/local/bin/linux-voice-assistant ] || { eerror "linux-voice-assistant not installed"; return 1; }
+	[ -e /proc/asound/TSW1060 ] || ewarn "no TSW1060 sound card"
+	checkpath -d -m 0755 -o kiosk:audio "$STATE_DIR"
+	# state, ducking and the push-to-talk FIFO (the satellite runs as kiosk)
+	checkpath -d -m 0755 /run/tsx
+	checkpath -d -m 0755 -o kiosk:audio /run/tsx/voice
+	[ -p /run/tsx/voice/ptt ] || { rm -f /run/tsx/voice/ptt; mkfifo /run/tsx/voice/ptt; }
+	chown kiosk:audio /run/tsx/voice/ptt; chmod 0660 /run/tsx/voice/ptt
+	return 0
+}
+stop_post() { su -s /bin/sh kiosk -c '/usr/local/bin/tsx-voice-hook done' >/dev/null 2>&1; return 0; }

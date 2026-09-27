@@ -1,0 +1,38 @@
+#!/bin/sh
+# tsx-voice-run: start linux-voice-assistant with /etc/tsx/voice.conf .
+# Used by /etc/init.d/tsx-voice (as user kiosk). --print: show the command.
+CONF=${TSX_VOICE_CONF:-/etc/tsx/voice.conf}
+RUN=${TSX_VOICE_RUN:-/run/tsx/voice}
+LVA=${TSX_LVA:-/usr/local/bin/linux-voice-assistant}
+NAME= PORT=6053 WAKE=ptt WAKE_WORD=okay_nabu AWAKE_WAV= MIC_PCM=mic
+SPEAKER_DEVICE=alsa/speaker MUSIC_DEVICE=alsa/media KEEP_OUTPUT_OPEN=no
+IFACE= HOST= PERIPHERAL_HOST=127.0.0.1 PERIPHERAL_PORT=6055
+STATE_DIR=/var/lib/tsx-voice ARGS=
+PRINT=${TSX_VOICE_PRINT:-0}; [ "${1-}" = --print ] && PRINT=1
+[ -r "$CONF" ] && . "$CONF"
+case $WAKE in
+ptt|local) ;;
+ha|uri) echo "tsx-voice-run: WAKE=$WAKE was a wyoming-satellite mode; using local" >&2; WAKE=local;;
+*) echo "tsx-voice-run: WAKE must be ptt or local" >&2; exit 1;;
+esac
+case $WAKE_WORD in ok_nabu) WAKE_WORD=okay_nabu;; esac   # audio default name
+export TSX_VOICE_PTT=${TSX_VOICE_PTT:-$RUN/ptt}
+export TSX_VOICE_HOOK=${TSX_VOICE_HOOK:-/usr/local/bin/tsx-voice-hook}
+export TSX_VOICE_WAKE=$WAKE TSX_LVA_MIC=$MIC_PCM
+[ "$KEEP_OUTPUT_OPEN" = yes ] && export TSX_VOICE_KEEP_OUTPUT_OPEN=1
+set -- --name "${NAME:-$(hostname)}" --port "$PORT" \
+	--audio-input-device "$MIC_PCM" --audio-output-device "$SPEAKER_DEVICE" \
+	--music-output-device "$MUSIC_DEVICE" --wake-model "$WAKE_WORD" \
+	--preferences-file "$STATE_DIR/preferences.json" --download-dir "$STATE_DIR/local" \
+	--peripheral-host "$PERIPHERAL_HOST" --peripheral-port "$PERIPHERAL_PORT" --peripheral-startup-wait 0
+[ -n "$IFACE" ] && set -- "$@" --network-interface "$IFACE"
+[ -n "$HOST" ] && set -- "$@" --host "$HOST"
+if [ -n "$AWAKE_WAV" ] && [ -r "$AWAKE_WAV" ]; then
+	set -- "$@" --wakeup-sound "$AWAKE_WAV" --start-listening-sound "$AWAKE_WAV"
+fi
+if [ "$PRINT" = 1 ]; then
+	echo "TSX_VOICE_WAKE=$TSX_VOICE_WAKE TSX_VOICE_PTT=$TSX_VOICE_PTT TSX_LVA_MIC=$TSX_LVA_MIC $LVA $* $ARGS"
+	exit 0
+fi
+# shellcheck disable=SC2086
+exec "$LVA" "$@" $ARGS

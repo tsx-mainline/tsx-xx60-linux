@@ -1,0 +1,170 @@
+#!/bin/bash
+# Host: fill a USB stick (FAT32, mounted at DIR) or a staging directory with
+# the UART-free installer payload. See README.md for the layout and the flows.
+#
+#   payload/mkpayload --out DIR --rootfs-p2 rootfs-p2.ext4 --rescue-tsw1060 RESCUE --bootimg-tsw1060 tsxboot.img [options]
+#     (the default Android flow: --rootfs-p2 from steps/mkp2rootfs.sh)
+#   payload/mkpayload --out DIR --rootfs rootfs.tar.gz --bootimg-tsw1060 tsxboot.img [options]
+#     (the older two-stage payload: stage 2 installs the tarball on p5; also the GO reinstall)
+#     --bootimg-tsw760 IMG   TSW-760 image (not built yet); without it the
+#                            installers refuse 7-inch units
+#     --rescue-tsw1060 IMG   golden-slot rescue image (rescue/mkrescue.sh)
+#     --url URL              kiosk URL (KIOSK_URL)
+#     --token-file F         HA long-lived token, seeded at the first kiosk start
+#     --go                   create tsx-install/GO: units that already boot mainline
+#                            reinstall from this stick at the next power cycle
+#     --usb                  ALSO copy tsx-install-usb and tsx-usb-recovery onto the
+#                            stick root: the panel-side USB install method (docs/install.md),
+#                            for when the only way in is a root shell (no usable network).
+#                            Needs the same inputs as the default Android flow above
+#                            (--rootfs-p2 + --rescue-tsw1060 + --bootimg-tsw1060, with
+#                            tsx-autoinstall in the boot image).
+#     --guard fallback|nogolden   hook variant stage 2 installs (default fallback)
+#     --no-defuse-golden     stage 2 does not set DataRecoveryDone=1 (default: it does)
+#     --allow-stale          accept a rootfs without ENV_VERIFIED=yes
+#     --allow-no-autoinstall accept a boot image whose initramfs has no tsx-autoinstall
+#                            (only the --source net flow works then)
+#
+#   payload/mkpayload --recovery --out DIR --rescue-tsw1060 RESCUE [--bootimg-tsw760 RESCUE760]
+#     A recovery-only stick: jabil.txt + the rescue image(s), nothing else. Once
+#     tsx-usb-recovery is enabled on the panel (permanent after tsx-install-mainline,
+#     or by hand over the UART), plugging this in and power-cycling boots straight
+#     into the mainline rescue system -- no root shell needed on the panel at all.
+set -euo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+INSTALLER_DIR=$(cd "$HERE/.." && pwd)
+ROOTFS_DIR=$(cd "$INSTALLER_DIR/../rootfs" && pwd)
+OUT= ROOTFS= P2IMG= B1060= B760= RESC1060= RESC760= URL= TOKEN= GO=0 USB=0 RECOVERY=0 GUARD=fallback DEFUSE=1 STALE=0 NOAUTO=0
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--out) OUT=$2; shift;; --rootfs) ROOTFS=$2; shift;; --rootfs-p2) P2IMG=$2; shift;;
+	--bootimg-tsw1060) B1060=$2; shift;; --bootimg-tsw760) B760=$2; shift;;
+	--rescue-tsw1060) RESC1060=$2; shift;; --rescue-tsw760) RESC760=$2; shift;;
+	--rootfs-ext4) echo "mkpayload: --rootfs-ext4 was removed with --direct-p5" >&2; exit 2;; --url) URL=$2; shift;; --token-file) TOKEN=$2; shift;;
+	--go) GO=1;; --usb) USB=1;; --recovery) RECOVERY=1;;
+	--guard) GUARD=$2; shift;; --defuse-golden) DEFUSE=1;; --no-defuse-golden) DEFUSE=0;;
+	--allow-stale) STALE=1;; --allow-no-autoinstall) NOAUTO=1;;
+	-h|--help) sed -n '2,33p' "$0"; exit 0;;
+	*) sed -n '2,33p' "$0"; exit 2;;
+	esac; shift
+done
+die() { echo "mkpayload: ERROR: $*" >&2; exit 1; }
+say() { echo "mkpayload: $*" >&2; }
+[ -n "$OUT" ] || { sed -n '2,33p' "$0"; exit 2; }
+[ -d "$OUT" ] || die "$OUT is not a directory (mount the stick first)"
+
+# --- checks on the payload (shared by all modes)
+bootimg_check() {   # bootimg_check IMG [NAME]: "ok" if the initramfs has NAME (default
+	# usr/sbin/tsx-autoinstall), else "no-autoinstall"; "bad" if not an Android boot image
+	python3 - "$1" "${2:-usr/sbin/tsx-autoinstall}" <<'PY'
+import struct, sys, gzip, io
+d = open(sys.argv[1], 'rb').read()
+if d[:8] != b'ANDROID!': print('bad'); sys.exit(0)
+ks, ka, rs, ra, ss, sa, ta, ps = struct.unpack_from('<8I', d, 8)
+pad = lambda n: (n + ps - 1) // ps * ps
+rd = d[ps + pad(ks): ps + pad(ks) + rs]
+try: cp = gzip.decompress(rd)
+except Exception: print('no-autoinstall'); sys.exit(0)
+print('ok' if sys.argv[2].encode() + b'\0' in cp else 'no-autoinstall')
+PY
+}
+
+if [ "$RECOVERY" = 1 ]; then
+	[ "$USB" = 0 ] && [ "$GO" = 0 ] && [ -z "$ROOTFS" ] && [ -z "$P2IMG" ] || die "--recovery takes no --rootfs/--rootfs-p2/--usb/--go (it installs nothing)"
+	[ -n "$RESC1060" ] || die "--recovery needs --rescue-tsw1060 IMG"
+	for img in "$RESC1060" ${RESC760:+"$RESC760"}; do
+		[ -f "$img" ] || die "$img missing"
+		[ "$(bootimg_check "$img" etc/tsx/rescue-image)" = ok ] || die "$img is not a rescue image (no etc/tsx/rescue-image in its initramfs; rescue/mkrescue.sh)"
+	done
+	# jabil.txt names the SAME files jabil_factory then fatloads straight from the
+	# stick root and boots with no subdirectory involved (common/cmd_usb.c "usb
+	# factory"); a recovery stick just points those names at rescue images instead
+	# of a kiosk/stage-2 image.
+	cp "$RESC1060" "$OUT/tsxboot-tsw1060.img"
+	[ -n "$RESC760" ] && cp "$RESC760" "$OUT/tsxboot-tsw760.img"
+	printf '%s\n' none-5inch.img "$([ -n "$RESC760" ] && echo tsxboot-tsw760.img || echo none-7inch.img)" tsxboot-tsw1060.img > "$OUT/jabil.txt"
+	(cd "$OUT" && find tsxboot-*.img jabil.txt -type f | sort | xargs sha256sum > SHA256SUMS)
+	sync
+	say "recovery stick done: $(du -sh "$OUT" | cut -f1) in $OUT (jabil.txt -> rescue image; needs tsx-usb-recovery enabled on the panel)"
+	exit 0
+fi
+
+{ [ -n "$ROOTFS" ] || [ -n "$P2IMG" ]; } && [ -n "$B1060" ] || die "need --rootfs or --rootfs-p2, and --bootimg-tsw1060 (or --recovery for a recovery-only stick)"
+for m in tsw1060 tsw760; do
+	v=B${m#tsw}; img=${!v}; [ -n "$img" ] || continue
+	[ -f "$img" ] || die "$img missing"
+	r=$(bootimg_check "$img")
+	[ "$r" = bad ] && die "$img is not an Android boot image"
+	if [ "$r" = no-autoinstall ]; then
+		[ $NOAUTO = 1 ] || die "$img: its initramfs has no /usr/sbin/tsx-autoinstall (run initramfs/integrate.sh, rebuild). --allow-no-autoinstall to go on"
+		[ $USB = 1 ] && die "$img: --usb needs tsx-autoinstall in the boot image (it is the panel's only way in)"
+		say "WARNING: $img has no tsx-autoinstall: only the net / direct flows will work"
+	fi
+done
+[ $USB = 1 ] && { [ -n "$P2IMG" ] || die "--usb needs --rootfs-p2 IMG"; [ -n "$RESC1060" ] || die "--usb needs --rescue-tsw1060 IMG"; }
+if [ -n "$ROOTFS" ]; then info=$(tar -xzOf "$ROOTFS" ./etc/tsx/uboot-env.conf 2>/dev/null | grep '^ENV_VERIFIED=' || true)
+else info=$(debugfs -R "cat /etc/tsx/uboot-env.conf" "$P2IMG" 2>/dev/null | grep '^ENV_VERIFIED=' || true); fi
+if [ -n "$P2IMG" ]; then
+	P2BYTES=$(stat -c %s "$P2IMG")
+	[ "$P2BYTES" -le $((1638400 * 512)) ] && [ $((P2BYTES % 1048576)) = 0 ] || die "$P2IMG must be whole MiB and at most 800 MiB (p2)"
+	[ "$(blkid -o value -s LABEL "$P2IMG" 2>/dev/null)" = tsxroot ] || die "$P2IMG is not an ext4 with LABEL=tsxroot"
+fi
+if [ "$info" != ENV_VERIFIED=yes ]; then
+	[ $STALE = 1 ] || die "$ROOTFS has '${info:-no uboot-env.conf}', not ENV_VERIFIED=yes: stale build (CONTEXT.md). --allow-stale to go on"
+	say "WARNING: stale rootfs ($info): tsx-boot-ok will not reset boot_retry"
+fi
+
+# --- write
+T=$OUT/tsx-install
+mkdir -p "$T/android" "$T/linux" "$T/backup" "$T/log"
+cpv() { say "copy $(basename "$1") -> ${2#$OUT/}"; cp "$1" "$2"; }
+cpv "$B1060" "$OUT/tsxboot-tsw1060.img"
+[ -n "$B760" ] && cpv "$B760" "$OUT/tsxboot-tsw760.img"
+RSHA=
+if [ -n "$ROOTFS" ]; then cpv "$ROOTFS" "$T/rootfs.tar.gz"; RSHA=$(sha256sum < "$ROOTFS" | cut -d' ' -f1); else rm -f "$T/rootfs.tar.gz"; fi
+if [ -n "$P2IMG" ]; then
+	say "gzip $(basename "$P2IMG") -> tsx-install/rootfs-p2.ext4.gz"
+	P2SHA=$(sha256sum < "$P2IMG" | cut -d' ' -f1); gzip -1 -c "$P2IMG" > "$T/rootfs-p2.ext4.gz"
+else rm -f "$T/rootfs-p2.ext4.gz"; fi
+if [ -n "$RESC1060" ]; then
+	[ "$(bootimg_check "$RESC1060" etc/tsx/rescue-image)" = ok ] || die "$RESC1060 is not a rescue image (no etc/tsx/rescue-image in its initramfs; rescue/mkrescue.sh)"
+	cpv "$RESC1060" "$T/rescue-tsw1060.img"
+fi
+cp "$INSTALLER_DIR/android/tsx-android-install.sh" "$INSTALLER_DIR/android/tsx-android-uninstall.sh" "$INSTALLER_DIR/android/tsx-lib.sh" "$T/android/"
+cp "$ROOTFS_DIR/install.sh" "$ROOTFS_DIR/uninstall.sh" "$ROOTFS_DIR/tsx-disk.sh" "$T/linux/"
+[ -n "$TOKEN" ] && { cp "$TOKEN" "$T/token.txt"; chmod 600 "$T/token.txt" 2>/dev/null || true; }
+if [ $USB = 1 ]; then
+	cpv "$INSTALLER_DIR/android/tsx-install-usb" "$OUT/tsx-install-usb"
+	cpv "$INSTALLER_DIR/emmc/tsx-usb-recovery" "$OUT/tsx-usb-recovery"
+	chmod 755 "$OUT/tsx-install-usb" "$OUT/tsx-usb-recovery"
+fi
+# jabil.txt: one line per lcdsize (5inch, 7inch, 10inch); read by U-Boot's
+# "usb factory 0" only once tsx-usb-recovery has enabled VBUS before the USB
+# probe (docs/boot.md "U-Boot USB needs VBUS held before enumeration").
+# Names that do not exist make the stock hook fall through harmlessly.
+printf '%s\n' none-5inch.img "$([ -n "$B760" ] && echo tsxboot-tsw760.img || echo none-7inch.img)" tsxboot-tsw1060.img > "$OUT/jabil.txt"
+{
+	echo "# xx60 install stick. key=value, no shell code."
+	echo "VERSION=$(date +%Y%m%d-%H%M) rootfs ${RSHA:0:12}${P2SHA:+ p2 ${P2SHA:0:12}}"
+	[ -n "$ROOTFS" ] && { echo "ROOTFS=tsx-install/rootfs.tar.gz"; echo "ROOTFS_SHA256=$RSHA"; }
+	[ -n "$P2IMG" ] && { echo "ROOTFS_P2=tsx-install/rootfs-p2.ext4.gz"; echo "ROOTFS_P2_SHA256=$P2SHA"; echo "ROOTFS_P2_BYTES=$P2BYTES"; }
+	echo "BOOTIMG_tsw1060=tsxboot-tsw1060.img"
+	[ -n "$B760" ] && echo "BOOTIMG_tsw760=tsxboot-tsw760.img"
+	[ -n "$RESC1060" ] && echo "RESCUE_tsw1060=tsx-install/rescue-tsw1060.img"
+	[ -n "$URL" ] && echo "KIOSK_URL=$URL"
+	[ -n "$TOKEN" ] && echo "TOKEN_FILE=token.txt"
+	echo "GUARD=$GUARD"
+	echo "DEFUSE_GOLDEN=$DEFUSE"
+} > "$T/tsx-install.conf"
+{ echo "rootfs_tar_sha256=$RSHA"; echo "rootfs_p2_sha256=${P2SHA:-}"; echo "$info"; [ -n "$ROOTFS" ] && tar -xzOf "$ROOTFS" ./etc/alpine-release 2>/dev/null | sed 's/^/alpine=/' || true; } > "$T/rootfs.info"
+rm -f "$T/GO"; [ $GO = 1 ] && echo "armed $(date -Iseconds)" > "$T/GO"
+cp "$HERE/README.md" "$T/README.txt"
+USBFILES=(); [ $USB = 1 ] && USBFILES=(tsx-install-usb tsx-usb-recovery)
+(cd "$OUT" && find tsxboot-*.img jabil.txt "${USBFILES[@]}" tsx-install -type f ! -path 'tsx-install/backup/*' ! -path 'tsx-install/log/*' ! -name SHA256SUMS ! -name GO | sort | xargs sha256sum > tsx-install/SHA256SUMS)
+sync
+say "done: $(du -sh "$OUT" | cut -f1) in $OUT"
+if [ $USB = 1 ]; then
+	say "USB install: root shell on the panel, from the stick: sh tsx-install-usb"
+else
+	say "Android flow: ssh -tt \$TSX_ADMIN_USER@<panel> (default admin), then: bash /mnt/media_rw/udisk0/tsx-install/android/tsx-android-install.sh preflight"
+fi

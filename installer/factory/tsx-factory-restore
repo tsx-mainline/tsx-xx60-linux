@@ -1,0 +1,157 @@
+#!/bin/sh
+# tsx-factory-restore: put the xx60 SD card back into Crestron's factory layout
+# from a bundle made by factory/puf-tool.sh bundle (Crestron .puf + this unit's env).
+# Runs in the mainline RESCUE system (golden slot, everything in RAM), as root;
+# refuses while any partition of the card is mounted (so not from the kiosk).
+#
+#   tsx-factory-restore check BUNDLE_DIR
+#   tsx-factory-restore run   BUNDLE_DIR [--yes] [--other-unit]
+#
+# BUNDLE_DIR: copied to /tmp over ssh (scp -r bundle root@<rescue ip>:/tmp/), or a
+# mounted USB stick. Writes, in this order (every step is checked by reading back):
+#   1. partition table: crestron-mbr.sfdisk (sfdisk; boot code bytes 0..439 kept, the
+#      card's U-Boot copy in sectors 1..2047 is never written), re-read by the kernel
+#   2. p2  = system.img (golden /system)
+#   3. p1  = new FAT16 (factory parameters) with boot.img = boot-golden.img
+#      (this removes the mainline kiosk and rescue images from p1)
+#   4. p5..p8 = empty factory file systems (sdcard, data, cache, logs)
+#   5. the U-Boot env (env.bin: this unit's env, hook removed) - last
+# Afterwards U-Boot boots the eMMC Android as a factory-fresh unit; the golden
+# image is Crestron's again. Not restored: Crestron /data, ROMDISK files, logs.
+# Test hooks: TSX_SHARE TSX_SYSBLOCK TSX_DEVDIR TSX_RUN
+set -eu
+SHARE=${TSX_SHARE:-/usr/share/tsx}
+. "$SHARE/tsx-lib.sh"
+RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
+say() { echo "tsx-factory-restore: $*" >&2; }
+die() { say "ERROR: $*"; exit 1; }
+MiB=1048576
+
+# ---- live progress for a background dd (BusyBox dd has no status=progress) ----
+# pr_dd DEST OFF_MIB LEN_MIB NAME -- DD_ARGS...
+# dd's own stdin (pipe, redirect, or if=) is inherited as-is; its stdout is
+# pointed at a pre-opened (non-truncating) fd on DEST so /proc/<ddpid>/fdinfo/1
+# 'pos:' tracks the destination write offset. Every ~15s (while dd is alive)
+# prints one progress line to fd 2; nothing once dd has exited. Returns dd's
+# own exit status. Always closes its own fd, even on the direct (non-piped)
+# call sites in this script.
+pr_dd() {
+	_pd_dev=$1; _pd_off=$2; _pd_len=$3; _pd_name=$4; shift 4; [ "${1:-}" = -- ] && shift
+	exec 8<>"$_pd_dev"
+	# ash (busybox, the rescue) gives a background job /dev/null as stdin unless it is
+	# redirected explicitly (bash does not): keep the caller's stdin (the pipe) on fd 7
+	exec 7<&0
+	dd "$@" <&7 1>&8 2>/dev/null 7<&- 8<&- &
+	_pd_dp=$!
+	( _pd_t0=$(date +%s)
+	  while kill -0 $_pd_dp 2>/dev/null; do
+		_pd_i=0
+		while [ $_pd_i -lt 15 ] && kill -0 $_pd_dp 2>/dev/null; do sleep 1; _pd_i=$((_pd_i + 1)); done
+		kill -0 $_pd_dp 2>/dev/null || break
+		_pd_pos=$(sed -n 's/^pos:[[:space:]]*//p' "/proc/$_pd_dp/fdinfo/1" 2>/dev/null) || break
+		[ -n "$_pd_pos" ] || continue
+		_pd_now=$(date +%s); _pd_dt=$((_pd_now - _pd_t0)); [ $_pd_dt -lt 1 ] && _pd_dt=1
+		awk -v pos="$_pd_pos" -v off="$_pd_off" -v mib="$MiB" -v len="$_pd_len" -v dt="$_pd_dt" -v name="$_pd_name" 'BEGIN{
+			d = (pos - off * mib) / mib; if (d < 0) d = 0;
+			pct = len > 0 ? d * 100 / len : 0; rate = d / dt;
+			if (rate > 0.01) {
+				left = (len - d) / rate;
+				if (left >= 60) printf "  %s: %.0f/%.0f MiB (%.0f%%), %.1f MiB/s, ~%.0f min left\n", name, d, len, pct, rate, left / 60;
+				else printf "  %s: %.0f/%.0f MiB (%.0f%%), %.1f MiB/s, ~%.0f s left\n", name, d, len, pct, rate, left;
+			} else printf "  %s: %.0f/%.0f MiB (%.0f%%), %.1f MiB/s\n", name, d, len, pct, rate;
+		}' >&2
+	  done
+	) &
+	_pd_rp=$!
+	wait $_pd_dp; _pd_rc=$?
+	# no explicit "kill $_pd_rp" here: the reporter already notices dd's exit via
+	# its own kill -0 check (within ~1s) and self-terminates; killing a PID that
+	# may by now have already exited and been recycled by the OS is what a
+	# background dd + reporter design must avoid (a stray signal to an unrelated,
+	# reused PID has been observed to take down the whole script)
+	wait $_pd_rp 2>/dev/null
+	exec 7<&- 8<&-
+	return $_pd_rc
+}
+CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,23p' "$0"; exit 2; }
+YES=0 OTHER=0
+while [ $# -gt 0 ]; do case "$1" in --yes) YES=1;; --other-unit) OTHER=1;; *) die "unknown option $1";; esac; shift; done
+case "$CMD" in check|run) ;; *) sed -n '2,23p' "$0"; exit 2;; esac
+M=$B/factory.manifest
+[ -f "$M" ] && grep -q '^format=tsx-factory-bundle-1$' "$M" || die "$B has no factory.manifest (factory/puf-tool.sh bundle)"
+. "$B/crestron-fs.sh"
+
+tsx_find_disk || die "no card with the stock or card-stage layout"
+[ "$(cat "${TSX_SYSBLOCK:-/sys/block/$DISK}/size")" = "$CRESTRON_DISK_SECTORS" ] || die "card size is not $CRESTRON_DISK_SECTORS sectors"
+say "card $WHOLE, layout now $TSX_DISK_LAYOUT"
+say "checking the bundle (sha256 of every file)"
+grep '^file ' "$M" | while read -r _ f sz sha; do
+	[ "$(sha256sum < "$B/$f" | cut -d' ' -f1)" = "$sha" ] || { echo "BAD $f"; exit 1; }
+done | grep -q BAD && die "bundle file(s) do not match factory.manifest"
+FWP=$(command -v fw_printenv) || die "no fw_printenv"
+echo "$B/env.bin 0x0 0x10000" > "$RUN/tsxfr-bundle.cfg"
+"$FWP" -c "$RUN/tsxfr-bundle.cfg" >/dev/null 2>&1 && ! "$FWP" -c "$RUN/tsxfr-bundle.cfg" 2>&1 | grep -qi 'bad crc' || die "env.bin has a bad CRC"
+BETH=$("$FWP" -c "$RUN/tsxfr-bundle.cfg" -n ethaddr 2>/dev/null || true)
+FWCFG=$RUN/tsx-fw_env.config; echo "$WHOLE 0x100000 0x10000" > "$FWCFG"
+CETH=$(tsx_env ethaddr 2>/dev/null || true)
+if [ "$BETH" != "$CETH" ]; then
+	[ $OTHER = 1 ] || die "bundle env is for ${BETH:-no MAC}, this card's env says ${CETH:-no valid env}: wrong unit (--other-unit if intended)"
+	say "WARNING: env of another unit (${BETH:-none}) on a card of ${CETH:-unknown}"
+fi
+for p in /sys/block/$DISK/${DISK}p*; do
+	[ -e "$p" ] || continue
+	m=$(tsx_mounts_of "$DEVDIR/${p##*/}"); [ -z "$m" ] || die "$DEVDIR/${p##*/} is mounted at $m: run this from the rescue system"
+done
+say "bundle: $(sed -n 's/^firmware_version=//p' "$M") for unit $(sed -n 's/^unit=//p' "$M"), system.img $(stat -c %s "$B/system.img") bytes"
+[ "$CMD" = check ] && { say "check OK (nothing written)"; exit 0; }
+if [ $YES != 1 ]; then printf 'Rewrite the whole SD card (except U-Boot) to the Crestron factory layout? Type FACTORY: ' >&2; read -r a; [ "$a" = FACTORY ] || die "not confirmed"; fi
+
+# 1. partition table
+say "1/5 writing partition table..."
+dd if="$WHOLE" bs=440 count=1 2>/dev/null | sha256sum > "$RUN/tsxfr-code.sum"
+sfdisk -q --no-reread --no-tell-kernel "$WHOLE" < "$B/crestron-mbr.sfdisk" >/dev/null 2>&1 || die "sfdisk failed"
+sync
+[ "$(dd if="$WHOLE" bs=440 count=1 2>/dev/null | sha256sum)" = "$(cat "$RUN/tsxfr-code.sum")" ] || die "MBR boot code changed?!"
+blockdev --rereadpt "$WHOLE" 2>/dev/null || partx -u "$WHOLE" 2>/dev/null || true
+sleep 1
+for i in 1 2 3 4 5 6 7 8 9 10; do TSX_WANT_LAYOUT=stock tsx_find_disk && break; sleep 1; done
+[ "$TSX_DISK_LAYOUT" = stock ] || die "the kernel does not show the Crestron layout after the rewrite (reboot into the rescue and run again)"
+# device nodes: devtmpfs updates them; without it (containers) make sure every node
+# matches the kernel's major:minor after the re-read (partition minors can move)
+for b in /sys/block/$DISK/${DISK}p*; do
+	[ -e "$b/dev" ] || continue
+	nd=$DEVDIR/${b##*/}; mm=$(cat "$b/dev")
+	if [ ! -b "$nd" ] || [ "$(stat -c '%t:%T' "$nd" 2>/dev/null)" != "$(printf '%x:%x' ${mm%:*} ${mm#*:})" ]; then
+		rm -f "$nd"; mknod "$nd" b ${mm%:*} ${mm#*:}
+	fi
+done
+say "1/5 partition table = Crestron (p1..p8)"
+# 2. p2
+N=$(stat -c %s "$B/system.img"); NM=$(( (N + MiB - 1) / MiB ))
+say "2/5 writing region p2: $NM MiB at 0 MiB (system.img)"
+pr_dd "$P2" 0 "$NM" p2 -- if="$B/system.img" bs=$MiB || die "writing p2 failed"
+sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+say "2/5 verifying p2 readback ($NM MiB)..."
+[ "$(dd if="$P2" bs=4096 count=$((N / 4096)) 2>/dev/null | sha256sum | cut -d' ' -f1)" = "$(sha256sum < "$B/system.img" | cut -d' ' -f1)" ] || die "p2 readback differs"
+say "2/5 p2 = system.img (golden /system), verified"
+# 3. p1
+say "3/5 writing p1: FAT16 + boot.img ($(( $(stat -c %s "$B/boot-golden.img") / MiB )) MiB)..."
+crestron_mkfat "$P1" || die "mkfs.fat p1 failed"
+mkdir -p "$RUN/tsxfr-p1"; mount -t vfat "$P1" "$RUN/tsxfr-p1" || die "cannot mount the new p1"
+cp "$B/boot-golden.img" "$RUN/tsxfr-p1/boot.img"; sync
+G=$(sha256sum < "$RUN/tsxfr-p1/boot.img" | cut -d' ' -f1); umount "$RUN/tsxfr-p1"
+[ "$G" = "$(sha256sum < "$B/boot-golden.img" | cut -d' ' -f1)" ] || die "p1:boot.img readback differs"
+say "3/5 p1 = FAT16 with the golden boot.img, verified"
+# 4. p5..p8
+for p in 5 6 7 8; do
+	say "4/5 formatting p$p..."
+	crestron_mke2fs $p "$DEVDIR/${DISK}p$p" >/dev/null 2>&1 || die "mke2fs p$p failed"
+done
+say "4/5 p5..p8 = empty sdcard/data/cache/logs (factory parameters)"
+# 5. env, last
+say "5/5 writing U-Boot env (64 KiB)..."
+dd if="$B/env.bin" of="$WHOLE" bs=65536 seek=16 conv=notrunc 2>/dev/null || die "env write failed"
+sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+[ "$(dd if="$WHOLE" bs=65536 skip=16 count=1 2>/dev/null | sha256sum | cut -d' ' -f1)" = "$(sha256sum < "$B/env.bin" | cut -d' ' -f1)" ] || die "env readback differs"
+say "5/5 U-Boot env = this unit's env without the mainline hook"
+say "DONE: factory layout. reboot -f boots Crestron's Android (eMMC); its first boot sets up p5..p8."

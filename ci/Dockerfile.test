@@ -1,0 +1,5 @@
+# Host-test runner: busybox (to check panel-side scripts run under the same
+# shell the panel uses), bash (host-side scripts), python3.
+FROM alpine:3.24
+RUN apk add --no-cache busybox bash python3 py3-pip coreutils util-linux
+WORKDIR /work

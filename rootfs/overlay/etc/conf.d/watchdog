@@ -1,0 +1,3 @@
+# busybox watchdog on the Meson8m2 SoC watchdog (max timeout ~8 s on meson8m2)
+WATCHDOG_OPTS="-T 8 -t 2"
+WATCHDOG_DEV="/dev/watchdog"

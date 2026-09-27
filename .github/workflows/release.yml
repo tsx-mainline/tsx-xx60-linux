@@ -1,0 +1,99 @@
+name: release
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Nothing here downloads or bundles a Crestron file: the boot image, the
+# rootfs, and the rescue image are all built from this repo's own sources.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: register the armv7 qemu-user binfmt (docker --platform linux/arm/v7)
+        uses: docker/setup-qemu-action@v3
+
+      - name: cache the kernel fork checkout
+        uses: actions/cache@v4
+        with:
+          path: ../linux
+          key: linux-${{ hashFiles('kernel/KERNEL_REV') }}
+
+      - name: build the kernel (tools/build/kbuild.sh)
+        run: tools/build/kbuild.sh kernel image
+
+      - name: build sendspin-cli from source (rootfs/src/sendspin/build.sh)
+        run: rootfs/src/sendspin/build.sh
+
+      # No Crestron file is ever fetched or bundled here: TFA_VENDOR_FETCH=no
+      # and TFA_VENDOR_SRC unset means mkrootfs.sh leaves the TFA9890 DSP
+      # tuning containers out of the image entirely (a local build run by a
+      # user, on their own machine, keeps fetching them by default). The
+      # no-proprietary-files step below checks this on the build's output,
+      # not just this env var.
+      - name: build the rootfs + initramfs (rootfs/build-rootfs.sh all)
+        env:
+          TFA_VENDOR_FETCH: "no"
+        run: rootfs/build-rootfs.sh all
+
+      - name: no proprietary files in the build output (ci/check-no-proprietary.sh)
+        run: ci/check-no-proprietary.sh rootfs/out/rootfs.tar.gz rootfs/out/rootfs.ext4
+
+      - name: pack the installed-system boot image (rootfs/mkbootimg.sh)
+        run: rootfs/mkbootimg.sh
+
+      # Needs a stage-2 (tsx-autoinstall) base image integrated first
+      # (installer/initramfs/build-initramfs.sh + integrate.sh), which this
+      # workflow does not build; best effort only, and the bundle ships
+      # without a rescue image when it fails.
+      - name: build the golden-slot rescue image (best effort)
+        continue-on-error: true
+        run: installer/rescue/mkrescue.sh --out rootfs/out/tsx-rescue-tsw1060.img
+
+      - name: build the installer payload bundle - two-stage, rootfs tarball + boot image
+        run: |
+          mkdir -p release/payload
+          installer/payload/mkpayload --out release/payload \
+            --rootfs rootfs/out/rootfs.tar.gz --bootimg-tsw1060 rootfs/out/tsxboot.img --allow-stale
+          tar -C release/payload -czf release/tsx-xx60-payload.tar.gz .
+
+      - name: collect the release files and their SHA256SUMS
+        run: |
+          set -eu
+          O=release/out; mkdir -p "$O"
+          cp ../out/zImage ../out/meson8m2-crestron-tsw1060.dtb "$O/"
+          cp ../out/kernel.release ../out/kernel.commit "$O/"
+          cp rootfs/out/rootfs.tar.gz rootfs/out/rootfs.ext4 rootfs/out/rootfs.manifest rootfs/out/rootfs.sizes "$O/"
+          cp rootfs/out/tsxboot.img "$O/"
+          [ -f rootfs/out/tsx-rescue-tsw1060.img ] && cp rootfs/out/tsx-rescue-tsw1060.img "$O/" || true
+          cp release/tsx-xx60-payload.tar.gz "$O/"
+          (cd "$O" && find . -maxdepth 1 -type f -exec sha256sum {} + | sort -k2 > /tmp/SHA256SUMS && mv /tmp/SHA256SUMS SHA256SUMS)
+          ls -l "$O"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tsx-xx60-${{ github.ref_name }}
+          path: release/out
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tsx-xx60-${{ github.ref_name }}
+          path: release/out
+      - name: attach the build to the GitHub release for this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          TAG=${{ github.ref_name }}
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes
+          gh release upload "$TAG" release/out/* --clobber

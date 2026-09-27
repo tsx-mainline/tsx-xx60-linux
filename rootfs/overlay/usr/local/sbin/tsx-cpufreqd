@@ -1,0 +1,43 @@
+#!/bin/sh
+# tsx-cpufreqd : CPU governor follows the screen state that tsx-idled
+# writes to /run/tsx-idled.state ("on <level>" | "blank"), like tsx-buttons
+# and tsx-ledbard do:
+#   awake -> CPUFREQ_AWAKE (default performance: 1608 MHz, the vendor voltage
+#            1.1 V is the same for every OPP, so this costs heat, not risk; the
+#            meson8 thermal zone still throttles at its passive trip point)
+#   blank -> CPUFREQ_BLANK (default schedutil)
+# Settings in /etc/kiosk.conf; CPUFREQ_AWAKE=off stops the daemon from
+# touching the governor (tsx-setup's schedutil stays).
+STATE=${TSX_IDLED_STATE:-/run/tsx-idled.state}
+SYS=${TSX_CPUFREQ_SYS:-/sys/devices/system/cpu}
+log() { echo "$(date '+%F %T') tsx-cpufreq: $*"; }
+conf() {
+	CPUFREQ_AWAKE=performance CPUFREQ_BLANK=schedutil
+	[ -r /etc/kiosk.conf ] && . /etc/kiosk.conf
+}
+set_gov() {
+	ok=0
+	for g in "$SYS"/cpu[0-9]*/cpufreq/scaling_governor; do
+		[ -w "$g" ] || continue
+		grep -qw "$1" "${g%/*}/scaling_available_governors" 2>/dev/null || { log "governor $1 not available"; return 1; }
+		[ "$(cat "$g")" = "$1" ] || echo "$1" > "$g" 2>/dev/null
+		ok=1
+	done
+	[ $ok = 1 ]
+}
+conf
+[ "$CPUFREQ_AWAKE" = off ] && { log "CPUFREQ_AWAKE=off: not managing the governor"; exec sleep 2147483647; }
+trap 'conf; prev=; log "config reloaded"' HUP
+prev=
+while :; do
+	s=
+	[ -r "$STATE" ] && read -r s _ < "$STATE"
+	[ "$s" = blank ] || s=awake
+	if [ "$s" != "$prev" ]; then
+		if [ "$s" = blank ]; then gov=$CPUFREQ_BLANK; else gov=$CPUFREQ_AWAKE; fi
+		set_gov "$gov" && log "screen $s: governor $gov ($(cat "$SYS/cpu0/cpufreq/scaling_cur_freq" 2>/dev/null) kHz)"
+		prev=$s
+	fi
+	sleep 1 &
+	wait $!
+done

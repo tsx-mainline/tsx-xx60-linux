@@ -1,0 +1,8 @@
+/var/log/kiosk.log /var/log/tsx-idled.log {
+	size 2M
+	rotate 2
+	compress
+	missingok
+	notifempty
+	copytruncate
+}

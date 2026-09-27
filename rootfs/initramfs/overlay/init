@@ -1,0 +1,118 @@
+#!/bin/sh
+# PID 1 of the xx60 switch_root initramfs .
+# Mounts the kiosk rootfs (default LABEL=tsxroot) and switch_roots into it.
+# Falls back to the rescue system (busybox init, DHCP, dropbear, root/tsx)
+# when the rootfs is missing, broken, or rescue is requested.
+#
+# Kernel cmdline:  tsx.root=LABEL=x|UUID=x|PARTUUID=x|/dev/x  (default: try
+#                  LABEL=tsxroot-emmc first, then LABEL=tsxroot; a candidate is
+#                  used only if it mounts AND has an init, so a stale label left
+#                  behind on the eMMC by an earlier install falls through to the
+#                  card instead of dropping to rescue)
+#                  tsx.rootwait=SECONDS (default 10)   tsx.rescue   tsx.init=/sbin/init
+# Rootfs file:     /etc/tsx/force-rescue on the rootfs -> boot the rescue system once
+#                  (the file is removed so the next boot is normal again).
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t devtmpfs dev /dev 2>/dev/null
+mkdir -p /dev/pts /run /tmp /newroot; mount -t devpts devpts /dev/pts
+
+msg() { echo "tsx-initramfs: $*" > /dev/kmsg 2>/dev/null; echo "tsx-initramfs: $*" > /dev/tty0 2>/dev/null; }
+rescue() {
+	msg "RESCUE: $*"
+	echo "$*" > /run/rescue-reason
+	mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
+	exec /sbin/init
+}
+
+root=; wait=10; init=/sbin/init; want_rescue=
+for c in $(cat /proc/cmdline); do
+	case $c in
+	tsx.root=*) root=${c#tsx.root=};;
+	tsx.rootwait=*) wait=${c#tsx.rootwait=};;
+	tsx.init=*) init=${c#tsx.init=};;
+	tsx.rescue|tsx.rescue=1) want_rescue=1;;
+	esac
+done
+[ -n "$want_rescue" ] && rescue "requested on the kernel command line"
+# The golden-slot rescue image (p1:boot.img, booted by U-Boot after boot_retry
+# overflow) carries this flag. It never switch_roots, never runs
+# tsx-autoinstall and never formats anything; see /usr/sbin/tsx-rescue.
+[ -e /etc/tsx/rescue-image ] && rescue "golden-slot rescue image: $(head -n 1 /etc/tsx/rescue-image)"
+
+# installer: UART-free install (p1:tsxinst.cfg from stock Android, a stick with
+# tsx-install/GO, or a U-Boot jabil boot from a stick). Exit 0 = nothing to do.
+if [ -x /usr/sbin/tsx-autoinstall ]; then
+	/usr/sbin/tsx-autoinstall || rescue "tsx-autoinstall: install failed or waits for deploy.sh, see /run/tsx-autoinstall.log"
+fi
+
+up() { cut -d. -f1 /proc/uptime; }
+
+# find_dev SPEC TIMEOUT: print the backing device for SPEC (LABEL=x, UUID=x,
+# PARTUUID=x or /dev/x) once it appears, waiting up to TIMEOUT seconds;
+# return 1 if it never shows up.
+find_dev() {
+	spec=$1; to=$2
+	end=$(( $(up) + to ))
+	while :; do
+		case $spec in
+		/dev/*) [ -b "$spec" ] && { echo "$spec"; return 0; };;
+		*) d=$(findfs "$spec" 2>/dev/null); [ -n "$d" ] && { echo "$d"; return 0; };;
+		esac
+		[ "$(up)" -ge "$end" ] && return 1
+		sleep 0.25
+	done
+}
+
+# eMMC-root fallback (2026-09-26): without tsx.root= try the eMMC root (LABEL=tsxroot-emmc)
+# first, then the card (LABEL=tsxroot). Root-selection fix (2026-09-27): each candidate
+# is tried in turn and is used only if it mounts AND has an init; a stale
+# tsxroot-emmc superblock left behind by an earlier install (fs since
+# overwritten) must fall through to the card instead of dropping to rescue.
+# tsx.root= on the cmdline is a single explicit candidate, no fallback.
+if [ -n "$root" ]; then candidates=$root; else candidates="LABEL=tsxroot-emmc LABEL=tsxroot"; fi
+
+set -- $candidates; nleft=$#
+dev=; used=
+for cand in $candidates; do
+	nleft=$((nleft - 1))
+	# Every candidate but the last gets the old 3 s grace wait (enough to tell
+	# a present-but-slow label from an absent one); the last candidate gets
+	# the full tsx.rootwait= timeout, same as before this fix.
+	if [ "$nleft" -gt 0 ]; then t=3; else t=$wait; fi
+	d=$(find_dev "$cand" "$t") || { msg "$cand unusable (not found within ${t}s), trying next"; continue; }
+
+	msg "root $cand is $d, checking"
+	e2fsck -p "$d" > /run/fsck.log 2>&1; rc=$?
+	if [ $rc -ge 4 ]; then
+		e2fsck -y "$d" >> /run/fsck.log 2>&1; rc=$?
+		if [ $rc -ge 4 ]; then
+			msg "$cand on $d unusable (fsck failed, code $rc), trying next"
+			continue
+		fi
+	fi
+	[ $((rc & 2)) -ne 0 ] && { msg "fsck changed $d, rebooting"; sync; reboot -f; }
+
+	if ! mount -t ext4 -o rw,noatime "$d" /newroot; then
+		msg "$cand on $d unusable (mount failed), trying next"
+		continue
+	fi
+	if [ -e /newroot/etc/tsx/force-rescue ]; then
+		rm -f /newroot/etc/tsx/force-rescue; umount /newroot
+		rescue "/etc/tsx/force-rescue was set on the rootfs ($cand on $d)"
+	fi
+	if [ ! -x "/newroot$init" ] && [ ! -L "/newroot$init" ]; then
+		umount /newroot
+		msg "$cand on $d unusable (no $init), trying next"
+		continue
+	fi
+	dev=$d; used=$cand
+	break
+done
+[ -n "$dev" ] || rescue "no usable root found among: $candidates"
+cp /run/fsck.log /newroot/var/log/initramfs-fsck.log 2>/dev/null
+
+msg "switch_root ($used) to $dev"
+umount /dev/pts 2>/dev/null
+for m in /dev /proc /sys; do mkdir -p /newroot$m; mount --move $m /newroot$m; done
+exec switch_root /newroot "$init"

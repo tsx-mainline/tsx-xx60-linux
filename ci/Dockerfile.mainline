@@ -1,0 +1,10 @@
+# Mainline kernel + image packaging for Meson8m2 (xx60)
+FROM debian:trixie
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf build-essential \
+      bc bison flex libssl-dev libelf-dev cpio lzop lz4 xz-utils zstd kmod \
+      u-boot-tools device-tree-compiler abootimg python3 git ca-certificates \
+      curl wget file rsync fakeroot \
+    && rm -rf /var/lib/apt/lists/*
+ENV ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-
+WORKDIR /work

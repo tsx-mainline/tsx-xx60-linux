@@ -1,0 +1,39 @@
+#!/bin/sh
+# Network: static if the kernel cmdline has tsx.ip=A.B.C.D/NN[,GW], else DHCP.
+# Overrides rootfs/initramfs/overlay/etc/init.d/rcS (rescue overlay cpio is
+# appended after BASE's, so this file wins) to add the same stable eth0 MAC
+# as rootfs/overlay/etc/init.d/tsx-setup: mainline has no MAC source on
+# this board, so stmmac picks a random one each boot and DHCP hands out a new
+# address every time. RAM rescue, so no /etc/tsx/eth0.mac persistence: if
+# there is no valid U-Boot ethaddr, just keep the kernel's random MAC.
+hostname tsx-rescue
+ip link set lo up
+for c in $(cat /proc/cmdline); do case $c in tsx.ip=*) STATIC=${c#tsx.ip=};; esac; done
+( n=0; while [ ! -e /sys/class/net/eth0 ] && [ $n -lt 30 ]; do sleep 1; n=$((n+1)); done
+  macsrc=random; mac=
+  n=0; while [ ! -b /dev/mmcblk0 ] && [ $n -lt 10 ]; do sleep 1; n=$((n+1)); done   # the card may probe after eth0
+  if [ -b /dev/mmcblk0 ] && command -v dd >/dev/null 2>&1 && command -v sed >/dev/null 2>&1; then
+    mac=$(dd if=/dev/mmcblk0 bs=64k skip=16 count=1 2>/dev/null | tr '\0' '\n' | sed -n 's/^ethaddr=//p' | head -1)
+  fi
+  echo "$mac" | grep -qiE '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$' || mac=
+  if [ -n "$mac" ]; then
+    ip link set eth0 down 2>/dev/null
+    if ip link set dev eth0 address "$mac" 2>/dev/null; then macsrc=uboot; else mac=; fi
+  fi
+  [ -z "$mac" ] && mac=$(cat /sys/class/net/eth0/address 2>/dev/null)
+  echo "$macsrc" > /run/tsx-eth0-mac-src 2>/dev/null
+  case $macsrc in
+    uboot) echo "tsx-rescue: eth0 MAC $mac (from U-Boot env)" > /dev/kmsg 2>/dev/null;;
+    *) echo "tsx-rescue: eth0 MAC $mac (random, no U-Boot env)" > /dev/kmsg 2>/dev/null;;
+  esac
+  ip link set eth0 up
+  if [ -n "${STATIC:-}" ]; then
+    ip addr add ${STATIC%%,*} dev eth0
+    case $STATIC in *,*) ip route add default via ${STATIC#*,};; esac
+  else
+    udhcpc -b -i eth0 -s /usr/share/udhcpc/default.script -q -t 20 >/dev/null 2>&1 || udhcpc -b -i eth0 >/dev/null 2>&1
+  fi
+  echo "eth0: $(ip -4 -o addr show eth0 | awk '{print $4}')" > /dev/kmsg
+) &
+dropbear -R -E 2>/dev/null
+echo "rcS: dropbear started, root password 'tsx'" > /dev/kmsg

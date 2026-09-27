@@ -1,0 +1,228 @@
+#!/bin/sh
+# Runs as the kiosk user under supervise-daemon (/etc/init.d/kiosk):
+# picks the renderer, then starts the compositor with the browser:
+#   KIOSK_OSK=off          cage + Chromium --kiosk (no on-screen keyboard)
+#   KIOSK_OSK=squeekboard  sway (kiosk config) + squeekboard + Chromium --app;
+#                          the keyboard shows by itself when a text field gets
+#                          focus (text-input-v3 -> input-method-v2)
+#   KIOSK_OSK=wvkbd        sway + wvkbd (starts hidden; a three-finger tap or
+#                          "tsx-osk toggle" shows/hides it)
+# Under sway this script runs a second time as "kiosk-session --browser" (from
+# the generated sway config) to start Chromium; sway exits when Chromium exits.
+set -u
+. /etc/kiosk.conf
+# URL chosen with a front-panel key when DevTools is off (tsx-buttons, NAV_FALLBACK=restart)
+[ -s /run/tsx/kiosk-url ] && KIOSK_URL=$(cat /run/tsx/kiosk-url)
+: "${KIOSK_URL:=https://ha.example.org}" "${KIOSK_GPU:=auto}" "${KIOSK_SCALE:=1.0}"
+: "${KIOSK_PROFILE:=/var/lib/kiosk/chromium}" "${KIOSK_EXTRA_FLAGS:=}" "${KIOSK_DEVTOOLS:=0}"
+: "${KIOSK_OSK:=squeekboard}" "${KIOSK_OSK_HEIGHT:=300}"
+ROLE=${1:-session}
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+export HOME=/var/lib/kiosk
+log() { [ "$ROLE" = session ] && echo "kiosk-session: $*" >&2; }
+case "$KIOSK_OSK" in squeekboard|wvkbd|off) ;; *) log "unknown KIOSK_OSK=$KIOSK_OSK, using off"; KIOSK_OSK=off;; esac
+
+# --- renderer selection -------------------------------------------------
+# Primary path: drm/meson KMS (display) + Lima (render node), GLES2 in cage
+# and GPU compositing in Chromium. Fallback: simpledrm on the U-Boot
+# framebuffer with pixman + software rendering. Cards are picked by driver
+# name, never by number (on the panel lima is card0, meson card2).
+disp= dispdrv= render=
+for c in /sys/class/drm/card[0-9]*; do
+	case "${c##*/}" in *-*) continue;; esac     # skip connectors (card2-LVDS-1)
+	[ -e "$c/device/driver" ] || continue
+	drv=$(basename "$(readlink -f "$c/device/driver")")
+	case "$drv" in
+	meson*) disp=/dev/dri/${c##*/}; dispdrv=$drv; break;;
+	lima|panfrost) ;;                           # render-only GPU, no display
+	*) [ -z "$disp" ] && { disp=/dev/dri/${c##*/}; dispdrv=$drv; };;
+	esac
+done
+for r in /sys/class/drm/renderD*; do
+	[ -e "$r/device/driver" ] || continue
+	case "$(basename "$(readlink -f "$r/device/driver")")" in lima|panfrost) render=/dev/dri/${r##*/}; break;; esac
+done
+
+# KIOSK_GPU: auto | browser (GLES compositor + GPU browser through the
+# patched ES2 fallback) | on (GLES compositor + GPU browser, stock
+# flags) | compositor (GLES compositor, software browser) | off (pixman +
+# software browser)
+comp_gl=0 browser_gl=0 es2=0
+case "$KIOSK_GPU" in
+browser)
+   # Chromium 152 needs an ES 3.0 context unless its ES version fallback
+   # gate is patched out (tsx-chromium-es2, done by the rootfs build). Only
+   # then ANGLE-on-GLES can create the ES 2.0 context lima offers.
+   comp_gl=1
+   if [ -n "$render" ] && /usr/local/sbin/tsx-chromium-es2 check >/dev/null 2>&1; then
+      browser_gl=1 es2=1
+   else
+      log "KIOSK_GPU=browser but the Chromium ES2 patch is not present (tsx-chromium-es2 check): browser renders in software"
+   fi;;
+on) comp_gl=1 browser_gl=1;;
+compositor) comp_gl=1;;
+off) ;;
+*) case "$dispdrv" in meson*) [ -n "$render" ] && comp_gl=1 browser_gl=1;; esac
+   # Mali-400/450 (lima) is GLES 2.0 only. Chromium 152 asks for an ES 3.0
+   # context with no ES2 fallback ("ES version fallback is disabled"; also via
+   # ANGLE), so its GPU process dies three times and it ends up in software
+   # compositing anyway (measured on the TSW-1060, 2026-09-26). Skip that:
+   # GLES in cage only. KIOSK_GPU=on still forces the attempt.
+   case "$render" in /dev/dri/*) case "$(basename "$(readlink -f "/sys/class/drm/${render##*/}/device/driver")")" in
+      lima) [ $browser_gl = 1 ] && log "GPU is lima (GLES 2.0): stock Chromium needs GLES 3.0, browser renders in software (KIOSK_GPU=browser uses the ES2 patch)"; browser_gl=0;;
+   esac;; esac
+   [ $comp_gl = 0 ] && [ -n "$render" ] && log "GPU $render present but display is ${dispdrv:-none}: using pixman";;
+esac
+if [ $comp_gl = 1 ]; then
+	export WLR_RENDERER=gles2
+else
+	export WLR_RENDERER=pixman
+fi
+[ -n "$disp" ] && export WLR_DRM_DEVICES=$disp
+case "$dispdrv" in meson*)
+	# Meson8 OSD planes: ARGB8888 only, no modifiers (cage is patched to pick
+	# ARGB8888 when XRGB8888 is missing; the variable forces it regardless)
+	export WLR_DRM_NO_MODIFIERS=1 CAGE_RENDER_FORMAT=argb8888;;
+esac
+export WLR_BACKENDS=drm,libinput
+export WLR_LIBINPUT_NO_DEVICES=1          # start even before touch is probed
+export WLR_NO_HARDWARE_CURSORS=1
+# invisible cursor theme for both cage and the browser (touch-only panel)
+export XCURSOR_PATH=/usr/share/tsx/cursors XCURSOR_THEME=blank XCURSOR_SIZE=24
+log "display=${disp:-none} (${dispdrv:-?}) render=${render:-none} renderer=$WLR_RENDERER browser_gpu=$browser_gl es2=$es2 osk=$KIOSK_OSK url=$KIOSK_URL"
+
+# --- on-screen keyboard: sway instead of cage -----------------------------
+# cage 0.3.1 has no wlr-layer-shell, so no keyboard surface can show under it
+# (wayland-info on the panel, 2026-09-26). sway 1.12 has layer-shell,
+# input-method-v2, text-input-v3 and virtual-keyboard, and falls back to
+# ARGB8888 by itself when the Meson plane has no XRGB8888 (no patch needed).
+if [ "$KIOSK_OSK" != off ] && [ "$ROLE" = session ]; then
+	export NO_AT_BRIDGE=1 GTK_A11Y=none      # no AT-SPI bus for squeekboard/GTK
+	# Session D-Bus at a fixed path (squeekboard's sm.puri.OSK0 API, tsx-osk).
+	# Not dbus-run-session: supervise-daemon's TERM must reach sway itself.
+	me=$(id -u)
+	# leftovers of a previous session (supervise-daemon only stops sway)
+	pkill -u "$me" -f kiosk-osk.sh 2>/dev/null
+	pkill -u "$me" -x dbus-daemon 2>/dev/null
+	pkill -u "$me" -x squeekboard 2>/dev/null
+	pkill -u "$me" -f '^wvkbd' 2>/dev/null
+	pkill -u "$me" -f '^/usr/libexec/(feedbackd|at-spi)' 2>/dev/null
+	rm -f "$XDG_RUNTIME_DIR/bus"
+	export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+	dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --nopidfile >/dev/null ||
+		log "dbus-daemon failed"
+	# keyboard: restarted if it dies; the loop ends with its own sway (the
+	# IPC socket name has sway's pid; the wayland-N name is reused by the
+	# next sway, and a second squeekboard would fight the first one)
+	case "$KIOSK_OSK" in
+	squeekboard) osk="squeekboard";;
+	wvkbd) osk="wvkbd-mobintl --hidden -L $KIOSK_OSK_HEIGHT -H $KIOSK_OSK_HEIGHT --fn 'DejaVu Sans 20'";;
+	esac
+	cat > "$XDG_RUNTIME_DIR/kiosk-osk.sh" <<EOF
+#!/bin/sh
+while sleep 1; [ -S "\$SWAYSOCK" ]; do
+	$osk >/dev/null 2>&1
+done
+EOF
+	cfg=$XDG_RUNTIME_DIR/kiosk-sway.conf
+	cat > "$cfg" <<EOF
+# generated by kiosk-session (KIOSK_OSK=$KIOSK_OSK); edit the script, not this
+xwayland disable
+swaybg_command -
+default_border none
+default_floating_border none
+hide_edge_borders both
+focus_follows_mouse no
+seat * hide_cursor 100
+seat * xcursor_theme $XCURSOR_THEME $XCURSOR_SIZE
+# One browser window only: links that leave the app (target=_blank, other
+# sites) open a normal Chromium window (app_id "chromium"); close it.
+for_window [app_id="^chromium(-browser)?\$"] kill
+exec sh $XDG_RUNTIME_DIR/kiosk-osk.sh
+exec /usr/local/bin/kiosk-session --browser
+EOF
+	exec sway -c "$cfg"
+fi
+
+# --- browser --------------------------------------------------------------
+mkdir -p "$KIOSK_PROFILE/Default"
+# clear the "restore pages?" state after an unclean stop
+P="$KIOSK_PROFILE/Default/Preferences"
+[ -f "$P" ] && sed -i 's/"exit_type":"[A-Za-z]*"/"exit_type":"Normal"/; s/"exited_cleanly":false/"exited_cleanly":true/' "$P"
+rm -f "$KIOSK_PROFILE"/Singleton*
+
+if [ $es2 = 1 ]; then
+	# ANGLE "passthrough shaders" (Chromium feature AllowANGLEPassthroughShaders)
+	# give the driver Skia's GLSL untranslated; ANGLE then counts every sampler
+	# as used by the vertex stage too, and the Mali-450 has 0 vertex texture
+	# units: every textured program fails to link ("VERTEX shader texture
+	# image units count exceeds MAX_VERTEX_TEXTURE_IMAGE_UNITS(0)") and the
+	# page is transparent = black on the panel (2026-09-26). Translated
+	# shaders work.
+	KIOSK_DISABLE_FEATURES="AllowANGLEPassthroughShaders${KIOSK_DISABLE_FEATURES:+,$KIOSK_DISABLE_FEATURES}"
+fi
+set -- --ozone-platform=wayland \
+	--user-data-dir="$KIOSK_PROFILE" \
+	--no-first-run --no-default-browser-check --noerrdialogs --disable-infobars \
+	--disable-session-crashed-bubble --hide-crash-restore-bubble \
+	--password-store=basic --disable-sync --disable-component-update \
+	--check-for-update-interval=31536000 \
+	--disable-features=Translate,TranslateUI,MediaRouter,OptimizationHints,AutofillServerCommunication,CalculateNativeWinOcclusion,PasswordManagerOnboarding${KIOSK_DISABLE_FEATURES:+,$KIOSK_DISABLE_FEATURES} \
+	--touch-events=enabled --disable-pinch --overscroll-history-navigation=0 \
+	--pull-to-refresh=0 --autoplay-policy=no-user-gesture-required \
+	--force-device-scale-factor="$KIOSK_SCALE" \
+	--renderer-process-limit=2 --disk-cache-size=67108864 --log-level=2
+# Chromium sandbox: user namespaces, or the setuid chrome-sandbox helper (needs
+# PID + net namespaces). The panel kernel has CONFIG_NAMESPACES off today
+# (see config/kernel-userland.config), so it runs with --no-sandbox until then.
+if [ "${KIOSK_NO_SANDBOX:-0}" = 1 ] || ! { [ -e /proc/self/ns/user ] || { [ -e /proc/self/ns/pid ] && [ -e /proc/self/ns/net ] && [ -u /usr/lib/chromium/chrome-sandbox ]; }; }; then
+	log "running Chromium without sandbox (kernel lacks namespaces, or KIOSK_NO_SANDBOX=1)"
+	set -- "$@" --no-sandbox
+elif [ "$(uname -m)" = armv7l ]; then
+	# With namespaces (kernel 640ae5a4ff34+) the renderers run sandboxed, but
+	# Chromium 152's GPU-process seccomp policy on armv7/musl kills it on
+	# pwritev2 (syscall 393): "GPU process isn't usable. Goodbye." and a
+	# respawn loop (panel, 2026-09-26). Only the GPU process runs unsandboxed.
+	log "sandbox on for renderers/utilities; GPU process unsandboxed (armv7 seccomp gap)"
+	set -- "$@" --disable-gpu-sandbox
+fi
+if [ $es2 = 1 ]; then
+	# browser: GPU compositing on the Mali-450 via ANGLE's GLES backend with
+	# an ES 2.0 context (patched fallback). WebGL2 needs ES 3.0: off.
+	set -- "$@" --use-gl=angle --use-angle=gles --ignore-gpu-blocklist --disable-webgl2
+elif [ $browser_gl = 1 ]; then
+	# Mali-450 is GLES 2.0 only and on Chromium's blocklist. Chromium falls
+	# back to software compositing by itself if GL init fails (chrome://gpu via
+	# KIOSK_DEVTOOLS). Variants to try with KIOSK_EXTRA_FLAGS:
+	# --use-angle=gles | --use-angle=gl | --enable-gpu-rasterization
+	set -- "$@" --ignore-gpu-blocklist
+else
+	set -- "$@" --disable-gpu --disable-gpu-compositing --disable-software-rasterizer
+fi
+mem=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+[ "$mem" -lt 1400 ] && set -- "$@" --enable-low-end-device-mode
+# No GPU compositing on this SoC: animations (e.g. the HA login background)
+# cost ~50 % CPU in software. prefers-reduced-motion makes HA drop them
+# (measured: 47 % -> 3 % CPU on the login page).
+[ "${KIOSK_REDUCED_MOTION:-1}" = 1 ] && set -- "$@" --force-prefers-reduced-motion
+[ "$KIOSK_DEVTOOLS" = 1 ] && set -- "$@" --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 '--remote-allow-origins=*'
+if [ "$KIOSK_OSK" = squeekboard ]; then
+	# text-input-v3: Chromium tells the compositor when an editable field has
+	# focus; sway passes that to squeekboard (input-method-v2), which shows.
+	set -- "$@" --enable-wayland-ime --wayland-text-input-version=3
+fi
+# shellcheck disable=SC2086
+set -- "$@" $KIOSK_EXTRA_FLAGS
+
+if [ "$KIOSK_OSK" = off ]; then
+	exec cage -d -- chromium-browser --kiosk "$@" "$KIOSK_URL"
+fi
+# Under sway: --app instead of --kiosk. --kiosk forces fullscreen, and sway
+# draws fullscreen windows above the keyboard layer and ignores its exclusive
+# zone; a non-fullscreen --kiosk window shows tabs and the address bar. An
+# --app window has no browser UI, fills the output and shrinks while the
+# keyboard is up, so the focused field stays visible above it.
+chromium-browser "$@" --app="$KIOSK_URL"
+rc=$?
+swaymsg exit >/dev/null 2>&1
+exit $rc

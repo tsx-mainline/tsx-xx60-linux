@@ -1,0 +1,16 @@
+#!/sbin/openrc-run
+description="Screen blanking with wake-on-touch, backlight schedule"
+supervisor=supervise-daemon
+command=/usr/local/sbin/tsx-idled
+command_args="-c /etc/kiosk.conf"
+respawn_delay=2
+respawn_max=0
+output_log=/var/log/tsx-idled.log
+error_log=/var/log/tsx-idled.log
+extra_started_commands="reload"
+depend() { after udev-settle; }
+reload() {
+	ebegin "Reloading tsx-idled config"
+	supervise-daemon "$RC_SVCNAME" --signal HUP
+	eend $?
+}

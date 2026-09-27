@@ -1,0 +1,70 @@
+#!/system/bin/sh
+# tsx-install-usb: ONE command from a USB stick built by `mkpayload --usb`,
+# run from a root shell -- Crestron's patched sshd (rootsh), the UART
+# console, or an existing mainline/rescue shell. busybox and Android
+# toolbox sh compatible (no bash-only syntax).
+#
+#   sh /mnt/media_rw/<stick>/tsx-install-usb [--dry-run]
+#
+# What it does: verifies the stick's sha256sums, arms the USB recovery boot
+# path (installer/emmc/tsx-usb-recovery enable, copied onto the stick), sets
+# DataRecoveryDone=1, and reboots. It does NOT install anything itself: the
+# install runs on the NEXT power cycle, when U-Boot's stock jabil_factory
+# hook (now able to see the stick: docs/boot.md "U-Boot USB needs VBUS held
+# before enumeration") boots the stage-2 image from this stick and
+# tsx-autoinstall does the rest, with progress on the panel screen. Leave
+# the stick in until that finishes; tsx-autoinstall renames jabil.txt when
+# it is done, so a stick left in afterwards does not reinstall again.
+set -e
+HERE=$(cd "$(dirname "$0")" && pwd)
+DRY=0
+case "${1:-}" in
+--dry-run) DRY=1 ;;
+-h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+"") : ;;
+*) echo "tsx-install-usb: unknown option $1" >&2; exit 2 ;;
+esac
+die() { echo "tsx-install-usb: ERROR: $*" >&2; exit 1; }
+say() { echo "tsx-install-usb: $*"; }
+
+[ "$(id -u 2>/dev/null)" = 0 ] || die "not root (ssh -tt admin@<panel> then rootsh, or a UART root console)"
+SUMS=$HERE/tsx-install/SHA256SUMS
+[ -f "$SUMS" ] || die "$HERE is not a tsx-install stick (no tsx-install/SHA256SUMS); run mkpayload --usb to build one"
+
+say "verifying the stick payload (sha256; this can take a minute)"
+if ! ( cd "$HERE" && sha256sum -c tsx-install/SHA256SUMS >/tmp/tsx-install-usb.sums 2>&1 ); then
+	grep -v ': OK$' /tmp/tsx-install-usb.sums | head -n 5
+	die "stick payload corrupt (sha256 mismatch above); do not proceed"
+fi
+say "stick payload OK"
+
+RECOVERY=$HERE/tsx-usb-recovery
+[ -x "$RECOVERY" ] || RECOVERY=$HERE/tsx-install/tsx-usb-recovery
+[ -x "$RECOVERY" ] || die "tsx-usb-recovery not found on the stick (expected next to tsx-install-usb; rebuild the stick with mkpayload --usb)"
+
+if [ "$DRY" = 1 ]; then
+	say "[dry-run] would run: sh $RECOVERY enable"
+	say "[dry-run] would set DataRecoveryDone=1 (if not already) and reboot"
+	exit 0
+fi
+
+say "arming the USB recovery boot path"
+sh "$RECOVERY" enable || die "tsx-usb-recovery enable failed; the stick will not be seen by jabil_factory yet. See the message above."
+
+FWP=$(command -v fw_printenv 2>/dev/null || echo /system/bin/fw_printenv)
+FWS=$(command -v fw_setenv 2>/dev/null || echo /system/bin/fw_setenv)
+[ -x "$FWS" ] || die "no fw_setenv (in PATH or at /system/bin)"
+if [ "$("$FWP" -n DataRecoveryDone 2>/dev/null)" != "1" ]; then
+	"$FWS" DataRecoveryDone 1 || die "fw_setenv DataRecoveryDone 1 failed"
+	say "DataRecoveryDone=1 set"
+else
+	say "DataRecoveryDone already 1"
+fi
+
+say "armed. Leave the stick in. Rebooting now; the next power cycle installs from this stick (progress on the panel screen)."
+sync
+sleep 2
+if command -v busybox >/dev/null 2>&1; then busybox reboot -f
+elif command -v reboot >/dev/null 2>&1; then reboot -f 2>/dev/null || reboot
+else echo 1 > /proc/sys/kernel/sysrq 2>/dev/null; echo b > /proc/sysrq-trigger
+fi

@@ -1,0 +1,11 @@
+# tsx-mainline + ccache. kbuild.sh (CCACHE=1) mounts a persistent cache at
+# /ccache and passes CC="ccache arm-linux-gnueabihf-gcc". CCACHE_BASEDIR is
+# set by kbuild.sh at "docker run" time (it depends on where the caller
+# checked the repo out), not baked in here.
+FROM tsx-mainline
+USER root
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ccache \
+    && rm -rf /var/lib/apt/lists/*
+# NOHASHDIR: every kernel worktree's build dir compiles ../linux/... the same
+# way, so the cache is shared across worktrees that use the same layout.
+ENV CCACHE_DIR=/ccache CCACHE_MAXSIZE=30G CCACHE_COMPRESS=1 CCACHE_NOHASHDIR=1

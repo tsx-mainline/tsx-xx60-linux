@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+description="CPU governor follows the screen: performance while awake, schedutil while blank (/etc/kiosk.conf CPUFREQ_*)"
+supervisor=supervise-daemon
+command=/usr/local/sbin/tsx-cpufreqd
+respawn_delay=5
+respawn_max=0
+output_log=/var/log/tsx-cpufreq.log
+error_log=/var/log/tsx-cpufreq.log
+extra_started_commands="reload"
+depend() { after tsx-setup tsx-idled; }
+reload() {
+	ebegin "Reloading tsx-cpufreq"
+	supervise-daemon "$RC_SVCNAME" --signal HUP
+	eend $?
+}

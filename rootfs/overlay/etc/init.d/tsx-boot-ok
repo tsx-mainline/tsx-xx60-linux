@@ -1,0 +1,18 @@
+#!/sbin/openrc-run
+# After a good boot (kiosk running for BOOT_OK_DELAY s) reset U-Boot's
+# boot_retry counter, otherwise U-Boot falls back to the golden image after
+# about 10 boots; also keeps DataRecoveryDone=1. Runs in the
+# background so boot is not delayed.
+description="Reset U-Boot boot_retry after a successful boot"
+BOOT_OK_DELAY=${BOOT_OK_DELAY:-60}
+depend() { after kiosk sshd; }
+start() {
+	ebegin "Scheduling tsx-boot-ok in ${BOOT_OK_DELAY}s"
+	( sleep "$BOOT_OK_DELAY"
+	  if rc-service kiosk status >/dev/null 2>&1 || rc-service sshd status >/dev/null 2>&1; then
+		/usr/local/sbin/tsx-boot-ok 2>&1 | logger -t tsx-boot-ok
+	  else
+		logger -t tsx-boot-ok "neither kiosk nor sshd running: not marking boot as good"
+	  fi ) >/dev/null 2>&1 &
+	eend 0
+}

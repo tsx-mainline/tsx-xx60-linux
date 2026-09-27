@@ -1,0 +1,38 @@
+name: kernel
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cache the kernel fork checkout
+        uses: actions/cache@v4
+        with:
+          path: ../linux
+          key: linux-${{ hashFiles('kernel/KERNEL_REV') }}
+
+      - name: build (tools/build/kbuild.sh, clones ../linux at kernel/KERNEL_REV if not cached)
+        run: tools/build/kbuild.sh kernel image
+
+      - name: kernelrelease / commit / sha256
+        run: |
+          cat ../out/kernel.release
+          cat ../out/kernel.commit
+          cat ../out/sha256sums.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kernel
+          path: |
+            ../out/zImage
+            ../out/meson8m2-crestron-tsw1060.dtb
+            ../out/test.img
+            ../out/kernel.release
+            ../out/kernel.commit
+            ../out/sha256sums.txt
+          if-no-files-found: error

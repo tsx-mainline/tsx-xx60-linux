@@ -1,0 +1,8 @@
+#!/bin/sh
+# tsx-blank on|off|status : blank or wake the screen through tsx-idled
+case "${1:-status}" in
+on|blank) pkill -USR2 -x tsx-idled;;
+off|wake) pkill -USR1 -x tsx-idled;;
+status) cat /run/tsx-idled.state 2>/dev/null || echo "tsx-idled not running";;
+*) echo "usage: tsx-blank on|off|status" >&2; exit 2;;
+esac

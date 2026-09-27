@@ -1,0 +1,24 @@
+#!/sbin/openrc-run
+description="MQTT bridge to Home Assistant: LED bar, key LEDs, screen, backlight, keys"
+supervisor=supervise-daemon
+command=/usr/local/sbin/tsx-mqtt
+respawn_delay=15
+respawn_max=0
+output_log=/var/log/tsx-mqtt.log
+error_log=/var/log/tsx-mqtt.log
+depend() { need net; after tsx-idled tsx-buttons tsx-ledbar; }
+start() {
+	# not configured: nothing to run, but do not fail the runlevel
+	BROKER=; [ -r /etc/tsx/mqtt.conf ] && . /etc/tsx/mqtt.conf
+	if [ -z "$BROKER" ]; then
+		einfo "tsx-mqtt: BROKER not set in /etc/tsx/mqtt.conf, not started"
+		return 0
+	fi
+	checkpath -d -m 0700 /run/tsx/mqtt
+	default_start
+}
+stop() {
+	# started unconfigured: no daemon to stop
+	[ -e "/run/supervise-$RC_SVCNAME.pid" ] || return 0
+	default_stop
+}

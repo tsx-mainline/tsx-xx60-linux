@@ -1,0 +1,47 @@
+#!/bin/sh
+# tsx-rescue: the mainline rescue system in the golden slot (p1:boot.img).
+# U-Boot boots it when boot_retry passes 9: the kiosk failed 5 times in a row
+# (hook guard "fallback"), then the stock eMMC Android 4 times. It only starts
+# the network and dropbear (root / tsx) and shows the IP. It never switch_roots,
+# never runs the installer and never formats anything by itself.
+#
+#   tsx-rescue status        env counters, card layout, p5 label
+#   tsx-rescue done          reset boot_retry/golden_boot_retry (tsx-boot-ok, verified
+#                            env write): the next boot tries the kiosk again
+#   tsx-rescue banner        (inittab) wait for the IP, print it on the screen and in /etc/motd
+# Repair tools here: /usr/share/tsx/install.sh (the installer, rootfs/deploy.sh
+# from the host), tsx-autoinstall (reinstall from a stick with tsx-install/GO),
+# tsx-factory-restore (the whole card back to Crestron's factory layout from a
+# factory/puf-tool.sh bundle), e2fsck, fw_printenv/fw_setenv.
+case "${1:-status}" in
+banner)
+	n=0; ip=
+	while [ $n -lt 60 ]; do ip=$(ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}'); [ -n "$ip" ] && break; sleep 1; n=$((n+1)); done
+	br=$(/usr/local/sbin/tsx-boot-ok --status 2>/dev/null | sed -n 's/^boot_retry=//p')
+	mac=$(cat /sys/class/net/eth0/address 2>/dev/null)
+	case $(cat /run/tsx-eth0-mac-src 2>/dev/null) in
+	uboot) macnote="from U-Boot env";;
+	*) macnote="random, no U-Boot env";;
+	esac
+	msg="
+==== TSX RESCUE SYSTEM (golden slot) ====
+reason : $(cat /run/rescue-reason 2>/dev/null)
+network: eth0 ${ip:-no address yet (DHCP)}   ssh root@${ip%/*} (password tsx)
+eth0 MAC $mac ($macnote)
+u-boot : boot_retry=$br
+(U-Boot: after 5 failed kiosk boots and 4 stock-Android boots, or by hand)
+Repair over ssh, then: tsx-rescue done && reboot -f   (status: tsx-rescue status)
+========================================="
+	echo "$msg" > /etc/motd
+	echo "$msg" > /dev/tty0 2>/dev/null
+	echo "$msg" | while read -r l; do echo "tsx-rescue: $l" > /dev/kmsg 2>/dev/null; done
+	;;
+status)
+	echo "rescue reason: $(cat /run/rescue-reason 2>/dev/null)"
+	/usr/local/sbin/tsx-boot-ok --status 2>&1 || true
+	( . /usr/share/tsx/tsx-lib.sh; tsx_find_disk && echo "card $WHOLE layout $TSX_DISK_LAYOUT" || echo "no TSX card layout found" ) 2>&1
+	for d in /dev/mmcblk[0-9]p[0-9]*; do [ -b "$d" ] && echo "$d: $(blkid "$d" 2>/dev/null | cut -d: -f2-)"; done
+	;;
+done) /usr/local/sbin/tsx-boot-ok;;
+*) sed -n '2,15p' "$0"; exit 2;;
+esac

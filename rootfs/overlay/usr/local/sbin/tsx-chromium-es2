@@ -1,0 +1,52 @@
+#!/bin/sh
+# Chromium ES3 -> ES2 fallback patch on the panel , without python.
+# The rootfs build (mkrootfs.sh, CHROMIUM_ES2_PATCH=1) patches the binary with
+# patch-chromium.py and records the site in /etc/tsx/chromium-es2-patched.
+#   tsx-chromium-es2 check    exit 0 if the binary has the patch bytes (fast: 8 bytes)
+#   tsx-chromium-es2 status   check + sha256 of the whole binary against the record
+#   tsx-chromium-es2 revert   write the original 2 bytes back (sha256 verified)
+#   tsx-chromium-es2 apply    patch again after a revert (sha256 verified)
+# After "apk upgrade chromium" the record no longer matches: check fails, the
+# kiosk uses software rendering. Rebuild the rootfs (new sigs.json entry) to
+# get the patch for a new Chromium. Full undo without the record: apk fix chromium.
+# Restart the kiosk afterwards: rc-service kiosk restart
+M=${TSX_ES2_MARKER:-/etc/tsx/chromium-es2-patched}
+[ -r "$M" ] || { echo "no patch record $M (rootfs built without CHROMIUM_ES2_PATCH=1)"; exit 2; }
+. "$M"
+B=${TSX_ES2_BINARY:-$BINARY}
+bytes() { dd if="$B" bs=1 skip=$(( $1 )) count="$2" 2>/dev/null | od -An -tx1 | tr -d ' \n'; }
+put() {   # put OFFSET HEX
+	h=$2 s=
+	while [ -n "$h" ]; do s="$s\\$(printf %o 0x${h%"${h#??}"})"; h=${h#??}; done
+	# shellcheck disable=SC2059
+	printf "$s" | dd of="$B" bs=1 seek=$(( $1 )) conv=notrunc 2>/dev/null && sync
+}
+n=$(( ${#CONTEXT} / 2 ))
+site() {  # prints patched | orig | mismatch
+	ctx=$(bytes $(( OFFSET - n )) $n); cur=$(bytes "$OFFSET" $(( ${#ORIG} / 2 )))
+	if [ "$ctx" != "$CONTEXT" ]; then echo mismatch
+	elif [ "$cur" = "$PATCHED" ]; then echo patched
+	elif [ "$cur" = "$ORIG" ]; then echo orig
+	else echo mismatch; fi
+}
+case "${1:-check}" in
+check)
+	s=$(site); echo "$B: $s ($BUILD)"; [ "$s" = patched ];;
+status)
+	s=$(site); h=$(sha256sum "$B" | cut -d' ' -f1)
+	case "$h" in "$SHA256_PATCHED") w="sha256 = patched build";; "$SHA256_ORIG") w="sha256 = original build";; *) w="sha256 UNKNOWN ($h)";; esac
+	echo "$B: site $s, $w, $BUILD"; [ "$s" = patched ] && [ "$h" = "$SHA256_PATCHED" ];;
+revert|apply)
+	# a running executable cannot be written (ETXTBSY)
+	pidof chromium >/dev/null 2>&1 && { echo "Chromium is running: rc-service kiosk stop first"; exit 1; }
+	[ "$1" = revert ] && { want=patched new=$ORIG sha=$SHA256_ORIG; } || { want=orig new=$PATCHED sha=$SHA256_PATCHED; }
+	s=$(site)
+	[ "$s" = "$want" ] || { echo "site is '$s', expected '$want': nothing done"; exit 1; }
+	h=$(sha256sum "$B" | cut -d' ' -f1)
+	[ "$h" = "$SHA256_ORIG" ] || [ "$h" = "$SHA256_PATCHED" ] || { echo "sha256 $h unknown: nothing done"; exit 1; }
+	put "$OFFSET" "$new"
+	h=$(sha256sum "$B" | cut -d' ' -f1)
+	[ "$h" = "$sha" ] || { echo "sha256 after write $h != $sha, restoring"; [ "$1" = revert ] && put "$OFFSET" "$PATCHED" || put "$OFFSET" "$ORIG"; exit 1; }
+	echo "$B: $1 done (sha256 $h); rc-service kiosk restart";;
+*) sed -n '2,13p' "$0"; exit 2;;
+esac

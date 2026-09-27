@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Stock Android -> mainline kiosk on the eMMC, one command (the default,
+# network install method; no USB stick required):
+#   1. steps/tsx-android-to-card (the card stage: installer over Crestron's
+#      sshd + HTTP payload)
+#   2. steps/tsx-card-to-emmc (eMMC boot image + root, card = /data + rescue)
+#   3. TFA9890 DSP tuning files (optional; skipped with a warning if the
+#      fetch fails): rootfs/vendor-fetch.sh run here on THIS machine, then
+#      copied onto the panel
+#   4. emmc/tsx-usb-recovery enable (arms the USB recovery boot path)
+#   tsx-install-mainline PANEL_IP [--stick DIR] [--rootfs FILE] [--emmc-img FILE]
+#                         [--uart auto|yes|no] [--wake-local] [--yes] [--dry-run]
+# Payload defaults: out/payload + out/rootfs-p2.ext4 (build with mkpayload).
+# --uart (default auto) is passed straight through to steps/tsx-android-to-card; see
+# its --help / docs/install.md "Network-only mode (no UART)".
+# --emmc-img FILE: passed to steps/tsx-card-to-emmc as --img (default there: installer/emmc/out/tsxboot-emmc.img).
+# Needs: $TSX_ADMIN_PW (the Crestron console/web-UI admin password; user $TSX_ADMIN_USER, default admin).
+set -euo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+STICK=$HERE/out/payload ROOTFS=$HERE/out/rootfs-p2.ext4 EMMCIMG= PANEL= EXTRA=() TE=()
+while [ $# -gt 0 ]; do case "$1" in --stick) STICK=$2; shift 2;; --rootfs) ROOTFS=$2; shift 2;; --emmc-img) EMMCIMG=$2; shift 2;; --uart) EXTRA+=(--uart "$2"); shift 2;; --wake-local) TE+=(--wake-local); shift;; --yes) EXTRA+=(--yes); shift;; --dry-run) EXTRA+=(--dry-run); TE+=(--dry-run); shift;; -h|--help) sed -n '2,18p' "$0"; exit 0;; --*) echo "unknown $1" >&2; exit 2;; *) PANEL=$1; shift;; esac; done
+[ -n "$PANEL" ] || { sed -n '2,18p' "$0" >&2; exit 2; }
+# make the payload paths absolute before any cd happens downstream
+for v in STICK ROOTFS EMMCIMG; do
+	[ -n "${!v}" ] || continue
+	rp=$(realpath -e "${!v}" 2>/dev/null) || { echo "${!v}: not found" >&2; exit 2; }
+	printf -v "$v" %s "$rp"
+done
+[ -z "$EMMCIMG" ] || TE+=(--img "$EMMCIMG")
+STAMP=$(date +%Y%m%d-%H%M)
+mkdir -p "$HERE/results"
+"$HERE/steps/tsx-android-to-card" --stick "$STICK" --rootfs "$ROOTFS" "${EXTRA[@]}" --results "$HERE/results/android-to-card-$STAMP.txt" "$PANEL"
+"$HERE/steps/tsx-card-to-emmc" "$PANEL" "${TE[@]}" --results "$HERE/results/card-to-emmc-$STAMP.txt"
+if printf '%s\n' "${TE[@]}" | grep -qx -- --dry-run; then
+	echo "tsx-install-mainline: [dry-run] would fetch the TFA9890 DSP files (rootfs/vendor-fetch.sh) and copy them onto the panel, then run emmc/tsx-usb-recovery enable" >&2
+else
+	"$HERE/steps/tsx-deploy-tfa.sh" "$PANEL" || echo "tsx-install-mainline: WARNING: TFA9890 DSP file deployment failed (see above); the panel works without speaker DSP tuning, and this can be retried later with steps/tsx-deploy-tfa.sh $PANEL" >&2
+	MPW=${TSX_MAINLINE_PW:-tsx}
+	sshpass -p "$MPW" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "root@$PANEL" "sh -s" -- enable < "$HERE/emmc/tsx-usb-recovery" \
+		|| echo "tsx-install-mainline: WARNING: tsx-usb-recovery enable failed on the panel; USB recovery is not armed. Retry by hand: ssh root@$PANEL, then run tsx-usb-recovery enable (copy it from installer/emmc/tsx-usb-recovery first)" >&2
+fi
+echo "tsx-install-mainline: DONE. $PANEL should now be booting the mainline kiosk from the eMMC."

@@ -1,0 +1,21 @@
+# rsync filter for the build-host mirror (use with --filter='merge <this file>').
+# Paths are anchored at the tsx-xx60-linux repo root. First match wins.
+# The kernel fork checkout (LINUX_DIR, sibling of this repo) is mirrored separately
+# by remote-build.sh's own rsync call, with its own build-artifact excludes.
+- /.git
+# Build output: never sent up; combined with rsync's own --delete-excluded=false
+# behavior, these are effectively protected on the host (never removed by --delete).
+- /kernel/out/
+- /rootfs/out/
+- /rootfs/build/
+- /rootfs/build-*/
+- /rootfs/modules/
+- /work/*/logs
+- /work/*/backups
+- /work/*/results
+- /work/*/out/
+- *.img
+- *.ext4
+- *.tar.gz
+- *.o
+- *.ko

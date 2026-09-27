@@ -1,0 +1,98 @@
+# Alpine packages for the xx60 kiosk rootfs (one per line, # comments).
+# base system
+alpine-baselayout
+alpine-release
+apk-tools
+busybox
+busybox-openrc
+busybox-suid
+openrc
+musl-utils
+eudev
+eudev-openrc
+e2fsprogs
+dosfstools
+util-linux-misc
+kmod
+tzdata
+ca-certificates
+logrotate
+# network / time / remote access
+ifupdown-ng
+chrony
+openssh-server
+openssh-sftp-server
+openssh-client-default
+# kiosk: seat, compositor, browser, input
+seatd
+seatd-openrc
+# cage itself is built from source by mkrootfs.sh: 0.3.1 (fixes Chromium --kiosk
+# fullscreen; 0.3.0 in v3.24 ignores the request made before the window maps)
+# + src/cage-0.3.1-argb8888-fallback.patch (Meson8 planes have no XRGB8888).
+wlroots0.20
+# on-screen keyboard (KIOSK_OSK): sway has the layer-shell / input-method-v2 /
+# text-input-v3 protocols cage lacks; dbus for squeekboard's session API
+sway
+squeekboard
+wvkbd-mobintl
+dbus
+# chromium pulls in icu-data-full (31 MiB) as a hard dependency (its APKBUILD
+# names the package "icu-data-full" itself, not the "icu-data" virtual that
+# icu-data-en also provides), so `apk add` refuses to substitute icu-data-en:
+# "conflicts: icu-data-full[icu-data]" / "satisfies: chromium[icu-data-full]"
+# (verified with `apk add --simulate` against this Alpine release). Keep it.
+#
+# Pinned to the exact build src/chromium-es2/sigs.json has a signature for
+# ("alpine-v3.24-armv7-chromium-152.0.7977.82-r0"): apk records this "="
+# constraint in the rootfs's own /etc/apk/world, so `apk upgrade` on the
+# panel can never silently move chromium past what the ES2 patch covers --
+# it would refuse (no candidate satisfies the world constraint) rather than
+# ship an unpatched, software-rendered browser. To move the pin: derive a
+# new sigs.json entry for the target version first (src/chromium-es2/README.md,
+# "Re-deriving for a new Chromium package"), then bump the version here and
+# rebuild.
+chromium=152.0.7977.82-r0
+font-dejavu
+libinput
+# GPU readiness (Lima / Mali-450 through Mesa; unused on simpledrm)
+mesa-dri-gallium
+mesa-egl
+mesa-gles
+mesa-gbm
+kmscube
+libdrm-tests
+mesa-utils
+# tools
+brightnessctl
+evtest
+# tsx-buttons: Home Assistant REST calls (b)
+curl
+# tsx-ledbar (libusb fallback) and the tsx-mqtt Home Assistant bridge libusb
+mosquitto-clients
+# audio : ALSA tools (asound.conf, tsx-audio), Sendspin player
+# (sendspin-cli: alsa-lib + avahi dns_sd over dbus)
+alsa-lib
+alsa-utils
+avahi
+avahi-compat-libdns_sd
+# voice : Assist satellite linux-voice-assistant (ESPHome API,
+# installed by voice/install-lva.sh; replaces wyoming-satellite): python3 +
+# zeroconf, numpy, protobuf, cryptography (aioesphomeapi imports), tzlocal,
+# aiohappyeyeballs, libmpv via python-mpv (TTS / media playback on ALSA)
+python3
+py3-zeroconf
+py3-numpy
+py3-protobuf
+py3-cryptography
+py3-tzlocal
+py3-aiohappyeyeballs
+py3-mpv
+mpv-libs
+# more tools
+u-boot-tools
+i2c-tools
+htop
+procps-ng
+wlr-randr
+grim
+wayland-utils

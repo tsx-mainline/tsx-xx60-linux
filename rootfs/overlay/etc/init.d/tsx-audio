@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+# TSW-1060 audio: mixer setup and saved levels (tsx-audio init / store).
+# Does nothing (and does not fail) when the sound card is missing.
+description="TSW-1060 sound card setup (/etc/tsx/audio.conf)"
+depend() { after udev tsx-setup; before tsx-sendspin tsx-voice kiosk; }
+start() {
+	ebegin "Setting up the TSW-1060 sound card"
+	/usr/local/bin/tsx-audio init
+	eend $?
+}
+stop() {
+	ebegin "Saving the TSW-1060 mixer state"
+	/usr/local/bin/tsx-audio store
+	eend 0
+}

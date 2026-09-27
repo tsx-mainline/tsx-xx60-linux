@@ -1,0 +1,71 @@
+name: tests
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    name: syntax + smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build the test-runner image (busybox + bash + python3)
+        run: docker build -t tsx-test -f ci/Dockerfile.test ci
+      - name: ci/lint.sh - busybox sh -n, bash -n, py_compile, driver --help
+        run: docker run --rm -v "$PWD:$PWD" -w "$PWD" tsx-test bash ci/lint.sh
+
+  # These host tests exercise real code against fake sysfs/loopback devices or
+  # (for the loop-device ones) their OWN "docker run --privileged" call --
+  # they do not need a privileged job/container, just a runner with docker,
+  # which ubuntu-latest already has. Any test that needs a real panel, a real
+  # unit's captured backup, or Crestron's proprietary firmware SKIPS itself
+  # (it checks CAPTURES_DIR / PUF_FILE / SYSIMG and prints "SKIPPED ..."); no
+  # such input is provided here, so those tests report skipped, not failed.
+  host-tests:
+    name: host tests (no hardware)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install build deps (gcc for the fake-sysfs tests)
+        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends gcc
+      - name: kernel/tests/test-aml-dt.sh
+        run: kernel/tests/test-aml-dt.sh
+      - name: rootfs/tests/test-idled.sh
+        run: rootfs/tests/test-idled.sh
+      - name: rootfs/tests/test-idled-als.sh
+        run: rootfs/tests/test-idled-als.sh
+      - name: rootfs/tests/test-als.sh
+        run: rootfs/tests/test-als.sh
+      - name: rootfs/tests/test-buttons.sh
+        run: rootfs/tests/test-buttons.sh
+      - name: rootfs/tests/test-install.sh - docker --privileged, loop device
+        run: rootfs/tests/test-install.sh
+      - name: installer/tests/check-android-tools.sh
+        run: installer/tests/check-android-tools.sh
+      - name: installer/tests/test-mkpayload.sh
+        run: installer/tests/test-mkpayload.sh
+      - name: installer/tests/test-boot-ok.sh - docker --privileged, loop device
+        run: installer/tests/test-boot-ok.sh
+      - name: installer/tests/test-tsx-data.sh - docker --privileged, loop device
+        run: installer/tests/test-tsx-data.sh
+      - name: installer/emmc/tests/test-root-fallback.sh - docker --privileged, loop device
+        run: installer/emmc/tests/test-root-fallback.sh
+      - name: installer/emmc/tests/test-usb-recovery.sh
+        run: installer/emmc/tests/test-usb-recovery.sh
+      - name: installer/tests/test-factory.sh - skips without PUF_FILE + CAPTURES_DIR
+        run: installer/tests/test-factory.sh
+      - name: installer/tests/test-sdcard.sh - skips without CAPTURES_DIR
+        run: installer/tests/test-sdcard.sh
+      - name: installer/tests/test-android-install.sh - skips without CAPTURES_DIR + SYSIMG
+        run: installer/tests/test-android-install.sh
+      - name: installer/factory/tests/test-emmc-generic.sh - skips without PUF_FILE
+        run: installer/factory/tests/test-emmc-generic.sh
+      - name: installer/factory/tests/test-emmc-restore.sh - skips without CAPTURES_DIR
+        run: installer/factory/tests/test-emmc-restore.sh
+
+  # rootfs/tests/qemu-virt.sh and rootfs/tests/qemu/run.sh boot a full kernel +
+  # rootfs image under qemu-system-arm; they need kernel.yml's and rootfs.yml's
+  # artifacts first and take several minutes, so they are not run on every
+  # push/PR here. Run them by hand (or wire a workflow_dispatch job that
+  # downloads those artifacts) when checking a change that touches boot or
+  # the kiosk session.

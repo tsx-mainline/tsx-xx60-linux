@@ -1,0 +1,17 @@
+#!/bin/sh
+# Network: static if the kernel cmdline has tsx.ip=A.B.C.D/NN[,GW], else DHCP.
+hostname tsx-rescue
+ip link set lo up
+for c in $(cat /proc/cmdline); do case $c in tsx.ip=*) STATIC=${c#tsx.ip=};; esac; done
+( n=0; while [ ! -e /sys/class/net/eth0 ] && [ $n -lt 30 ]; do sleep 1; n=$((n+1)); done
+  ip link set eth0 up
+  if [ -n "${STATIC:-}" ]; then
+    ip addr add ${STATIC%%,*} dev eth0
+    case $STATIC in *,*) ip route add default via ${STATIC#*,};; esac
+  else
+    udhcpc -b -i eth0 -s /usr/share/udhcpc/default.script -q -t 20 >/dev/null 2>&1 || udhcpc -b -i eth0 >/dev/null 2>&1
+  fi
+  echo "eth0: $(ip -4 -o addr show eth0 | awk '{print $4}')" > /dev/kmsg
+) &
+dropbear -R -E 2>/dev/null
+echo "rcS: dropbear started, root password 'tsx'" > /dev/kmsg

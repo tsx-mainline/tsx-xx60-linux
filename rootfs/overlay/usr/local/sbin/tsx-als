@@ -1,0 +1,188 @@
+#!/bin/sh
+# tsx-als: ambient light sensor -> backlight level for the xx60 kiosk .
+#
+#   tsx-als                 daemon (OpenRC service tsx-als)
+#   tsx-als status          current lux, level, auto state
+#   tsx-als auto on|off     runtime switch (on also drops a manual level override)
+#   tsx-als lux             one reading in lux (no smoothing)
+#
+# Reads the MAX44009 through IIO (in_illuminance_input, lux), smooths it,
+# maps it to a backlight step with ALS_CURVE (/etc/tsx/als.conf) and applies
+# hysteresis. The step goes to /run/tsx/als-level, which tsx-idled uses in
+# place of the day/night level while the file is fresh (< 30 s). A manual
+# level (/run/tsx/brightness, front keys or HA) still wins. While the screen
+# is lit, tsx-als also ramps the backlight itself one step at a time, so the
+# change is smooth and immediate; while blank it never touches the backlight.
+#
+# State for tsx-mqtt: /run/tsx/als.state ("lux N", "raw N", "report N",
+# "level N", "auto on|off"; lux values are integers).
+#
+# Env overrides for tests: TSX_ALS_CONF, TSX_KIOSK_CONF, TSX_RUN_DIR,
+# TSX_IIO_DIR, TSX_BACKLIGHT_DIR, TSX_IDLED_STATE, TSX_ALS_LOOPS (stop after N
+# readings), TSX_ALS_NOW (fixed epoch seconds per reading: start value).
+set -u
+CONF=${TSX_ALS_CONF:-/etc/tsx/als.conf}
+KCONF=${TSX_KIOSK_CONF:-/etc/kiosk.conf}
+R=${TSX_RUN_DIR:-/run/tsx}
+IIO=${TSX_IIO_DIR:-/sys/bus/iio/devices}
+BLBASE=${TSX_BACKLIGHT_DIR:-/sys/class/backlight}
+IDLED=${TSX_IDLED_STATE:-/run/tsx-idled.state}
+
+ALS_AUTO=1 ALS_CURVE="0:3 5:5 20:8 80:12 300:17 1000:21 3000:23" ALS_INTERVAL=1
+ALS_SMOOTH=5 ALS_HYST_PCT=25 ALS_HYST_ABS=2 ALS_HOLD=10 ALS_RAMP_MS=150
+ALS_NIGHT_CAP=0 ALS_BL_COMP=0 ALS_REPORT_PCT=10 ALS_REPORT_MAX=300 ALS_DEVICE=auto
+[ -r "$CONF" ] && . "$CONF"
+BACKLIGHT_MAX=23 NIGHT_START=22 NIGHT_END=7
+[ -r "$KCONF" ] && eval "$(grep -E '^(BACKLIGHT_MAX|NIGHT_START|NIGHT_END)=[0-9]+$' "$KCONF")"
+
+log() { echo "$(date '+%F %T') tsx-als: $*"; }
+
+find_dev() {
+	if [ "$ALS_DEVICE" != auto ]; then echo "$ALS_DEVICE"; return; fi
+	for d in "$IIO"/iio:device*; do
+		[ -r "$d/name" ] && [ "$(cat "$d/name")" = max44009 ] && { echo "$d"; return; }
+	done
+}
+
+# "12.345000" -> 123 (deci-lux, integer)
+read_dlux() {
+	v=$(cat "$1/in_illuminance_input" 2>/dev/null) || return 1
+	case $v in ''|*[!0-9.]*) return 1;; esac
+	i=${v%%.*}; f=0
+	case $v in *.*) f=${v#*.}; f=${f%"${f#?}"}; [ -n "$f" ] || f=0;; esac
+	echo $(( ${i:-0} * 10 + f ))
+}
+
+# deci-lux -> step (piecewise linear on ALS_CURVE)
+curve_level() {
+	x=$1; pl=; ps=; out=
+	for p in $ALS_CURVE; do
+		l=$(( ${p%%:*} * 10 )); s=${p#*:}
+		if [ "$x" -le "$l" ]; then
+			if [ -z "$pl" ] || [ "$l" -le "$pl" ]; then out=$s
+			else out=$(( ps + ((s - ps) * (x - pl) * 2 + (l - pl)) / (2 * (l - pl)) )); fi
+			break
+		fi
+		pl=$l; ps=$s
+	done
+	[ -n "$out" ] || out=${ps:-1}
+	echo "$out"
+}
+
+auto_on() {
+	a=$ALS_AUTO
+	[ -r "$R/als-auto" ] && a=$(cat "$R/als-auto")
+	case $a in 1|on|ON|yes) return 0;; esac
+	return 1
+}
+
+bl_dir() { for d in "$BLBASE"/*; do [ -w "$d/brightness" ] && { echo "$d"; return; }; done; }
+
+is_night() {
+	[ "$NIGHT_START" = "$NIGHT_END" ] && return 1
+	h=$(date +%H); h=${h#0}
+	if [ "$NIGHT_START" -lt "$NIGHT_END" ]; then [ "$h" -ge "$NIGHT_START" ] && [ "$h" -lt "$NIGHT_END" ]
+	else [ "$h" -ge "$NIGHT_START" ] || [ "$h" -lt "$NIGHT_END" ]; fi
+}
+
+state_field() { [ -r "$R/als.state" ] && sed -n "s/^$1 //p" "$R/als.state" | head -1; }
+
+case ${1:-} in
+status)
+	if [ -r "$R/als.state" ]; then cat "$R/als.state"; else echo "tsx-als not running"; fi
+	[ -r "$R/brightness" ] && echo "manual override $(cat "$R/brightness")"
+	exit 0;;
+auto)
+	mkdir -p "$R"
+	case ${2:-} in
+	on)  echo on > "$R/als-auto"; rm -f "$R/brightness";;
+	off) echo off > "$R/als-auto"; rm -f "$R/als-level";;
+	*)   echo "usage: tsx-als auto on|off"; exit 2;;
+	esac
+	echo "auto ${2}"; exit 0;;
+lux)
+	d=$(find_dev); [ -n "$d" ] || { echo "no max44009 in $IIO" >&2; exit 1; }
+	v=$(read_dlux "$d") || exit 1
+	echo "$((v / 10)).$((v % 10))"; exit 0;;
+'') ;;
+*)  echo "usage: tsx-als [status | auto on|off | lux]"; exit 2;;
+esac
+
+# ---- daemon ------------------------------------------------------------------
+mkdir -p "$R"
+[ "$ALS_SMOOTH" -ge 1 ] 2>/dev/null || ALS_SMOOTH=1
+dev= acc= cur=0 last_dl=-1 last_change=0 rep=-1 rep_t=0 n=0 warned=
+now=${TSX_ALS_NOW:-}
+trap 'rm -f "$R/als-level"; exit 0' INT TERM
+
+while :; do
+	if [ -n "${TSX_ALS_LOOPS:-}" ] && [ "$n" -ge "$TSX_ALS_LOOPS" ]; then break; fi
+	n=$((n + 1))
+	if [ -n "${TSX_ALS_NOW:-}" ]; then now=$((now + ALS_INTERVAL)); else now=$(date +%s); fi
+	[ -n "$dev" ] && [ -r "$dev/in_illuminance_input" ] || dev=$(find_dev)
+	if [ -z "$dev" ]; then
+		[ -n "$warned" ] || { log "no max44009 IIO device yet (CONFIG_MAX44009, DT node light-sensor@4a); waiting"; warned=1; }
+		rm -f "$R/als-level"; sleep 10; continue
+	fi
+	raw=$(read_dlux "$dev") || { sleep "$ALS_INTERVAL"; continue; }
+	[ -n "$warned" ] && { log "sensor $dev: $((raw / 10)) lx"; warned=; }
+
+	# own-backlight compensation
+	bd=$(bl_dir); bl=0
+	[ -n "$bd" ] && bl=$(cat "$bd/brightness" 2>/dev/null || echo 0)
+	amb=$(( raw - ALS_BL_COMP * bl )); [ "$amb" -ge 0 ] || amb=0
+
+	# smoothing
+	if [ -z "$acc" ]; then acc=$(( amb * ALS_SMOOTH )); else acc=$(( acc - acc / ALS_SMOOTH + amb )); fi
+	dl=$(( acc / ALS_SMOOTH ))
+
+	# level with hysteresis
+	want=$(curve_level "$dl")
+	if [ "$ALS_NIGHT_CAP" -gt 0 ] && is_night && [ "$want" -gt "$ALS_NIGHT_CAP" ]; then want=$ALS_NIGHT_CAP; fi
+	[ "$want" -le "$BACKLIGHT_MAX" ] || want=$BACKLIGHT_MAX
+	[ "$want" -ge 1 ] || want=1
+	if [ "$cur" -eq 0 ]; then
+		cur=$want; last_dl=$dl; last_change=$now
+	elif [ "$want" -ne "$cur" ]; then
+		d=$(( dl - last_dl )); [ "$d" -ge 0 ] || d=$(( -d ))
+		thr=$(( last_dl * ALS_HYST_PCT / 100 )); [ "$thr" -ge $(( ALS_HYST_ABS * 10 )) ] || thr=$(( ALS_HYST_ABS * 10 ))
+		if [ "$d" -gt "$thr" ] && [ $(( now - last_change )) -ge "$ALS_HOLD" ]; then
+			log "$((dl / 10)) lx: step $cur -> $want"
+			cur=$want; last_dl=$dl; last_change=$now
+		fi
+	fi
+
+	# hand over to tsx-idled; ramp the backlight while lit and not overridden
+	if auto_on; then
+		echo "$cur" > "$R/als-level.tmp" && mv -f "$R/als-level.tmp" "$R/als-level"
+		st=; [ -r "$IDLED" ] && read -r st _ < "$IDLED"
+		if [ "$st" = on ] && [ ! -e "$R/brightness" ] && [ -n "$bd" ] && [ "$bl" -gt 0 ] && [ "$bl" -ne "$cur" ]; then
+			if [ "$ALS_RAMP_MS" -gt 0 ]; then
+				b=$bl
+				while [ "$b" -ne "$cur" ]; do
+					if [ "$b" -lt "$cur" ]; then b=$((b + 1)); else b=$((b - 1)); fi
+					echo "$b" > "$bd/brightness" 2>/dev/null || break
+					[ "$b" -ne "$cur" ] && usleep $(( ALS_RAMP_MS * 1000 ))
+				done
+			else
+				echo "$cur" > "$bd/brightness" 2>/dev/null
+			fi
+		fi
+		a=on
+	else
+		rm -f "$R/als-level"; a=off
+	fi
+
+	# report value for MQTT with a deadband
+	lx=$(( (dl + 5) / 10 ))
+	if [ "$rep" -lt 0 ]; then rep=$lx; rep_t=$now
+	else
+		d=$(( lx - rep )); [ "$d" -ge 0 ] || d=$(( -d ))
+		thr=$(( rep * ALS_REPORT_PCT / 100 )); [ "$thr" -ge 1 ] || thr=1
+		if [ "$d" -gt "$thr" ] || [ $(( now - rep_t )) -ge "$ALS_REPORT_MAX" ]; then rep=$lx; rep_t=$now; fi
+	fi
+	printf 'lux %s\nraw %s\nreport %s\nlevel %s\nauto %s\n' "$lx" "$(( (raw + 5) / 10 ))" "$rep" "$cur" "$a" > "$R/als.state.tmp" \
+		&& mv -f "$R/als.state.tmp" "$R/als.state"
+
+	[ -n "${TSX_ALS_LOOPS:-}" ] || sleep "$ALS_INTERVAL"
+done
