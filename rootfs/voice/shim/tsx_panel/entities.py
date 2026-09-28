@@ -107,11 +107,12 @@ class NumberEntity(ESPHomeEntity):
     """A generic slider (backlight, volume, ...)."""
 
     def __init__(self, server, key, name, object_id, get_state, set_state,
-                 min_value=0.0, max_value=100.0, step=1.0, unit="", icon=""):
+                 min_value=0.0, max_value=100.0, step=1.0, unit="", icon="", mode=0):
         ESPHomeEntity.__init__(self, server)
         self.key, self.name, self.object_id = key, name, object_id
         self._get_state, self._set_state = get_state, set_state
         self.min_value, self.max_value, self.step, self.unit, self.icon = min_value, max_value, step, unit, icon
+        self.mode = mode  # NumberMode: 0 auto, 1 box, 2 slider
         self._state = min_value
         try:
             self._state = float(get_state())
@@ -130,7 +131,7 @@ class NumberEntity(ESPHomeEntity):
             yield ListEntitiesNumberResponse(
                 object_id=self.object_id, key=self.key, name=self.name,
                 min_value=self.min_value, max_value=self.max_value, step=self.step,
-                unit_of_measurement=self.unit, icon=self.icon,
+                unit_of_measurement=self.unit, icon=self.icon, mode=self.mode,
             )
         elif isinstance(msg, SubscribeHomeAssistantStatesRequest):
             yield self._state_msg()
@@ -268,7 +269,8 @@ class TextSensorEntity(ESPHomeEntity):
 
 
 class BinarySensorEntity(ESPHomeEntity):
-    """A generic read-only on/off sensor ("touched recently")."""
+    """A generic read-only on/off sensor ("touched recently": tsx-idled's
+    last-input timestamp, see backend.get_touched_recently)."""
 
     def __init__(self, server, key, name, object_id, get_state, device_class="", icon=""):
         ESPHomeEntity.__init__(self, server)

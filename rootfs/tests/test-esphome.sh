@@ -145,6 +145,8 @@ full_check() {
 	local title=$1 port=$2; shift 2
 	echo "== $title =="
 	: > "$F/cmds.log"; rm -f "$F/run/tsx/brightness"
+	echo 120 > "$F/run/tsx/blank-timeout"      # tsx-config apply's file (panel.conf BLANK_TIMEOUT)
+	date +%s > "$F/run/tsx/last-input"        # tsx-idled: a touch just now
 	printf 'led 128 unknown\nlast power short\n' > "$F/run/tsx/buttons.state"
 	# simulate a front-key long-press partway through the client check
 	# (which polls for it for up to 10 s)
@@ -156,6 +158,8 @@ full_check() {
 	grep -q '^tsx-ledbar set 100 0 0$' "$F/cmds.log" 2>/dev/null && echo "OK: ledbar command reached the backend" || { echo "FAIL: ledbar command missing/wrong"; rc=1; }
 	grep -q '^tsx-config set KIOSK_URL https://ha.example.org/lovelace/0$' "$F/cmds.log" 2>/dev/null && echo "OK: kiosk URL persisted through tsx-config" || { echo "FAIL: tsx-config set KIOSK_URL missing"; rc=1; }
 	[ "$(cat "$F/run/tsx/brightness" 2>/dev/null)" = 5 ] && echo "OK: backlight written as an integer (5)" || { echo "FAIL: brightness file is '$(cat "$F/run/tsx/brightness" 2>/dev/null)', want 5"; rc=1; }
+	grep -q '^tsx-config set BLANK_TIMEOUT 600$' "$F/cmds.log" 2>/dev/null && grep -q '^tsx-config apply$' "$F/cmds.log" \
+		&& echo "OK: blank timeout persisted through tsx-config (set + apply)" || { echo "FAIL: tsx-config set BLANK_TIMEOUT 600 missing"; rc=1; }
 	grep -q '^tsx-autoupdate now$' "$F/cmds.log" 2>/dev/null && echo "OK: update entity Install ran tsx-autoupdate now" || { echo "FAIL: tsx-autoupdate now missing"; rc=1; }
 }
 noise_check() {  # noise_check PORT MODE [KEY]

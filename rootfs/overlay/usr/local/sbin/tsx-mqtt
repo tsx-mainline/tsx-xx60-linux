@@ -6,6 +6,10 @@
 #   light  "Key LEDs"     brightness 0..255 (tsx-keypad led N|off)
 #   switch "Screen"       ON = lit, OFF = blanked (tsx-blank)
 #   number "Backlight"    1..BACKLIGHT_MAX of /etc/kiosk.conf (tsx-idled override)
+#   number "Blank timeout"  seconds without input before the screen goes dark,
+#                         0 = never (panel.conf BLANK_TIMEOUT via tsx-config)
+#   binary_sensor "Touched recently"  last real input < 30 s ago (tsx-idled's
+#                         /run/tsx/last-input)
 #   event  "Key NAME"     per front-panel key: short / long / hold
 #   device triggers       per key: button_short_press / button_long_press
 #   sensor "Illuminance"  lux of the MAX44009 (tsx-als; only with /etc/tsx/als.conf)
@@ -37,6 +41,10 @@ DRY=${TSX_MQTT_DRY:-0}
 
 BROKER= PORT=1883 USER= PASSWORD= CAFILE= DISCOVERY_PREFIX=homeassistant NODE_ID= BASE_TOPIC= DEVICE_NAME=
 [ -r "$CONF" ] && . "$CONF"
+# panel.conf overrides (MQTT_HOST/PORT/USER/PASSWORD via `tsx-config apply`);
+# same precedence as kiosk-session's /etc/kiosk.conf + /run/tsx/kiosk.conf --
+# docs/rootfs.md "Panel configuration"
+[ -r "$R/mqtt.conf" ] && . "$R/mqtt.conf"
 if [ -z "$BROKER" ] && [ "$DRY" != 1 ]; then
 	echo "tsx-mqtt: BROKER not set in $CONF, nothing to do"; exit 0
 fi
@@ -90,6 +98,8 @@ discovery() {
 	pub -r "$DP/light/$NODE/keypad/config" "{\"name\":\"Key LEDs\",\"uniq_id\":\"${NODE}_keypad\",\"cmd_t\":\"$BASE/keypad/set\",\"stat_t\":\"$BASE/keypad/state\",\"bri_cmd_t\":\"$BASE/keypad/brightness/set\",\"bri_stat_t\":\"$BASE/keypad/brightness\",\"bri_scl\":255,\"on_cmd_type\":\"brightness\",\"icon\":\"mdi:gesture-tap-button\",$AV,$DEV}"
 	pub -r "$DP/switch/$NODE/screen/config" "{\"name\":\"Screen\",\"uniq_id\":\"${NODE}_screen\",\"cmd_t\":\"$BASE/screen/set\",\"stat_t\":\"$BASE/screen/state\",\"icon\":\"mdi:monitor\",$AV,$DEV}"
 	pub -r "$DP/number/$NODE/backlight/config" "{\"name\":\"Backlight\",\"uniq_id\":\"${NODE}_backlight\",\"cmd_t\":\"$BASE/backlight/set\",\"stat_t\":\"$BASE/backlight/state\",\"min\":1,\"max\":$BL_MAX,\"step\":1,\"mode\":\"slider\",\"icon\":\"mdi:brightness-6\",$AV,$DEV}"
+	pub -r "$DP/number/$NODE/blank_timeout/config" "{\"name\":\"Blank timeout\",\"uniq_id\":\"${NODE}_blank_timeout\",\"cmd_t\":\"$BASE/blank_timeout/set\",\"stat_t\":\"$BASE/blank_timeout/state\",\"min\":0,\"max\":86400,\"step\":10,\"unit_of_meas\":\"s\",\"mode\":\"box\",\"icon\":\"mdi:timer-outline\",$AV,$DEV}"
+	pub -r "$DP/binary_sensor/$NODE/touched_recently/config" "{\"name\":\"Touched recently\",\"uniq_id\":\"${NODE}_touched_recently\",\"stat_t\":\"$BASE/touched_recently/state\",\"dev_cla\":\"motion\",\"icon\":\"mdi:gesture-tap\",$AV,$DEV}"
 	if [ -r "$ACONF" ]; then
 		pub -r "$DP/sensor/$NODE/illuminance/config" "{\"name\":\"Illuminance\",\"uniq_id\":\"${NODE}_illuminance\",\"stat_t\":\"$BASE/als/lux\",\"dev_cla\":\"illuminance\",\"unit_of_meas\":\"lx\",\"stat_cla\":\"measurement\",$AV,$DEV}"
 		pub -r "$DP/switch/$NODE/als_auto/config" "{\"name\":\"Auto brightness\",\"uniq_id\":\"${NODE}_als_auto\",\"cmd_t\":\"$BASE/als_auto/set\",\"stat_t\":\"$BASE/als_auto/state\",\"icon\":\"mdi:brightness-auto\",$AV,$DEV}"
@@ -126,6 +136,18 @@ screen_state() {
 	if [ "$s" = blank ]; then echo "OFF"; else echo "ON ${lvl:-}"; fi
 }
 
+blank_timeout_state() {  # seconds: tsx-config's runtime file, else kiosk.conf
+	v=; [ -r "$R/blank-timeout" ] && read -r v _ < "$R/blank-timeout"
+	case $v in ''|*[!0-9]*) v=$([ -r "$KCONF" ] && sed -n 's/^BLANK_TIMEOUT=\([0-9][0-9]*\).*/\1/p' "$KCONF" | tail -1);; esac
+	echo "${v:-300}"
+}
+
+touched_state() {  # ON while tsx-idled saw real input in the last 30 s
+	l=; [ -r "$R/last-input" ] && read -r l _ < "$R/last-input"
+	case $l in ''|*[!0-9]*) echo OFF; return;; esac
+	[ $(( $(date +%s) - l )) -lt 30 ] && echo ON || echo OFF
+}
+
 als_state() {  # "LUX ON|OFF" from tsx-als (lux with a reporting deadband)
 	l=$(field "$R/als.state" report); a=$(field "$R/als.state" auto)
 	[ -n "$l" ] && echo "$l $( [ "$a" = on ] && echo ON || echo OFF)"
@@ -142,7 +164,7 @@ update_state() {  # raw HA-ready JSON from tsx-autoupdate (same $R), or a safe d
 	fi
 }
 
-P_LED= P_KP= P_SCR= P_BL= P_ALS= P_VOL= P_UPD=
+P_LED= P_KP= P_SCR= P_BL= P_ALS= P_VOL= P_UPD= P_BT= P_TR=
 publish_states() {  # $1 = force
 	v=$(ledbar_state); if [ "$v" != "$P_LED" ] || [ -n "${1:-}" ]; then
 		set -- $v; pub -r "$BASE/ledbar/state" "$1"; pub -r "$BASE/ledbar/brightness" "$2"; pub -r "$BASE/ledbar/rgb" "$3"; P_LED=$v; fi
@@ -152,6 +174,10 @@ publish_states() {  # $1 = force
 		set -- $v; pub -r "$BASE/screen/state" "$1"; P_SCR=$v
 		if [ -n "${2:-}" ] && [ "$2" != none ] && [ "$2" != "$P_BL" ]; then pub -r "$BASE/backlight/state" "$2"; P_BL=$2; fi
 	fi
+	v=$(blank_timeout_state); if [ "$v" != "$P_BT" ] || [ -n "${1:-}" ]; then
+		pub -r "$BASE/blank_timeout/state" "$v"; P_BT=$v; fi
+	v=$(touched_state); if [ "$v" != "$P_TR" ] || [ -n "${1:-}" ]; then
+		pub -r "$BASE/touched_recently/state" "$v"; P_TR=$v; fi
 	v=$(als_state); if [ -n "$v" ] && { [ "$v" != "$P_ALS" ] || [ -n "${1:-}" ]; }; then
 		set -- $v; pub -r "$BASE/als/lux" "$1"; pub -r "$BASE/als_auto/state" "$2"; P_ALS=$v; fi
 	v=$(volume_state); if [ -n "$v" ] && { [ "$v" != "$P_VOL" ] || [ -n "${1:-}" ]; }; then
@@ -210,6 +236,10 @@ handle() {  # topic payload
 		echo "$p" > "$R/brightness"          # tsx-idled level override (as the up/down keys)
 		s=; [ -r "$IDLED" ] && read -r s _ < "$IDLED"
 		if [ "$s" != blank ]; then for d in ${TSX_BACKLIGHT_DIR:-/sys/class/backlight}/*; do [ -w "$d/brightness" ] && echo "$p" > "$d/brightness"; break; done; fi;;
+	blank_timeout/set)
+		p=${p%%.*}; case $p in *[!0-9]*|'') return;; esac
+		[ "${#p}" -le 5 ] && [ "$p" -le 86400 ] || return
+		tsx-config set BLANK_TIMEOUT "$p" && tsx-config apply;;
 	update/set)
 		command -v tsx-autoupdate >/dev/null 2>&1 && tsx-autoupdate now &;;
 	*) return;;

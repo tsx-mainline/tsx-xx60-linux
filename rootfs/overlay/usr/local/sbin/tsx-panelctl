@@ -3,7 +3,9 @@
 # Home Assistant ESPHome plugin (PLAN.md section 18). Runs as root, reads
 # fixed, whitelisted commands from a FIFO group-writable by "kiosk" and runs
 # them with the existing root-only CLIs (tsx-ledbar, tsx-keypad, tsx-blank,
-# tsx-config, reboot) or writes the runtime override files they use.
+# tsx-config, reboot) or writes the runtime override files they use. Its
+# second client is the quick-settings overlay (tsx-overlay, also user kiosk):
+# brightness-offset, als, blank, reload-page.
 #
 # WHY THIS EXISTS: the voice satellite (tsx-voice / linux-voice-assistant)
 # runs as user kiosk (group kiosk, + audio), not root -- an always-on process that both talks to
@@ -102,6 +104,26 @@ handle() {
 		if in_range "$a1" 1 31 && [ -z "$a2$a3$a4$rest" ]; then
 			log "brightness $a1"; echo "$a1" > "$R/brightness"
 		else reject "brightness $a1 $a2 $a3 $a4 $rest"; fi;;
+	brightness-offset)
+		# the local manual setting (tsx-overlay's slider): signed steps on
+		# top of ALS / the schedule; replaces an absolute override (offset
+		# first, so tsx-idled never shows the level without either). Not
+		# logged: a slider drag sends one line per step.
+		n=${a1#-}
+		if [ -z "$a2$a3$a4$rest" ] && in_range "$n" 0 31 && { [ "$n" = "$a1" ] || [ "-$n" = "$a1" ]; }; then
+			if [ "$n" = 0 ]; then rm -f "$R/brightness-offset"; else echo "$a1" > "$R/brightness-offset"; fi
+			rm -f "$R/brightness"
+		else reject "brightness-offset $a1 $a2 $a3 $a4 $rest"; fi;;
+	blank-timeout)
+		# seconds (0 = never); persisted in panel.conf, applied through
+		# /run/tsx/blank-timeout (tsx-idled watches it)
+		if in_range "$a1" 0 86400 && [ -z "$a2$a3$a4$rest" ]; then
+			log "blank-timeout $a1"; "$CONFIG" set BLANK_TIMEOUT "$a1" && "$CONFIG" apply
+		else reject "blank-timeout $a1 $a2 $a3 $a4 $rest"; fi;;
+	reload-page)
+		if [ -z "$a1$a2$a3$a4$rest" ]; then
+			log "reload-page"; "$KEYPAD" page reload
+		else reject "reload-page $a1 $a2 $a3 $a4 $rest"; fi;;
 	volume)
 		if in_range "$a1" 0 100 && [ -z "$a2$a3$a4$rest" ]; then
 			log "volume $a1"; "$AMIXER" -q -c "$CARD" sset Master "$a1%"

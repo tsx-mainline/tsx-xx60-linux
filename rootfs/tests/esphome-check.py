@@ -33,7 +33,7 @@ async def main(args) -> int:
         want = {
             "ledbar", "keypad", "screen", "backlight", "kiosk_url",
             "reload_page", "reboot", "cpu_temp", "uptime", "ip_address",
-            "touched_recently", "key_power", "key_home", "update",
+            "touched_recently", "key_power", "key_home", "update", "blank_timeout",
         }
         if args.voice:
             want |= {"mute", "thinking_sound", "linux_voice_assistant_media_player"}
@@ -72,6 +72,18 @@ async def main(args) -> int:
         client.number_command(by_id["backlight"].key, 5.0)
         await asyncio.sleep(0.5)
         print("OK: backlight number sent (5.0; test-esphome.sh checks the brightness file)")
+
+        bt_state = states.get(by_id["blank_timeout"].key)
+        assert bt_state is not None and bt_state.state == 120.0, bt_state
+        client.number_command(by_id["blank_timeout"].key, 600.0)
+        await asyncio.sleep(0.5)
+        bt_state = states.get(by_id["blank_timeout"].key)
+        assert bt_state is not None and bt_state.state == 600.0, bt_state
+        print("OK: blank timeout reported (120 s) and set (600 s; test-esphome.sh checks tsx-config)")
+
+        touched = states.get(by_id["touched_recently"].key)
+        assert touched is not None and touched.state, touched
+        print("OK: touched recently is on (last-input a moment ago)")
 
         update_state = states.get(by_id["update"].key)
         assert update_state is not None, "no initial state for the update entity"

@@ -36,6 +36,9 @@ sway
 squeekboard
 wvkbd-mobintl
 dbus
+# tsx-overlay (quick-settings overlay, built by mkrootfs.sh): libraries it links
+cairo
+wayland-libs-client
 # chromium pulls in icu-data-full (31 MiB) as a hard dependency (its APKBUILD
 # names the package "icu-data-full" itself, not the "icu-data" virtual that
 # icu-data-en also provides), so `apk add` refuses to substitute icu-data-en:

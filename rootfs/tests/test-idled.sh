@@ -36,7 +36,8 @@ tap3() { evs "3 47 0" "3 57 21" "3 53 100" "3 54 100" "3 47 1" "3 57 22" "3 53 3
 	 [ "${2:-0}" != 0 ] && evs "3 47 2" "3 53 $((500 + $2))"
 	 sleep $1; evs "3 47 0" "3 57 -1" "3 47 1" "3 57 -1" "3 47 2" "3 57 -1" "1 330 0"; }
 osk() { [ -f $T/osk ] && wc -l < $T/osk || echo 0; }
-TSX_INPUT_DIR=$T/input TSX_BACKLIGHT_DIR=$T/bl TSX_STATE_FILE=$T/state $BIN -c $T/kiosk.conf -v 2>$T/log &
+mkdir -p $T/run
+TSX_INPUT_DIR=$T/input TSX_BACKLIGHT_DIR=$T/bl TSX_STATE_FILE=$T/state TSX_RUN_DIR=$T/run $BIN -c $T/kiosk.conf -v 2>$T/log &
 PID=$!
 fail() { echo "FAIL: $*"; cat $T/log; exit 1; }
 b() { cat $T/bl/mp3309c/brightness; }

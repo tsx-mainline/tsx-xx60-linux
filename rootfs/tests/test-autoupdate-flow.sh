@@ -137,10 +137,10 @@ echo "$out" | grep -q '^chromium:' || { echo "FAIL: 8: status missing 'chromium:
 
 # ---- 9: post-reboot health check, OK then FAILED ---------------------------
 : > "$T/state/reboot-marker"
-cat > "$T/bin/curl" <<'EOF'
+cat > "$T/bin/curl" <<EOF
 #!/bin/sh
-echo "CALL curl $*" >> "$T/calls"
-echo "${CURL_CODE:-200}"
+echo "CALL curl \$*" >> "$T/calls"
+echo "\${CURL_CODE:-200}"
 EOF
 chmod +x "$T/bin/curl"
 NOWDATE=2026-01-09 NOWHHMM=04:00 CURL_CODE=200 run healthcheck >/dev/null
@@ -151,6 +151,14 @@ chk "$(jf "$T/run/update.json" .health)" OK "9: healthy after reboot"
 NOWDATE=2026-01-09 NOWHHMM=04:00 CURL_CODE=000 RC_SERVICE_RC=1 run healthcheck >/dev/null
 h=$(jf "$T/run/update.json" .health)
 case $h in FAILED*) : ;; *) echo "FAIL: 9: expected a FAILED health after a bad reboot, got '$h'"; fail=1;; esac
+
+# ---- 9b: panel.conf override (/run/tsx/kiosk.conf) wins over KIOSK_CONF for
+# the health-check URL, same precedence as kiosk-session
+: > "$T/state/reboot-marker"; : > "$T/calls"
+echo 'KIOSK_URL="https://panel.example.net/lovelace/0"' > "$T/run/kiosk.conf"
+NOWDATE=2026-01-09 NOWHHMM=04:00 CURL_CODE=200 run healthcheck >/dev/null
+grep -q 'CALL curl.*https://panel.example.net/lovelace/0' "$T/calls" || { echo "FAIL: 9b: health check did not use /run/tsx/kiosk.conf's KIOSK_URL override"; fail=1; }
+rm -f "$T/run/kiosk.conf"
 
 # ---- 10: this project's repository unreachable: warning, Alpine still installs
 rm -f "$T/state/reboot-marker"

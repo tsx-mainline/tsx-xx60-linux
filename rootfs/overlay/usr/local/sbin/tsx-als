@@ -3,16 +3,21 @@
 #
 #   tsx-als                 daemon (OpenRC service tsx-als)
 #   tsx-als status          current lux, level, auto state
-#   tsx-als auto on|off     runtime switch (on also drops a manual level override)
+#   tsx-als auto on|off     runtime switch: on = back to automatic (drops the
+#                           manual level and offset); off = keep the level on
+#                           the glass as a fixed level (/run/tsx/brightness)
 #   tsx-als lux             one reading in lux (no smoothing)
 #
 # Reads the MAX44009 through IIO (in_illuminance_input, lux), smooths it,
 # maps it to a backlight step with ALS_CURVE (/etc/tsx/als.conf) and applies
 # hysteresis. The step goes to /run/tsx/als-level, which tsx-idled uses in
-# place of the day/night level while the file is fresh (< 30 s). A manual
-# level (/run/tsx/brightness, front keys or HA) still wins. While the screen
-# is lit, tsx-als also ramps the backlight itself one step at a time, so the
-# change is smooth and immediate; while blank it never touches the backlight.
+# place of the day/night level while the file is fresh (< 30 s). An absolute
+# manual level (/run/tsx/brightness: "brightness N" key action, HA Backlight)
+# still wins; the local manual setting (/run/tsx/brightness-offset: key-strip
+# slide, quick-settings overlay, "brightness +N/-N") is added to the step.
+# While the screen is lit, tsx-als also ramps the backlight itself one step at
+# a time, so the change is smooth and immediate; while blank it never touches
+# the backlight.
 #
 # State for tsx-mqtt: /run/tsx/als.state ("lux N", "raw N", "report N",
 # "level N", "auto on|off"; lux values are integers).
@@ -91,12 +96,21 @@ case ${1:-} in
 status)
 	if [ -r "$R/als.state" ]; then cat "$R/als.state"; else echo "tsx-als not running"; fi
 	[ -r "$R/brightness" ] && echo "manual override $(cat "$R/brightness")"
+	[ -r "$R/brightness-offset" ] && echo "manual offset $(cat "$R/brightness-offset")"
 	exit 0;;
 auto)
 	mkdir -p "$R"
 	case ${2:-} in
-	on)  echo on > "$R/als-auto"; rm -f "$R/brightness";;
-	off) echo off > "$R/als-auto"; rm -f "$R/als-level";;
+	on)  echo on > "$R/als-auto"; rm -f "$R/brightness" "$R/brightness-offset";;
+	off) echo off > "$R/als-auto"
+	     # freeze what is on the glass (else the offset would suddenly apply
+	     # to the day/night level instead): tsx-idled's level while lit
+	     if [ ! -e "$R/brightness" ]; then
+	         l=$(sed -n 's/^level //p' "$R/brightness.state" 2>/dev/null | head -n 1)
+	         st=; [ -r "$IDLED" ] && read -r st _ < "$IDLED"
+	         case $l in [1-9]|[1-9][0-9]) [ "$st" = on ] && echo "$l" > "$R/brightness";; esac
+	     fi
+	     rm -f "$R/brightness-offset" "$R/als-level";;
 	*)   echo "usage: tsx-als auto on|off"; exit 2;;
 	esac
 	echo "auto ${2}"; exit 0;;
@@ -156,16 +170,20 @@ while :; do
 	if auto_on; then
 		echo "$cur" > "$R/als-level.tmp" && mv -f "$R/als-level.tmp" "$R/als-level"
 		st=; [ -r "$IDLED" ] && read -r st _ < "$IDLED"
-		if [ "$st" = on ] && [ ! -e "$R/brightness" ] && [ -n "$bd" ] && [ "$bl" -gt 0 ] && [ "$bl" -ne "$cur" ]; then
+		# the local manual offset, as tsx-idled adds it (clamped 1..BACKLIGHT_MAX)
+		off=0; [ -r "$R/brightness-offset" ] && read -r off _ < "$R/brightness-offset"
+		case $off in [0-9]|[0-9][0-9]|-[0-9]|-[0-9][0-9]) ;; *) off=0;; esac
+		tgt=$((cur + off)); [ "$tgt" -ge 1 ] || tgt=1; [ "$tgt" -le "$BACKLIGHT_MAX" ] || tgt=$BACKLIGHT_MAX
+		if [ "$st" = on ] && [ ! -e "$R/brightness" ] && [ -n "$bd" ] && [ "$bl" -gt 0 ] && [ "$bl" -ne "$tgt" ]; then
 			if [ "$ALS_RAMP_MS" -gt 0 ]; then
 				b=$bl
-				while [ "$b" -ne "$cur" ]; do
-					if [ "$b" -lt "$cur" ]; then b=$((b + 1)); else b=$((b - 1)); fi
+				while [ "$b" -ne "$tgt" ]; do
+					if [ "$b" -lt "$tgt" ]; then b=$((b + 1)); else b=$((b - 1)); fi
 					echo "$b" > "$bd/brightness" 2>/dev/null || break
-					[ "$b" -ne "$cur" ] && usleep $(( ALS_RAMP_MS * 1000 ))
+					[ "$b" -ne "$tgt" ] && usleep $(( ALS_RAMP_MS * 1000 ))
 				done
 			else
-				echo "$cur" > "$bd/brightness" 2>/dev/null
+				echo "$tgt" > "$bd/brightness" 2>/dev/null
 			fi
 		fi
 		a=on

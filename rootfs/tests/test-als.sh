@@ -46,6 +46,14 @@ echo "on 17" > "$T/idled"; echo 17 > "$T/bl/mp3309c/brightness"
 # 5. manual override: level file written, backlight untouched
 rm -f "$T/run/"*; echo 10 > "$T/run/brightness"; lux 3000.0; run 1
 [ "$(bl)" = 17 ] && [ "$(cat "$T/run/als-level")" = 23 ] && ok "manual override: backlight untouched, level 23 offered" || bad "override: bl $(bl)"
+# 5b. manual offset (key-strip slide / overlay): ramp to level + offset, clamped
+rm -f "$T/run/"*; echo 17 > "$T/bl/mp3309c/brightness"; echo -4 > "$T/run/brightness-offset"; lux 300.0; run 1
+[ "$(bl)" = 13 ] && [ "$(cat "$T/run/als-level")" = 17 ] && ok "offset -4: level 17 offered, backlight ramped to 13" || bad "offset -4: bl $(bl), level $(cat "$T/run/als-level")"
+echo 9 > "$T/run/brightness-offset"; lux 3000.0; run 1
+[ "$(bl)" = 23 ] && ok "offset +9 on level 23: clamped to BACKLIGHT_MAX 23" || bad "offset +9: bl $(bl)"
+echo 'x;y' > "$T/run/brightness-offset"; lux 300.0; run 1
+[ "$(bl)" = 17 ] && ok "garbage offset ignored" || bad "garbage offset: bl $(bl)"
+TSX_RUN_DIR=$T/run sh "$ALS" status | grep -q '^manual offset x;y' && ok "status shows the offset file" || bad "status without offset"
 # 6. auto off (config and runtime switch)
 rm -f "$T/run/"*; run 1 "ALS_AUTO=0"
 [ ! -e "$T/run/als-level" ] && [ "$(st auto)" = off ] && ok "ALS_AUTO=0: no als-level, auto off" || bad "ALS_AUTO=0"
@@ -53,6 +61,17 @@ TSX_RUN_DIR=$T/run sh "$ALS" auto on >/dev/null; [ ! -e "$T/run/brightness" ] ||
 run 1 "ALS_AUTO=0"; [ -e "$T/run/als-level" ] && ok "runtime auto on beats ALS_AUTO=0" || bad "runtime auto on"
 TSX_RUN_DIR=$T/run sh "$ALS" auto off >/dev/null; run 1; [ ! -e "$T/run/als-level" ] && ok "runtime auto off" || bad "runtime auto off"
 rm -f "$T/run/als-auto"
+# 6b. auto off keeps the level on the glass (fixed level), auto on clears the manual settings
+rm -f "$T/run/"*; printf 'level 9\nbase 5\noffset 4\n' > "$T/run/brightness.state"; echo 4 > "$T/run/brightness-offset"
+TSX_RUN_DIR=$T/run TSX_IDLED_STATE=$T/idled sh "$ALS" auto off >/dev/null
+[ "$(cat "$T/run/brightness" 2>/dev/null)" = 9 ] && [ ! -e "$T/run/brightness-offset" ] && ok "auto off: level 9 kept as a fixed level, offset dropped" || bad "auto off: brightness '$(cat "$T/run/brightness" 2>/dev/null)'"
+echo 3 > "$T/run/brightness-offset"
+TSX_RUN_DIR=$T/run TSX_IDLED_STATE=$T/idled sh "$ALS" auto on >/dev/null
+[ ! -e "$T/run/brightness" ] && [ ! -e "$T/run/brightness-offset" ] && ok "auto on: fixed level and offset dropped" || bad "auto on left a manual setting"
+echo blank > "$T/idled"; rm -f "$T/run/"*; printf 'level 9\n' > "$T/run/brightness.state"
+TSX_RUN_DIR=$T/run TSX_IDLED_STATE=$T/idled sh "$ALS" auto off >/dev/null
+[ ! -e "$T/run/brightness" ] && ok "auto off while blank: no fixed level" || bad "auto off while blank wrote a level"
+echo "on 17" > "$T/idled"; rm -f "$T/run/"*
 # 7. backlight compensation: 20 lx raw at step 17 with 0.5 lx/step -> 11.5 lx -> between 5:5 and 20:8
 rm -f "$T/run/"*; echo 17 > "$T/bl/mp3309c/brightness"; lux 20.0; run 1 "ALS_BL_COMP=5"
 [ "$(st lux)" = 12 ] && ok "compensation 20 - 17*0.5 = 11.5 lx (reported 12)" || bad "compensation lux $(st lux)"

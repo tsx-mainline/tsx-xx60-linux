@@ -54,6 +54,19 @@ meson setup /build/cage-build /build/cage-$CAGE_VER -Dman-pages=disabled --prefi
 ninja -C /build/cage-build >/dev/null
 strip /build/cage-build/cage
 
+# quick-settings overlay (sway layer-shell client, kiosk user): the layer-shell
+# protocol comes from wlr-protocols; it references xdg_popup, so xdg-shell's
+# glue is linked too
+log "build tsx-overlay"
+apk add -q --no-cache cairo-dev wlr-protocols >/dev/null
+P=/build/tsx-overlay-proto; rm -rf $P; mkdir -p $P
+LS=/usr/share/wlr-protocols/unstable/wlr-layer-shell-unstable-v1.xml
+wayland-scanner client-header $LS $P/wlr-layer-shell-unstable-v1-client-protocol.h
+wayland-scanner private-code $LS $P/wlr-layer-shell-unstable-v1-protocol.c
+wayland-scanner private-code /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml $P/xdg-shell-protocol.c
+gcc -O2 -Wall -s -I$P -o /build/tsx-overlay "$HERE/src/tsx-overlay.c" $P/*.c \
+	$(pkg-config --cflags --libs cairo wayland-client) -lm
+
 log "install packages ($ALPINE, armv7)"
 rm -rf $R; mkdir -p $R/etc/apk/keys
 # trust this project's signing key (the same .pub the tsx-keys package ships)
@@ -97,6 +110,7 @@ install -m 755 /build/tsx-idled $R/usr/local/sbin/tsx-idled
 install -m 755 /build/tsx-buttons $R/usr/local/sbin/tsx-buttons
 install -m 755 /build/tsx-ledbar $R/usr/local/bin/tsx-ledbar
 install -m 755 /build/cage-build/cage $R/usr/bin/cage
+install -m 755 /build/tsx-overlay $R/usr/local/bin/tsx-overlay
 # audio: level meter, Sendspin player. sendspin-cli is built from source by
 # rootfs/src/sendspin/build.sh (CI runs it before this script; a local build
 # runs it by hand first) and never committed -- read it from that build's
@@ -201,7 +215,7 @@ echo "chromium-es2-patch: $ES2_RESULT"
 # shows up on the panel otherwise: "Error loading shared library")
 log "shared library check"
 for bin in /usr/local/sbin/tsx-idled /usr/local/sbin/tsx-buttons /usr/local/bin/tsx-ledbar \
-	/usr/local/bin/tsx-peak /usr/bin/cage $SENDSPIN_BIN; do
+	/usr/local/bin/tsx-peak /usr/local/bin/tsx-overlay /usr/bin/cage $SENDSPIN_BIN; do
 	out=$(chroot $R /lib/ld-musl-armhf.so.1 --list "$bin" 2>&1) || true
 	if printf '%s\n' "$out" | grep -qE 'Error (loading|relocating)|not found'; then
 		printf '%s\n' "$out" | head -n 5

@@ -461,6 +461,9 @@ cmd_healthcheck() {
 		rc-service kiosk status >/dev/null 2>&1 || { ok=0; msg="kiosk service not running"; }
 	fi
 	url=; [ -r "$KIOSK_CONF" ] && . "$KIOSK_CONF" 2>/dev/null
+	# panel.conf's KIOSK_URL override (`tsx-config apply`) wins, same
+	# precedence as kiosk-session -- docs/rootfs.md "Panel configuration"
+	[ -r "$RUN/kiosk.conf" ] && . "$RUN/kiosk.conf" 2>/dev/null
 	url=${KIOSK_URL:-$url}
 	if [ -n "$url" ] && command -v curl >/dev/null 2>&1; then
 		code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "$url" 2>/dev/null)

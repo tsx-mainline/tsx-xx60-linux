@@ -285,7 +285,7 @@ fi
 log "== step 3: find the rescue on the network"
 WSIP=$(WSIP_FOR "$PANEL"); [ -n "$WSIP" ] || die "no workstation IP towards $PANEL"
 if [ "$RESUME" = 1 ]; then RIP=$PANEL
-else RIP=$(wait_for_rescue "$PANEL" "$MAC" "$WSIP" "$RPW" 300) || die "could not find the rescue's IP within 300s (MAC $MAC on ${WSIP%.*}.0/24)"
+else RIP=$(wait_for_rescue "$PANEL" "$MAC" "$WSIP" "$RPW" 300) || die "could not find the rescue's IP within 300s (MAC $MAC; ssh at $PANEL, sweep of ${PANEL%.*}.0/24 only when on-link)"
 fi
 log "  rescue reachable at $RIP"
 RSSH="sshpass -p $RPW ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=6 root@$RIP"

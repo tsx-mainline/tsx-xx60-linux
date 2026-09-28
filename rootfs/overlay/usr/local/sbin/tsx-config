@@ -39,7 +39,10 @@
 # APK_URL (base URL of this project's apk repositories, tsx-aports: apply
 # rewrites the two lines <APK_URL>/<alpine-branch>/common and .../xx60 at the
 # top of /etc/apk/repositories; unset = the build default in
-# /etc/tsx/apk-url.default; "off" = leave them out), ROOT_PASSWORD_HASH,
+# /etc/tsx/apk-url.default; "off" = leave them out), BLANK_TIMEOUT (seconds
+# without input before the screen goes dark, 0 = never; replaces kiosk.conf's
+# BLANK_TIMEOUT through /run/tsx/blank-timeout, which tsx-idled watches -- the
+# Home Assistant "Blank timeout" number), ROOT_PASSWORD_HASH,
 # SSH_AUTHORIZED_KEY. See installer/panel.conf.example
 # and docs/rootfs.md "Panel configuration" for what each one does.
 set -eu
@@ -53,7 +56,7 @@ SEED=${TSX_CONF_SEED:-/etc/tsx/panel.conf.seed}
 # fixture tree at it; empty (the panel default) leaves the paths absolute.
 PREFIX=${TSX_APPLY_PREFIX:-}
 
-KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
+KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 SECRET_KEYS="HA_TOKEN HA_API_KEY MQTT_PASSWORD ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 
 usage() { sed -n '2,16p' "$0" >&2; exit 2; }
@@ -139,6 +142,8 @@ val_ok() {
 	KERNEL_FLAVOR) case "$v" in lts|stable) return 0;; esac; return 1;;
 	# an http(s) mirror, a local directory (a LAN copy on a USB stick), or off
 	APK_URL) [ "$v" = off ] && return 0; printf '%s' "$v" | grep -Eq '^(https?://[A-Za-z0-9.:@_~%+-]+(/[^[:space:]]*)?|/[^[:space:]]*)$';;
+	# seconds, 0 = never, at most a day
+	BLANK_TIMEOUT) printf '%s' "$v" | grep -Eq '^[0-9]{1,5}$' && [ "$v" -le 86400 ];;
 	ROOT_PASSWORD_HASH) printf '%s' "$v" | grep -Eq '^\$[0-9A-Za-z$./]{10,}$';;
 	SSH_AUTHORIZED_KEY) printf '%s' "$v" | grep -Eq '^(ssh-[a-z0-9]+|ecdsa-sha2-[a-z0-9-]+) [A-Za-z0-9+/]+=*([[:space:]].*)?$';;
 	*) return 1;;
@@ -308,6 +313,16 @@ apply() {
 	} | write_override "$RUN/kiosk.conf" 644   # read by kiosk-session as the kiosk user (no secrets in it)
 
 	{ [ -n "$name" ] && printf 'SENDSPIN_NAME="%s"\n' "$(shq "$name")"; } | write_override "$RUN/sendspin.conf"
+
+	# BLANK_TIMEOUT: a plain number for tsx-idled (inotify: applies at once);
+	# unset = kiosk.conf's BLANK_TIMEOUT again. Only rewritten when it
+	# changed: every write wakes tsx-idled.
+	bt=$(cfg_get BLANK_TIMEOUT) || bt=
+	if [ -n "$bt" ]; then
+		[ "$(cat "$RUN/blank-timeout" 2>/dev/null)" = "$bt" ] || printf '%s\n' "$bt" | write_override "$RUN/blank-timeout" 644
+	else
+		rm -f "$RUN/blank-timeout"
+	fi
 
 	{
 		[ -n "$name" ] && printf 'NAME="%s"\n' "$(shq "$name")"

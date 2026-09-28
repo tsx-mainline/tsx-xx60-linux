@@ -1,5 +1,6 @@
 #!/bin/bash
-# Host test for tsx-buttons (+ the tsx-idled brightness override): fake LED and
+# Host test for tsx-buttons (+ the tsx-idled brightness override/offset, the
+# key-strip slide and the overlay FIFO): fake LED and
 # backlight sysfs dirs, a FIFO as the key input device, a fake HA REST API and a
 # fake Chromium DevTools endpoint (fakesrv.py), and the real tsx-idled for blanking.
 # Usage: tests/test-buttons.sh      (builds both daemons with host gcc)
@@ -33,6 +34,8 @@ HA_EVENT=tsx_button
 DEVTOOLS=127.0.0.1:$CDP_PORT
 LONG_PRESS_MS=400
 HOLD_REPEAT_MS=200
+SLIDE_STEP=2
+SLIDE_GAP_MS=200
 PRESS_FEEDBACK_MS=300
 LED_DAY=128
 LED_NIGHT=24
@@ -43,6 +46,7 @@ button lights KEY_F15 led=3
 button up     KEY_F16 led=4
 button down   KEY_F17 led=5
 on power  short blank toggle
+on power  long  overlay full
 on home   short home
 on home   long  navigate /lovelace/lights?x="1"
 on lights short ha light.toggle {"entity_id": "light.kitchen"}
@@ -93,15 +97,56 @@ press $F15 0.6; sleep 0.5
 ok "lights long -> exec with TSX_BUTTON/TSX_PRESS"
 
 [ "$(bl)" = 10 ] || fail "tsx-idled day level $(bl)"
-press $F16 0.1; sleep 0.3
+press $F16 0.1; sleep 0.5
 [ "$(bl)" = 12 ] || fail "up: brightness $(bl), want 12"
-[ "$(cat $T/run/brightness)" = 12 ] || fail "up: no override file"
-sleep 5.5; [ "$(bl)" = 12 ] || fail "tsx-idled did not keep the override: $(bl)"
-ok "up short -> brightness 10 -> 12, tsx-idled keeps it"
+[ "$(cat $T/run/brightness-offset 2>/dev/null)" = 2 ] || fail "up: offset file '$(cat $T/run/brightness-offset 2>/dev/null)', want 2"
+[ ! -e $T/run/brightness ] || fail "up: +N must not write the absolute override"
+sleep 5.5; [ "$(bl)" = 12 ] || fail "tsx-idled did not keep the offset: $(bl)"
+ok "up short (fires after SLIDE_GAP_MS) -> brightness +2 as an offset (10 -> 12), tsx-idled keeps it"
 
 key $F17 1; sleep 1.1; key $F17 0; sleep 0.3
 b=$(bl); [ "$b" -le 9 ] && [ "$b" -ge 7 ] || fail "down hold: brightness $b, want 7..9 (4 repeats)"
 ok "down hold -> brightness repeated down to $b"
+
+# key-strip slide, bottom -> top: +SLIDE_STEP per key, no key action fires
+nh=$(wc -l < $T/log/ha.log); nc=$(wc -l < $T/log/cdp.log); b0=$(bl)
+slide() { for k in "$@"; do key $k 1; sleep 0.06; key $k 0; sleep 0.05; done; }
+slide $F17 $F16 $F15 $F14 $F13; sleep 0.6
+[ "$(bl)" = $((b0 + 8)) ] || fail "slide up: brightness $(bl), want $((b0 + 8)) (4 steps of 2)"
+[ "$(wc -l < $T/log/ha.log)/$(wc -l < $T/log/cdp.log)" = "$nh/$nc" ] || fail "slide fired key actions (HA $nh -> $(wc -l < $T/log/ha.log), CDP $nc -> $(wc -l < $T/log/cdp.log))"
+grep -q '^blank' $T/idled.state && fail "slide ended on the power key: its short press (blank) fired"
+[ "$(cat $T/run/brightness-offset)" = $((b0 + 8 - 10)) ] || fail "slide: offset $(cat $T/run/brightness-offset), want $((b0 + 8 - 10))"
+ok "slide F17 -> F13: brightness $b0 -> $(bl) (offset $(cat $T/run/brightness-offset)), no key actions, no HA events"
+echo 5 > $T/run/brightness; sleep 0.4; [ "$(bl)" = 5 ] || fail "absolute override: $(bl)"
+slide $F14 $F15; sleep 0.6
+[ "$(bl)" = 3 ] || fail "slide down from an override: $(bl), want 3"
+[ ! -e $T/run/brightness ] && [ "$(cat $T/run/brightness-offset)" = -7 ] || fail "slide did not turn the override into an offset"
+ok "slide down from an absolute override (5): starts there, -> 3 as offset -7 (override gone)"
+nc=$(wc -l < $T/log/cdp.log)
+press $F14 0.06; sleep 0.05; press $F17 0.06; sleep 0.6
+[ "$(wc -l < $T/log/cdp.log)" = $((nc + 1)) ] && [ "$(bl)" = 3 ] || fail "keys 2 and 5 are no slide: home must fire, brightness stay ($(bl))"
+ok "two taps three keys apart: no slide, home short fires"
+
+# overlay FIFO: no reader -> OVERLAY_FALLBACK (blank toggle); a reader -> "full"/"slider"
+[ -p $T/run/overlay.ctl ] || fail "no overlay FIFO $T/run/overlay.ctl"
+key $F13 1; sleep 0.6; key $F13 0; sleep 0.5
+grep -q '^blank' $T/idled.state || fail "overlay without a reader: fallback blank toggle did not blank"
+grep -q 'no overlay running' $T/buttons.log || fail "overlay fallback not logged"
+kill -USR1 $(pgrep -x tsx-idled | head -1); sleep 0.9
+exec 8<>$T/run/overlay.ctl
+key $F13 1; sleep 0.6; key $F13 0; sleep 0.3
+read -t 2 line <&8 && [ "$line" = full ] || fail "overlay: reader got '${line:-nothing}', want full"
+grep -q '^on' $T/idled.state || fail "overlay with a reader: the screen was blanked anyway"
+slide $F15 $F14; sleep 0.3
+read -t 2 line <&8 && [ "$line" = slider ] || fail "slide: overlay reader got '${line:-nothing}', want slider"
+ctl "overlay hide"; read -t 2 line <&8 && [ "$line" = hide ] || fail "ctl overlay hide: '${line:-nothing}'"
+exec 8<&-
+ok "overlay: long hold -> full (reader) / fallback blank (no reader); slide -> slider; ctl overlay hide"
+rm -f $T/run/brightness-offset; sleep 0.4
+
+ctl "page reload"; sleep 0.8
+grep -q '"method":"Page.reload"' $T/log/cdp.log || fail "ctl page reload: no Page.reload"
+ok "ctl page reload -> DevTools Page.reload"
 
 key $F13 1; sleep 0.1
 [ "$(led key1)" = 0 ] || fail "press feedback: key1 LED not dark while pressed"
@@ -143,6 +188,22 @@ grep -q 'restarting the kiosk' $T/buttons.log || fail "fallback not logged"
 press $F14 0.1; sleep 1
 [ ! -e $T/run/kiosk-url ] || fail "home did not remove kiosk-url"
 ok "no DevTools -> kiosk-url + restart fallback; home clears it"
+
+# panel.conf override: /run/tsx/kiosk.conf (tsx-config apply) wins over
+# KIOSK_CONF's KIOSK_URL for the derived HA_URL -- same precedence as
+# kiosk-session's /etc/kiosk.conf + /run/tsx/kiosk.conf
+HA_PORT2=$((HA_PORT + 1000))
+mkdir -p $T/log2
+python3 $HERE/fakesrv.py $HA_PORT2 $((CDP_PORT + 1000)) $T/log2 & PIDS="$PIDS $!"
+sleep 0.3
+nold=$(wc -l < $T/log/ha.log)
+echo "KIOSK_URL=\"http://127.0.0.1:$HA_PORT2/lovelace/0\"" > $T/run/kiosk.conf
+kill -HUP $BPID; sleep 0.5
+press $F15 0.1; sleep 0.6
+grep -q '^/api/services/light/toggle|Bearer test-token-123' $T/log2/ha.log || fail "panel.conf override: HA action did not reach /run/tsx/kiosk.conf's origin"
+[ "$(wc -l < $T/log/ha.log)" = "$nold" ] || fail "panel.conf override: HA action still went to the base kiosk.conf origin too"
+ok "panel.conf override (/run/tsx/kiosk.conf) wins over KIOSK_CONF for HA_URL"
+rm -f $T/run/kiosk.conf; kill -HUP $BPID; sleep 0.5
 
 rm $T/ha-token; kill -HUP $BPID; sleep 0.5; n=$(wc -l < $T/log/ha.log)
 press $F15 0.1; sleep 0.6; [ "$(wc -l < $T/log/ha.log)" = "$n" ] || fail "HA call without token"

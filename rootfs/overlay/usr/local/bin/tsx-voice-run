@@ -10,6 +10,12 @@ IFACE= HOST= PERIPHERAL_HOST=127.0.0.1 PERIPHERAL_PORT=6055
 STATE_DIR=/var/lib/tsx-voice ARGS=
 PRINT=${TSX_VOICE_PRINT:-0}; [ "${1-}" = --print ] && PRINT=1
 [ -r "$CONF" ] && . "$CONF"
+# panel.conf's NAME/WAKE_WORD override (`tsx-config apply`): /etc/init.d/
+# tsx-voice's start_pre also sources this file, but that is a separate
+# process whose variables never reach this one, so the override must be
+# read here too -- docs/rootfs.md "Panel configuration"
+RUNCONF=${TSX_VOICE_RUN_CONF:-/run/tsx/voice.conf}
+[ -r "$RUNCONF" ] && . "$RUNCONF"
 case $WAKE in
 ptt|local) ;;
 *) echo "tsx-voice-run: WAKE must be ptt or local" >&2; exit 1;;

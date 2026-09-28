@@ -93,6 +93,7 @@ class PanelBackend:
         self.amixer_bin = _env("TSX_AMIXER", "amixer")
         self.update_bin = _env("TSX_UPDATE_BIN", "tsx-autoupdate")
         self._last_key: Optional[Tuple[str, str]] = None
+        self._blank_timeout_pending: Optional[Tuple[int, float]] = None
 
     # ---- privilege boundary -------------------------------------------------
     def _privileged(self) -> bool:
@@ -154,6 +155,11 @@ class PanelBackend:
                 (self.run_dir / "brightness").write_text(rest[0] + "\n", encoding="utf-8")
             except OSError:
                 _LOGGER.warning("could not write %s/brightness", self.run_dir, exc_info=True)
+        elif cmd == "blank-timeout":
+            # persisted in panel.conf; `apply` writes /run/tsx/blank-timeout,
+            # which tsx-idled watches (same as tsx-panelctl's blank-timeout)
+            self._run(self.config_bin, "set", "BLANK_TIMEOUT", rest[0])
+            self._run(self.config_bin, "apply")
         elif cmd == "volume":
             self._run(self.amixer_bin, "-q", "-c", self.card, "sset", "Master", rest[0] + "%")
         elif cmd == "config-url":
@@ -315,11 +321,17 @@ class PanelBackend:
             return ""
 
     def get_touched_recently(self, recent_seconds: float = 30.0) -> bool:
-        """Approximate: the screen is on and became so recently, or it never
-        went idle. This is a proxy for the *last blank/wake transition*, not
-        every touch (tsx-idled does not currently expose a running "last
-        input" timestamp) -- see docs/ha.md open questions.
+        """True while the last real input (touch, front key, power key) is
+        less than recent_seconds old: tsx-idled writes its epoch seconds to
+        run_dir/last-input (at most once a second). Without that file (an
+        older tsx-idled) it falls back to the last blank/wake transition.
         """
+        raw = _read_first_line(self.run_dir / "last-input")
+        if raw:
+            try:
+                return time.time() - int(raw.split()[0]) < recent_seconds
+            except (ValueError, IndexError):
+                pass
         on, _ = self.get_screen()
         if not on:
             return False
@@ -328,6 +340,47 @@ class PanelBackend:
         except OSError:
             return on
         return age < recent_seconds
+
+    # ---- blank timeout (tsx-idled) ------------------------------------------
+    def _kiosk_conf_int(self, key: str, default: int) -> int:
+        val = None
+        try:
+            for line in self.kiosk_conf.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if line.startswith(key + "="):
+                    val = line.split("=", 1)[1].split("#", 1)[0].strip().strip("'\"")
+        except OSError:
+            pass
+        try:
+            return int(val) if val else default
+        except ValueError:
+            return default
+
+    def get_blank_timeout(self) -> int:
+        """Seconds without input before the screen goes dark (0 = never),
+        as tsx-idled takes it: the runtime file `tsx-config apply` writes
+        from panel.conf's BLANK_TIMEOUT, else kiosk.conf. A value just set
+        is reported until apply has written it (a few seconds at most), so
+        the Home Assistant number does not jump back meanwhile."""
+        value = None
+        raw = _read_first_line(self.run_dir / "blank-timeout")
+        try:
+            if raw and raw.strip():
+                value = int(raw.split()[0])
+        except ValueError:
+            value = None
+        if value is None:
+            value = self._kiosk_conf_int("BLANK_TIMEOUT", 300)
+        pending = self._blank_timeout_pending
+        if pending and pending[0] != value and time.monotonic() - pending[1] < 10:
+            return pending[0]
+        self._blank_timeout_pending = None
+        return value
+
+    def set_blank_timeout(self, seconds: float) -> None:
+        seconds = max(0, min(86400, int(round(seconds))))
+        self._blank_timeout_pending = (seconds, time.monotonic())
+        self._ctl("blank-timeout", str(seconds))
 
     # ---- front keys --------------------------------------------------------
     def key_names(self):

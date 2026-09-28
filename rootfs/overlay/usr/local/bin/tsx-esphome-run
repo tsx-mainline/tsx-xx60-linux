@@ -8,6 +8,12 @@ LVA_ROOT=${TSX_LVA_ROOT:-/opt/lva}
 NAME= PORT=6053 IFACE= HOST= ARGS=
 PRINT=${TSX_ESPHOME_PRINT:-0}; [ "${1-}" = --print ] && PRINT=1
 [ -r "$CONF" ] && . "$CONF"
+# panel.conf's PANEL_NAME override (`tsx-config apply` writes it to
+# /run/tsx/voice.conf unconditionally, shared with tsx-voice-run, since a
+# panel name applies whether VOICE is on or off) -- docs/rootfs.md
+# "Panel configuration"
+RUNCONF=${TSX_ESPHOME_RUN_CONF:-/run/tsx/voice.conf}
+[ -r "$RUNCONF" ] && . "$RUNCONF"
 # tsx_panel is vendored alongside the voice satellite's own shim (both come
 # from rootfs/voice/shim/ at build time; see rootfs/voice/install-lva.sh) --
 # reusing that PYTHONPATH is what lets tsx-esphome reuse LEDLightEntity and

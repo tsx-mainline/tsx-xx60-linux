@@ -152,6 +152,22 @@ for v in ftp://x.example.org 'https://a b' 'http://' relative/path; do
 done
 set_ APK_URL /media/usb/tsx-aports >/dev/null 2>&1 && ok "APK_URL local directory accepted" || bad "APK_URL local directory rejected"
 
+echo "== BLANK_TIMEOUT: /run/tsx/blank-timeout for tsx-idled =="
+[ ! -e "$FX/run/tsx/blank-timeout" ] && ok "unset: no blank-timeout file" || bad "blank-timeout written while unset"
+set_ BLANK_TIMEOUT 600 >/dev/null; applyb
+[ "$(cat "$FX/run/tsx/blank-timeout" 2>/dev/null)" = 600 ] && ok "BLANK_TIMEOUT 600 -> blank-timeout 600" || bad "blank-timeout: '$(cat "$FX/run/tsx/blank-timeout" 2>/dev/null)'"
+[ "$(stat -c %a "$FX/run/tsx/blank-timeout")" = 644 ] && ok "blank-timeout is world-readable (644)" || bad "blank-timeout mode $(stat -c %a "$FX/run/tsx/blank-timeout")"
+touch -d '2000-01-01' "$FX/run/tsx/blank-timeout"; applyb
+[ "$(stat -c %Y "$FX/run/tsx/blank-timeout")" = "$(date -d 2000-01-01 +%s)" ] && ok "unchanged value: file not rewritten (no tsx-idled wakeup)" || bad "unchanged value rewrote the file"
+set_ BLANK_TIMEOUT 0 >/dev/null; applyb
+[ "$(cat "$FX/run/tsx/blank-timeout" 2>/dev/null)" = 0 ] && ok "BLANK_TIMEOUT 0 (never) written" || bad "BLANK_TIMEOUT 0 not written"
+TSX_CONF="$CFG" busybox sh "$SCRIPT" unset BLANK_TIMEOUT >/dev/null; applyb
+[ ! -e "$FX/run/tsx/blank-timeout" ] && ok "unset again: file removed (kiosk.conf's BLANK_TIMEOUT)" || bad "blank-timeout left after unset"
+for v in -1 86401 10s 1e3 ''; do
+	set_ BLANK_TIMEOUT "$v" >/dev/null 2>&1 && bad "BLANK_TIMEOUT '$v' accepted" || ok "BLANK_TIMEOUT '$v' rejected"
+done
+set_ BLANK_TIMEOUT 86400 >/dev/null 2>&1 && ok "BLANK_TIMEOUT 86400 (a day) accepted" || bad "BLANK_TIMEOUT 86400 rejected"
+
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-tsx-config-apply || echo FAIL test-tsx-config-apply
 exit $F

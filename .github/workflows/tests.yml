@@ -34,6 +34,8 @@ jobs:
         run: rootfs/tests/test-idled.sh
       - name: rootfs/tests/test-idled-als.sh
         run: rootfs/tests/test-idled-als.sh
+      - name: rootfs/tests/test-idled-runtime.sh - brightness offset, blank-timeout override, last-input
+        run: rootfs/tests/test-idled-runtime.sh
       - name: rootfs/tests/test-als.sh
         run: rootfs/tests/test-als.sh
       - name: rootfs/tests/test-autoupdate-logic.sh
@@ -44,6 +46,8 @@ jobs:
         run: sh rootfs/tests/mqtt-dry.sh
       - name: rootfs/tests/test-buttons.sh
         run: rootfs/tests/test-buttons.sh
+      - name: rootfs/tests/test-voice-esphome-run.sh - panel.conf PANEL_NAME override (tsx-voice-run, tsx-esphome-run)
+        run: sh rootfs/tests/test-voice-esphome-run.sh
       - name: rootfs/tests/test-tsx-config.sh
         run: rootfs/tests/test-tsx-config.sh
       - name: rootfs/tests/test-tsx-config-apply.sh

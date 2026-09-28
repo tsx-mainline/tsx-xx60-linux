@@ -58,6 +58,7 @@ class PanelDevice:
     keypad: LEDLightEntity
     screen: SwitchEntity
     backlight: NumberEntity
+    blank_timeout: NumberEntity
     als_auto: Optional[SwitchEntity]
     illuminance: Optional[SensorEntity]
     volume: Optional[NumberEntity]
@@ -137,6 +138,14 @@ def build_entities(server, backend: PanelBackend, key_base: int = 0) -> PanelDev
         min_value=1, max_value=backend.get_backlight_max(), step=1, icon="mdi:brightness-6",
     )
     entities.append(backlight)
+    # seconds without input before the screen goes dark, 0 = never; persisted
+    # in panel.conf (BLANK_TIMEOUT) and applied by tsx-idled at once
+    blank_timeout = NumberEntity(
+        server, next_key(), "Blank timeout", "blank_timeout",
+        get_state=backend.get_blank_timeout, set_state=backend.set_blank_timeout,
+        min_value=0, max_value=86400, step=10, unit="s", icon="mdi:timer-outline", mode=1,
+    )
+    entities.append(blank_timeout)
 
     # ---- ambient light / auto-brightness (only with als.conf, like tsx-mqtt) --
     als_auto = illuminance = None
@@ -214,7 +223,7 @@ def build_entities(server, backend: PanelBackend, key_base: int = 0) -> PanelDev
 
     return PanelDevice(
         backend=backend, entities=entities, ledbar=ledbar, keypad=keypad, screen=screen,
-        backlight=backlight, als_auto=als_auto, illuminance=illuminance, volume=volume,
+        backlight=backlight, blank_timeout=blank_timeout, als_auto=als_auto, illuminance=illuminance, volume=volume,
         kiosk_url=kiosk_url, reload_button=reload_button, reboot_button=reboot_button,
         cpu_temp=cpu_temp, uptime=uptime, ip_address=ip_address, touched_recently=touched_recently,
         update=update, keys=keys, _pulse_since=time.time(),
@@ -260,7 +269,7 @@ def poll(device: PanelDevice, broadcast: Callable[[list], None]) -> None:
         device.keypad.is_on, device.keypad.brightness = kp_on, kp_bri / 255.0
         msgs.append(device.keypad._state_response())  # pylint: disable=protected-access
 
-    for entity in (device.screen, device.backlight, device.als_auto, device.illuminance,
+    for entity in (device.screen, device.backlight, device.blank_timeout, device.als_auto, device.illuminance,
                    device.volume, device.cpu_temp, device.uptime, device.ip_address, device.touched_recently,
                    device.update):
         if entity is None:

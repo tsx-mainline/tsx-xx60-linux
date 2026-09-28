@@ -22,8 +22,24 @@
  *  - Every 5 s the level is re-applied if the schedule or someone else
  *    (drm panel enable on unblank, brightnessctl) changed it.
  *
+ * Runtime files in /run/tsx (TSX_RUN_DIR), watched with inotify so a change
+ * applies at once (als-level is only read, it changes every second):
+ *    brightness         absolute level (front keys "brightness N", the HA
+ *                       Backlight number); wins over everything below
+ *    als-level          tsx-als level while fresh (< 30 s), else the
+ *                       day/night schedule = the "base" level
+ *    brightness-offset  signed steps added to the base (the local manual
+ *                       setting: key-strip slide, quick-settings overlay);
+ *                       the result is clamped to 1..BACKLIGHT_MAX
+ *    blank-timeout      seconds, replaces BLANK_TIMEOUT (tsx-config apply
+ *                       writes it from panel.conf; the HA "Blank timeout")
+ *  Written here: brightness.state ("level L", "base B", "offset O",
+ *  "override V" (0 = none), "max M", "blank_timeout T"), and last-input
+ *  (epoch seconds of the last real input event, at most once per second).
+ *
  * Config: shell-style KEY=VALUE file (default /etc/kiosk.conf).
- * Env overrides for testing: TSX_INPUT_DIR, TSX_BACKLIGHT_DIR, TSX_STATE_FILE.
+ * Env overrides for testing: TSX_INPUT_DIR, TSX_BACKLIGHT_DIR, TSX_STATE_FILE,
+ * TSX_RUN_DIR.
  */
 #define _GNU_SOURCE
 #include <ctype.h>
@@ -38,6 +54,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/inotify.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -137,6 +154,19 @@ static int read_int(const char *dir, const char *name)
 	return v;
 }
 
+/* signed value; 0 = read, -1 = missing/garbage (a -1 value is not an error) */
+static int read_sint(const char *dir, const char *name, int *out)
+{
+	char p[PATH_MAX + 64]; FILE *f; int v, ok;
+	snprintf(p, sizeof p, "%s/%s", dir, name);
+	if (!(f = fopen(p, "r"))) return -1;
+	ok = fscanf(f, "%d", &v) == 1;
+	fclose(f);
+	if (!ok) return -1;
+	*out = v;
+	return 0;
+}
+
 static int write_int(const char *dir, const char *name, int v)
 {
 	char p[PATH_MAX + 64]; FILE *f;
@@ -166,32 +196,74 @@ static void find_backlight(void)
 	if (best[0]) snprintf(bldir, sizeof bldir, "%s/%s", base, best);
 }
 
-static int target_level(void)
+/* the level without any manual setting: tsx-als while its file is fresh,
+ * else the day/night schedule */
+static int base_level(void)
 {
 	time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
-	int h = tm.tm_hour, s = C.night_start, e = C.night_end, night;
-	/* tsx-buttons brightness up/down: level override until the next
-	 * day/night change (tsx-buttons removes the file then) */
-	int o = read_int(ovrdir, "brightness");
-	if (o > 0) return o;
-	/* tsx-als : ambient light level while the file is fresh */
-	{
-		char p[PATH_MAX + 16]; struct stat st;
-		snprintf(p, sizeof p, "%s/als-level", ovrdir);
-		if (!stat(p, &st) && time(NULL) - st.st_mtime < 30 &&
-		    (o = read_int(ovrdir, "als-level")) > 0)
-			return o;
-	}
+	int h = tm.tm_hour, s = C.night_start, e = C.night_end, night, o;
+	char p[PATH_MAX + 16]; struct stat st;
+	snprintf(p, sizeof p, "%s/als-level", ovrdir);
+	if (!stat(p, &st) && time(NULL) - st.st_mtime < 30 &&
+	    (o = read_int(ovrdir, "als-level")) > 0)
+		return o;
 	if (s == e) night = 0;
 	else if (s < e) night = h >= s && h < e;
 	else night = h >= s || h < e;
 	return night ? C.night : C.day;
 }
 
+static int st_base, st_offset, st_override, st_max = -1;
+
+static int target_level(void)
+{
+	int off = 0;
+	/* absolute level (front keys "brightness N", HA Backlight number):
+	 * until the next day/night change (tsx-buttons removes the file then)
+	 * or "auto brightness" on */
+	st_override = read_int(ovrdir, "brightness");
+	if (st_override < 0) st_override = 0;
+	st_base = base_level();
+	/* the local manual setting: an offset on top of ALS / the schedule */
+	if (read_sint(ovrdir, "brightness-offset", &off) || off < -64 || off > 64) off = 0;
+	st_offset = off;
+	return st_override > 0 ? st_override : st_base + off;
+}
+
 static void set_state(const char *s)
 {
 	FILE *f = fopen(statefile, "w");
 	if (f) { fputs(s, f); fputc('\n', f); fclose(f); }
+}
+
+/* write a small /run/tsx file atomically (readers never see it half written) */
+static void write_run_file(const char *name, const char *text)
+{
+	char p[PATH_MAX + 64], tmp[PATH_MAX + 80]; FILE *f;
+	snprintf(p, sizeof p, "%s/%s", ovrdir, name);
+	snprintf(tmp, sizeof tmp, "%s.tmp", p);
+	if (!(f = fopen(tmp, "w"))) return;
+	fputs(text, f);
+	if (fclose(f) == 0) rename(tmp, p);
+	else unlink(tmp);
+}
+
+static int eff_timeout;   /* BLANK_TIMEOUT, or the runtime file */
+
+/* brightness.state for the overlay / tsx-buttons / Home Assistant: how the
+ * level came about. Rewritten only when something in it changed. */
+static void write_bstate(int lvl)
+{
+	static char last[160];
+	char b[160];
+	int base = st_base;
+	if (st_max > 0 && base > st_max) base = st_max;
+	if (base < 1) base = 1;
+	snprintf(b, sizeof b, "level %d\nbase %d\noffset %d\noverride %d\nmax %d\nblank_timeout %d\n",
+		 lvl, base, st_offset, st_override, st_max, eff_timeout);
+	if (!strcmp(b, last)) return;
+	snprintf(last, sizeof last, "%s", b);
+	write_run_file("brightness.state", b);
 }
 
 static int cur_level = -1;
@@ -203,8 +275,10 @@ static void backlight_on(void)
 	max = bldir[0] ? read_int(bldir, "max_brightness") : -1;
 	if (max <= 0) { if (verbose) logm("no backlight"); set_state("on none"); return; }
 	if (C.bl_max > 0 && max > C.bl_max) max = C.bl_max;
+	st_max = max;
 	if (lvl > max) lvl = max;
 	if (lvl < 1) lvl = 1;
+	write_bstate(lvl);
 	/* rewrite also when someone else changed it (drm/meson's panel enable
 	 * restores 16 on unblank; brightnessctl); the config is authoritative */
 	if (lvl != cur_level || read_int(bldir, "brightness") != lvl) {
@@ -314,6 +388,58 @@ static int mt_event(struct dev *d, const struct input_event *e, long long t)
 	return fired;
 }
 
+/* BLANK_TIMEOUT, replaced by /run/tsx/blank-timeout while that exists */
+static void load_timeout(int quiet)
+{
+	int v, old = eff_timeout, src_file = 0;
+	if (read_sint(ovrdir, "blank-timeout", &v) == 0 && v >= 0) { eff_timeout = v; src_file = 1; }
+	else eff_timeout = C.blank_timeout;
+	if (!quiet && eff_timeout != old)
+		logm("blank timeout %ds (%s)", eff_timeout, src_file ? "runtime override" : "BLANK_TIMEOUT");
+}
+
+/* last-input: epoch seconds of the last real input, for "touched recently" */
+static void note_input(void)
+{
+	static time_t written;
+	time_t s = time(NULL); char b[32];
+	if (s == written) return;
+	written = s;
+	snprintf(b, sizeof b, "%lld\n", (long long)s);
+	write_run_file("last-input", b);
+}
+
+static int ino_fd = -1;
+static void watch_rundir(void)
+{
+	mkdir(ovrdir, 0755);
+	ino_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+	if (ino_fd < 0) { logm("inotify: %s (runtime files apply within 5 s)", strerror(errno)); return; }
+	if (inotify_add_watch(ino_fd, ovrdir, IN_CLOSE_WRITE | IN_MOVED_TO | IN_MOVED_FROM | IN_DELETE) < 0) {
+		logm("inotify %s: %s (runtime files apply within 5 s)", ovrdir, strerror(errno));
+		close(ino_fd); ino_fd = -1;
+	}
+}
+
+/* 1 = a brightness input changed, 2 = the blank timeout file changed.
+ * als-level is left to the 5 s re-apply: it is rewritten every second and
+ * tsx-als ramps the backlight toward it itself. */
+static int read_inotify(void)
+{
+	char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
+	ssize_t n; int m = 0;
+	while ((n = read(ino_fd, buf, sizeof buf)) > 0)
+		for (char *p = buf; p < buf + n; ) {
+			struct inotify_event *e = (struct inotify_event *)p;
+			if (e->len) {
+				if (!strcmp(e->name, "brightness") || !strcmp(e->name, "brightness-offset")) m |= 1;
+				else if (!strcmp(e->name, "blank-timeout")) m |= 2;
+			}
+			p += sizeof *e + e->len;
+		}
+	return m;
+}
+
 static void on_sig(int s)
 {
 	if (s == SIGUSR1) sig_wake = 1;
@@ -340,8 +466,11 @@ int main(int argc, char **argv)
 	signal(SIGCHLD, SIG_IGN);   /* OSK_TOGGLE_CMD children reap themselves */
 
 	cfg_load(&C); find_backlight();
-	logm("timeout %ds, day %d, night %d (%02d-%02d h), cap %d, backlight %s, osk gesture %s",
-	     C.blank_timeout, C.day, C.night, C.night_start, C.night_end, C.bl_max, bldir[0] ? bldir : "none",
+	watch_rundir();
+	load_timeout(1);
+	logm("timeout %ds%s, day %d, night %d (%02d-%02d h), cap %d, backlight %s, osk gesture %s",
+	     eff_timeout, eff_timeout != C.blank_timeout ? " (runtime override)" : "",
+	     C.day, C.night, C.night_start, C.night_end, C.bl_max, bldir[0] ? bldir : "none",
 	     C.osk_gesture == 3 ? "threefinger" : C.osk_gesture == 2 ? "twofinger" : "off");
 	backlight_on();
 
@@ -352,14 +481,14 @@ int main(int argc, char **argv)
 		long long t = now_ms();
 		if (t - last_scan >= 5000) { scan_devices(blanked && C.swallow); last_scan = t; }
 		if (sig_hup) {
-			sig_hup = 0; cfg_load(&C); bldir[0] = 0; find_backlight(); cur_level = -1;
+			sig_hup = 0; cfg_load(&C); load_timeout(0); bldir[0] = 0; find_backlight(); cur_level = -1;
 			if (!blanked) backlight_on();
 			logm("config reloaded");
 		}
 		if (sig_blank) { sig_blank = 0; if (!blanked) { backlight_off(); blanked = 1; if (C.swallow) grab_all(1); } }
 		if (sig_wake) { sig_wake = 0; last_input = t;
 			        if (blanked) { blanked = 0; cur_level = -1; backlight_on(); grab_all(0); } }
-		if (!blanked && C.blank_timeout > 0 && t - last_input >= (long long)C.blank_timeout * 1000) {
+		if (!blanked && eff_timeout > 0 && t - last_input >= (long long)eff_timeout * 1000) {
 			backlight_off(); blanked = 1; if (C.swallow) grab_all(1);
 		}
 		if (!blanked && !swallowing && t - last_sched >= 5000) { backlight_on(); last_sched = t; }
@@ -367,17 +496,26 @@ int main(int argc, char **argv)
 
 		/* poll timeout: until the next deadline, at most 1 s */
 		int to = 1000;
-		if (!blanked && C.blank_timeout > 0) {
-			long long left = last_input + (long long)C.blank_timeout * 1000 - t;
+		if (!blanked && eff_timeout > 0) {
+			long long left = last_input + (long long)eff_timeout * 1000 - t;
 			if (left < to) to = left < 0 ? 0 : (int)left;
 		}
 		if (swallowing && swallow_until - t < to) to = swallow_until - t < 0 ? 0 : (int)(swallow_until - t);
 
-		struct pollfd pfd[MAXDEV];
+		struct pollfd pfd[MAXDEV + 1];
+		int np = ndev;
 		for (int i = 0; i < ndev; i++) { pfd[i].fd = devs[i].fd; pfd[i].events = POLLIN; pfd[i].revents = 0; }
-		int n = poll(pfd, ndev, to);
+		if (ino_fd >= 0) { pfd[np].fd = ino_fd; pfd[np].events = POLLIN; pfd[np++].revents = 0; }
+		int n = poll(pfd, np, to);
 		if (n < 0) { if (errno == EINTR) continue; logm("poll: %s", strerror(errno)); sleep(1); continue; }
 		if (n == 0) continue;
+		if (ino_fd >= 0 && (pfd[ndev].revents & POLLIN)) {
+			int m = read_inotify();
+			if (m & 2) load_timeout(0);
+			/* a manual level / offset / timeout change applies now, not at
+			 * the next 5 s tick (key-strip slide, overlay slider) */
+			if (m && !blanked && !swallowing) backlight_on();
+		}
 		t = now_ms();
 		for (int i = ndev - 1; i >= 0; i--) {
 			if (pfd[i].revents & (POLLERR | POLLHUP | POLLNVAL)) {
@@ -409,6 +547,7 @@ int main(int argc, char **argv)
 			if (r < 0 && errno != EAGAIN && errno != EINTR) { close_dev(i); continue; }
 			if (!got) continue;
 			last_input = t;
+			note_input();
 			if (power && C.power_key && !blanked && !swallowing) {
 				backlight_off(); blanked = 1; if (C.swallow) grab_all(1);
 				if (verbose) logm("power key: blank");

@@ -236,20 +236,29 @@ find_rescue_by_env() {
 # wait_for_rescue KIOSK_IP MAC WSIP PW TIMEOUT_S: prints the rescue's IP once
 # found (every ~10s: the kiosk's own IP -- the usual case with a DHCP
 # reservation, since the rescue takes eth0's MAC from the env's ethaddr --
-# then a MAC sweep of WSIP's /24), or nothing after TIMEOUT_S with a non-zero
-# return. Heartbeat lines go to stderr (stdout is the answer).
+# then a MAC sweep of the panel's /24), or nothing after TIMEOUT_S with a
+# non-zero return. The sweep reads MACs from `ip neigh`, so it only works
+# when that /24 is on-link; through a router or a VPN (`ip route get` shows
+# "via", or the source address is in another /24) only the kiosk IP is
+# tried. Heartbeat lines go to stderr (stdout is the answer).
 wait_for_rescue() {
-	local kiosk_ip=$1 mac=$2 wsip=$3 pw=$4 timeout=$5 prefix w=0 cand t0
-	prefix=$(echo "$wsip" | cut -d. -f1-3)
+	local kiosk_ip=$1 mac=$2 wsip=$3 pw=$4 timeout=$5 prefix w=0 cand t0 sweep=1 where
+	prefix=$(echo "$kiosk_ip" | cut -d. -f1-3)
+	if ip route get "$kiosk_ip" 2>/dev/null | grep -q ' via ' || [ "$(echo "$wsip" | cut -d. -f1-3)" != "$prefix" ]; then
+		sweep=0; where="$prefix.0/24 is not on-link from $wsip: no MAC sweep"
+	else where="MAC $mac on $prefix.0/24"
+	fi
 	t0=$(date +%s)
 	while [ $w -lt "$timeout" ]; do
 		if ssh_test_rescue "$kiosk_ip" "$pw"; then echo "$kiosk_ip"; return 0; fi
-		cand=$(find_rescue_by_mac "$mac" "$prefix")
-		if [ -n "$cand" ] && ssh_test_rescue "$cand" "$pw"; then echo "$cand"; return 0; fi
-		cand=$(find_rescue_by_env "$mac" "$prefix" "$pw")
-		[ -n "$cand" ] && { echo "$cand"; return 0; }
+		if [ $sweep = 1 ]; then
+			cand=$(find_rescue_by_mac "$mac" "$prefix")
+			if [ -n "$cand" ] && ssh_test_rescue "$cand" "$pw"; then echo "$cand"; return 0; fi
+			cand=$(find_rescue_by_env "$mac" "$prefix" "$pw")
+			[ -n "$cand" ] && { echo "$cand"; return 0; }
+		fi
 		sleep 10; w=$(( $(date +%s) - t0 ))
-		echo "  still looking for the rescue (ssh at $kiosk_ip, MAC $mac on $prefix.0/24): ${w}/${timeout} s" >&2
+		echo "  still looking for the rescue (ssh at $kiosk_ip; $where): ${w}/${timeout} s" >&2
 	done
 	return 1
 }
