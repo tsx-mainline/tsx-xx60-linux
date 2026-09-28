@@ -35,10 +35,20 @@ for c in $(cat /proc/cmdline); do
 	esac
 done
 [ -n "$want_rescue" ] && rescue "requested on the kernel command line"
-# The golden-slot rescue image (p1:boot.img, booted by U-Boot after boot_retry
-# overflow) carries this flag. It never switch_roots, never runs
+# This flag is baked into the rescue image itself (installer/rescue/overlay),
+# so it is carried by BOTH p1:boot.img (the golden/factory-recovery slot,
+# reached after boot_retry overflows) and p1:tsxboot.img (the one-shot
+# installer hook target, reached on a normal, expected installer boot) --
+# from here, nothing on this side of U-Boot can tell which of the two
+# actually happened, so the reason stays generic rather than presuming
+# "golden-slot" (which was wrong on a plain installer-armed boot; see the
+# 2026-09-27 hardware run notes). It never switch_roots, never runs
 # tsx-autoinstall and never formats anything; see /usr/sbin/tsx-rescue.
-[ -e /etc/tsx/rescue-image ] && rescue "golden-slot rescue image: $(head -n 1 /etc/tsx/rescue-image)"
+# TODO: installer/steps/tsx-rescue-arm.sh is gaining a one-shot tsx_once env
+# flag (separate change, in flight); once it exists, read/clear it here (or
+# in the rescue's own rcS) to report "installer arm" vs "golden fallback" vs
+# "manual" precisely instead of this generic message.
+[ -e /etc/tsx/rescue-image ] && rescue "$(head -n 1 /etc/tsx/rescue-image)"
 
 # installer: UART-free install (p1:tsxinst.cfg from stock Android, a stick with
 # tsx-install/GO, or a U-Boot jabil boot from a stick). Exit 0 = nothing to do.

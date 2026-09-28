@@ -36,6 +36,12 @@ jobs:
         run: rootfs/tests/test-idled-als.sh
       - name: rootfs/tests/test-als.sh
         run: rootfs/tests/test-als.sh
+      - name: rootfs/tests/test-autoupdate-logic.sh
+        run: sh rootfs/tests/test-autoupdate-logic.sh
+      - name: rootfs/tests/test-autoupdate-flow.sh
+        run: sh rootfs/tests/test-autoupdate-flow.sh
+      - name: rootfs/tests/mqtt-dry.sh
+        run: sh rootfs/tests/mqtt-dry.sh
       - name: rootfs/tests/test-buttons.sh
         run: rootfs/tests/test-buttons.sh
       - name: rootfs/tests/test-install.sh - docker --privileged, loop device

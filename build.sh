@@ -3,6 +3,7 @@
 # this machine); see tools/build/README.md for the opt-in remote build.
 #
 #   ./build.sh kernel [args]        tools/build/kbuild.sh: zImage + dtbs + boot image
+#                                    (--flavor lts|stable, default lts)
 #   ./build.sh rootfs [args]        rootfs/build-rootfs.sh: rootfs.ext4/.tar.gz + initramfs
 #   ./build.sh virt-kernel [args]   rootfs/build-virt-kernel.sh: qemu -M virt test kernel
 #   ./build.sh image [args]         rootfs/mkbootimg.sh: pack the installed-system boot image

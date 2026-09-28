@@ -8,9 +8,10 @@
 #      and root over Crestron's own sshd (steps/rootsh) already works.
 #   2. steps/tsx-rescue-arm.sh (pushed over HTTP+wget, run over steps/rootsh):
 #      writes ONLY the rescue image to card p1 (golden slot AND the one-shot
-#      hook target) and arms boot_retry for exactly one rescue boot; reboots.
-#      See docs/boot.md "The v2 env state machine" for the exact env states
-#      and the automatic stock-Android fallback if the rescue never checks in.
+#      hook target) and arms tsx_once=1 for exactly one rescue boot (a true
+#      one-shot, not a boot_retry count); reboots. See docs/boot.md "The v2
+#      env state machine" for the exact env states and the automatic
+#      stock-Android fallback (one power cycle) if the rescue never checks in.
 #   3. find the rescue on the network (installer/lib/tsx-rescue.sh: kiosk's
 #      own IP first, then a MAC sweep -- the panel's MAC is recorded in step 2,
 #      before the reboot loses the Android eth0 state) and drive it: push the

@@ -44,6 +44,12 @@ cp -a /etc/apk/keys $R/etc/apk/
 
 log "overlay"
 cp -a "$HERE"/overlay/. $R/
+# tsx-autoupdate re-applies the Chromium ES2 patch on the panel after an upgrade:
+# ship the patch tool + signature list from their single source in src/.
+install -D -m 644 "$HERE/src/chromium-es2/patch-chromium.py" $R/usr/local/share/tsx/chromium-es2/patch-chromium.py
+install -D -m 644 "$HERE/src/chromium-es2/sigs.json" $R/usr/local/share/tsx/chromium-es2/sigs.json
+# build id for tsx-autoupdate / the HA update entity (installed_version)
+printf '%s\n' "${TSX_BUILD_ID:-$(date -u +%Y%m%d%H%M)}" > $R/etc/tsx/build-id
 install -m 755 /build/tsx-idled $R/usr/local/sbin/tsx-idled
 install -m 755 /build/tsx-buttons $R/usr/local/sbin/tsx-buttons
 install -m 755 /build/tsx-ledbar $R/usr/local/bin/tsx-ledbar
@@ -132,10 +138,10 @@ adduser -D -H -h /var/lib/kiosk -s /sbin/nologin -g "kiosk browser" kiosk
 for g in video input seat render audio; do addgroup kiosk $g 2>/dev/null || true; done
 mkdir -p /var/lib/kiosk && chown kiosk:kiosk /var/lib/kiosk
 for s in devfs dmesg udev udev-trigger udev-settle; do rc-update add $s sysinit; done
-for s in root localmount tsx-data modules sysctl hostname bootmisc syslog swclock seedrng tsx-setup tsx-hostname udev-postmount; do
+for s in root localmount tsx-data modules sysctl hostname bootmisc syslog swclock seedrng tsx-setup tsx-hostname udev-postmount machine-id; do
 	[ -e /etc/init.d/$s ] && rc-update add $s boot || echo "no service $s"
 done
-for s in networking chronyd sshd seatd crond watchdog tsx-idled tsx-cpufreq tsx-buttons tsx-als tsx-ledbar tsx-audio tsx-tfa-dsp tsx-mqtt kiosk tsx-boot-ok local; do
+for s in networking chronyd sshd seatd crond watchdog tsx-idled tsx-cpufreq tsx-buttons tsx-als tsx-ledbar tsx-audio tsx-tfa-dsp dbus avahi-daemon tsx-sendspin tsx-mqtt tsx-autoupdate kiosk tsx-boot-ok local; do
 	[ -e /etc/init.d/$s ] && rc-update add $s default || { echo "MISSING service $s"; exit 1; }
 done
 for s in mount-ro killprocs savecache; do rc-update add $s shutdown; done
@@ -174,6 +180,16 @@ printf '[Icon Theme]\nName=blank\n' > $R/usr/share/tsx/cursors/blank/index.theme
 ln -sfn blank $R/usr/share/tsx/cursors/default
 
 log "trim"
+# /etc/machine-id: the dbus apk package's own post-install trigger runs
+# dbus-uuidgen (or equivalent) against THIS build container the moment
+# `apk add` installs it, baking one fixed id into the image -- every panel
+# flashed from the same rootfs.tar.gz would then share that identical id
+# until the next rebuild. Ship it empty instead: /etc/init.d/machine-id
+# (OpenRC's own script, part of the openrc package, now added to the boot
+# runlevel above) only fills it in `if [ -s /etc/machine-id ]; then return
+# 0; fi` -- i.e. exactly when empty/missing -- so each unit's first real
+# boot generates its own, once, straight onto that unit's own root fs.
+: > $R/etc/machine-id
 # Chromium UI locales: keep en-US only
 [ -d $R/usr/lib/chromium/locales ] && find $R/usr/lib/chromium/locales -name '*.pak' ! -name 'en-US.pak' -delete
 # man pages / doc / info: never read on a headless kiosk

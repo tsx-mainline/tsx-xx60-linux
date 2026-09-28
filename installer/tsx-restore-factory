@@ -337,7 +337,7 @@ if [ "$FROM_STEP" -le 5 ] && [ "$TO_STEP" -ge 5 ]; then
 	log "  card run (streaming live):"
 	run_stream 'TSX_SHARE=/usr/share/tsx sh /tmp/b/tsx-factory-restore run /tmp/b --yes 2>&1' || die "tsx-factory-restore run FAILED (rescue still running in RAM)"
 	log "  card run done in $(( $(date +%s) - t0 )) s"
-	logblock "card after" "$($SSH 'cat /proc/partitions | grep mmcblk0; for p in 1 2 5 6 7 8; do echo "p$p: $(blkid /dev/mmcblk0p$p 2>/dev/null | cut -d: -f2-)"; done; echo "/tmp/b/env.bin 0x0 0x10000" > /run/b.cfg; fw_printenv -c /run/b.cfg boot_retry fwUpgrade switch_bootmode 2>&1; echo "/dev/mmcblk0 0x100000 0x10000" > /run/c.cfg; fw_printenv -c /run/c.cfg boot_retry fwUpgrade DataRecoveryDone switch_bootmode tsx_boot ethaddr tsid product_name 2>&1' 2>&1)"
+	logblock "card after" "$($SSH 'cat /proc/partitions | grep mmcblk0; for p in 1 2 5 6 7 8; do echo "p$p: $(blkid /dev/mmcblk0p$p 2>/dev/null | cut -d: -f2-)"; done; echo "/tmp/b/env.bin 0x0 0x10000" > /run/b.cfg; fw_printenv -c /run/b.cfg boot_retry fwUpgrade switch_bootmode tsx_once 2>&1; echo "/dev/mmcblk0 0x100000 0x10000" > /run/c.cfg; fw_printenv -c /run/c.cfg boot_retry fwUpgrade DataRecoveryDone switch_bootmode tsx_boot tsx_once ethaddr tsid product_name 2>&1' 2>&1)"
 	# tsx-env.py unhook (run inside mkbundle.sh when the bundle's env.bin was built)
 	# already resets switch_bootmode to the byte-exact stock value, which has no
 	# tsx-usb-recovery VBUS prefix: the factory restore disables USB recovery as

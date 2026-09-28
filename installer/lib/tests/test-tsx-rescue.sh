@@ -92,6 +92,66 @@ e2fsck -fn "$IMG" >/dev/null 2>&1 && ok "e2fsck -fn clean"
 [ "$(blkid -o value -s LABEL "$IMG" 2>/dev/null)" = tsxdata ] && ok "LABEL=tsxdata"
 [ "$(blkid -o value -s UUID "$IMG" 2>/dev/null)" = "$UUID" ] && ok "UUID matches (stale-label trap check, docs/recovery.md)"
 
+echo "== 9. tsx_env_apply: the once-arm write (boot_retry=0, tsx_once=1 together)"
+E4=$W/env4.bin; mkenv "$E4" 9 0 0
+echo "$E4 0x0 0x10000" > "$W/cfg4"
+OUT=$(TSX_RUN="$W" tsx_env_apply "$W/cfg4" "boot_retry 0
+tsx_once 1" 2>&1) && ok "once-arm write applied" || bad "once-arm write failed: $OUT"
+[ "$(getv "$E4" boot_retry)" = 0 ] && [ "$(getv "$E4" tsx_once)" = 1 ] && ok "boot_retry=0, tsx_once=1 both applied"
+[ "$(getv "$E4" ethaddr)" = "00:11:22:33:44:55" ] && ok "unrelated variable untouched by the once-arm write"
+
+echo "== 10. tsx_env_apply: clearing tsx_once alone (what U-Boot's own hook does) touches nothing else"
+OUT=$(TSX_RUN="$W" tsx_env_apply "$W/cfg4" "tsx_once 0" 2>&1) && ok "tsx_once clear applied"
+[ "$(getv "$E4" tsx_once)" = 0 ] && ok "tsx_once is 0 after the clear"
+[ "$(getv "$E4" boot_retry)" = 0 ] && ok "boot_retry (0) untouched by the tsx_once-only clear"
+
+echo "== 11. TSX_SWITCH_ONCE (installer/android/tsx-lib.sh) matches tsx-env.py GUARDS['once'] byte-for-byte"
+# Two independent copies of the hook text exist (the Android-side arm script
+# sources tsx-lib.sh; tsx-env.py builds card images and does the factory
+# unhook) -- this is the drift check for both.
+LIBDIR=$(cd "$HERE/../android" && pwd)
+. "$LIBDIR/tsx-lib.sh"
+PYONCE=$(python3 -c "
+import importlib.util as u
+spec = u.spec_from_file_location('tsxenv', '$HERE/../sdcard/tsx-env.py')
+m = u.module_from_spec(spec); spec.loader.exec_module(m)
+print(m.GUARDS['once'])
+")
+[ "$TSX_SWITCH_ONCE" = "$PYONCE" ] && ok "TSX_SWITCH_ONCE (bash) == GUARDS['once'] (python)" \
+	|| bad "hook text mismatch: bash='$TSX_SWITCH_ONCE' python='$PYONCE'"
+case "$TSX_SWITCH_ONCE" in
+*'if itest ${tsx_once} -eq 1; then setenv tsx_once 0; saveenv; run tsx_boot; fi')
+	ok "tsx_once is cleared (setenv 0; saveenv) BEFORE run tsx_boot, in that order";;
+*) bad "TSX_SWITCH_ONCE does not clear tsx_once before running tsx_boot: $TSX_SWITCH_ONCE";;
+esac
+[ "$TSX_BOOT_CMD" = 'mmcinfo; if fatexist mmc 0 tsxboot.off; then echo tsx: mainline disabled; else if fatexist mmc 0 tsxboot.img; then echo tsx: booting tsxboot.img; fatload mmc 0 ${loadaddr} tsxboot.img; bootm; fi; fi' ] \
+	&& ok "TSX_BOOT_CMD (the fatload/bootm hook target) is unchanged by the once guard"
+
+echo "== 12. once-guard semantics: armed / not armed / after fallback"
+# No U-Boot hush interpreter is available on this host, so this models the
+# exact, documented semantics of TSX_SWITCH_ONCE + TSX_BOOT_CMD (checked
+# byte-for-byte above) as a small state machine, rather than parsing/running
+# the hush text. Three scenarios named in the brief:
+sim_once() {   # sim_once TSX_ONCE_IN TSXBOOT_OFF_PRESENT TSXBOOT_IMG_PRESENT -> "BOOTS_RESCUE|no_rescue TSX_ONCE_OUT"
+	local once_in=${1:-} off=${2:-} img=${3:-}
+	local once_out=$once_in result=no_rescue
+	if [ "$once_in" = 1 ]; then
+		once_out=0   # setenv tsx_once 0; saveenv -- happens before run tsx_boot, unconditionally
+		if [ "$off" = 1 ]; then result=no_rescue   # tsx: mainline disabled
+		elif [ "$img" = 1 ]; then result=boots_rescue
+		else result=no_rescue
+		fi
+	fi
+	echo "$result $once_out"
+}
+R=$(sim_once 1 0 1); [ "$R" = "boots_rescue 0" ] && ok "armed (tsx_once=1, tsxboot.img present): boots the rescue once, and clears tsx_once" || bad "armed case: got '$R'"
+R=$(sim_once 0 0 1); [ "$R" = "no_rescue 0" ] && ok "not armed (tsx_once=0, tsxboot.img still present): hook does nothing, stock bootcmd runs" || bad "not-armed case: got '$R'"
+R=$(sim_once "" 0 1); [ "$R" = "no_rescue " ] && ok "not armed (tsx_once unset): hook does nothing" || bad "unset case: got '$R'"
+# after fallback: the rescue never checked in on its one shot, tsx_once is
+# already 0 from that boot, and the unit is power-cycled again with
+# tsxboot.img (and the golden slot) still holding the rescue image.
+R=$(sim_once 0 0 1); [ "$R" = "no_rescue 0" ] && ok "after fallback (tsx_once already spent): stays on stock Android even though tsxboot.img is still there" || bad "after-fallback case: got '$R'"
+
 echo "== $N ok, $F failed"
 [ $F = 0 ] && echo PASS test-tsx-rescue || echo FAIL test-tsx-rescue
 exit $F

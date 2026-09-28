@@ -12,6 +12,9 @@
 #   switch "Auto brightness"  tsx-als auto on|off
 #   number "Volume"       0..100 % of the ALSA "Master" softvol (only when the
 #                         TSW1060 sound card exists; /etc/asound.conf)
+#   update "Update"       tsx-autoupdate's status (installed/pending Alpine
+#                         packages, reboot pending, Chromium hold state);
+#                         Install runs "tsx-autoupdate now" in the background
 # State/commands under $BASE (default tsx/<hostname>); availability with LWT.
 #
 # Config /etc/tsx/mqtt.conf (empty BROKER = exit quietly). Needs mosquitto-clients.
@@ -94,6 +97,7 @@ discovery() {
 	if [ -e "$ASOUND/$CARD" ]; then
 		pub -r "$DP/number/$NODE/volume/config" "{\"name\":\"Volume\",\"uniq_id\":\"${NODE}_volume\",\"cmd_t\":\"$BASE/volume/set\",\"stat_t\":\"$BASE/volume/state\",\"min\":0,\"max\":100,\"step\":1,\"unit_of_meas\":\"%\",\"mode\":\"slider\",\"icon\":\"mdi:volume-high\",$AV,$DEV}"
 	fi
+	pub -r "$DP/update/$NODE/update/config" "{\"name\":\"Update\",\"uniq_id\":\"${NODE}_update\",\"cmd_t\":\"$BASE/update/set\",\"stat_t\":\"$BASE/update/state\",\"icon\":\"mdi:package-up\",$AV,$DEV}"
 	for k in $(keys); do
 		pub -r "$DP/event/$NODE/key_$k/config" "{\"name\":\"Key $k\",\"uniq_id\":\"${NODE}_key_$k\",\"stat_t\":\"$BASE/key/$k\",\"evt_typ\":[\"short\",\"long\",\"hold\"],\"dev_cla\":\"button\",$AV,$DEV}"
 		pub -r "$DP/device_automation/$NODE/key_${k}_short/config" "{\"atype\":\"trigger\",\"t\":\"$BASE/trigger/$k/short\",\"type\":\"button_short_press\",\"stype\":\"$k\",\"pl\":\"short\",$DEV}"
@@ -132,7 +136,13 @@ volume_state() {  # "NN" percent of the Master softvol
 	amixer -c "$CARD" sget Master 2>/dev/null | sed -n 's/.*\[\([0-9]\{1,3\}\)%\].*/\1/p' | head -1
 }
 
-P_LED= P_KP= P_SCR= P_BL= P_ALS= P_VOL=
+update_state() {  # raw HA-ready JSON from tsx-autoupdate (same $R), or a safe default
+	if [ -r "$R/update-ha-state.json" ]; then cat "$R/update-ha-state.json"
+	else echo '{"installed_version":"unknown","latest_version":"unknown","title":"TSX packages","release_summary":"tsx-autoupdate has not run yet","in_progress":false}'
+	fi
+}
+
+P_LED= P_KP= P_SCR= P_BL= P_ALS= P_VOL= P_UPD=
 publish_states() {  # $1 = force
 	v=$(ledbar_state); if [ "$v" != "$P_LED" ] || [ -n "${1:-}" ]; then
 		set -- $v; pub -r "$BASE/ledbar/state" "$1"; pub -r "$BASE/ledbar/brightness" "$2"; pub -r "$BASE/ledbar/rgb" "$3"; P_LED=$v; fi
@@ -146,6 +156,8 @@ publish_states() {  # $1 = force
 		set -- $v; pub -r "$BASE/als/lux" "$1"; pub -r "$BASE/als_auto/state" "$2"; P_ALS=$v; fi
 	v=$(volume_state); if [ -n "$v" ] && { [ "$v" != "$P_VOL" ] || [ -n "${1:-}" ]; }; then
 		pub -r "$BASE/volume/state" "$v"; P_VOL=$v; fi
+	v=$(update_state); if [ "$v" != "$P_UPD" ] || [ -n "${1:-}" ]; then
+		pub -r "$BASE/update/state" "$v"; P_UPD=$v; fi
 }
 
 # ---- commands --------------------------------------------------------------
@@ -198,6 +210,8 @@ handle() {  # topic payload
 		echo "$p" > "$R/brightness"          # tsx-idled level override (as the up/down keys)
 		s=; [ -r "$IDLED" ] && read -r s _ < "$IDLED"
 		if [ "$s" != blank ]; then for d in ${TSX_BACKLIGHT_DIR:-/sys/class/backlight}/*; do [ -w "$d/brightness" ] && echo "$p" > "$d/brightness"; break; done; fi;;
+	update/set)
+		command -v tsx-autoupdate >/dev/null 2>&1 && tsx-autoupdate now &;;
 	*) return;;
 	esac
 	: > "$M/poke"

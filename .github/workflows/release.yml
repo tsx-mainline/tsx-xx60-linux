@@ -9,20 +9,32 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [lts, stable]
     steps:
       - uses: actions/checkout@v4
 
       - name: register the armv7 qemu-user binfmt (docker --platform linux/arm/v7)
         uses: docker/setup-qemu-action@v3
 
-      - name: cache the kernel fork checkout
+      - name: cache the kernel fork checkout (${{ matrix.flavor }})
         uses: actions/cache@v4
         with:
-          path: ../linux
-          key: linux-${{ hashFiles('kernel/KERNEL_REV') }}
+          path: ../linux-${{ matrix.flavor }}
+          key: linux-${{ matrix.flavor }}-${{ hashFiles(format('kernel/KERNEL_REV.{0}', matrix.flavor)) }}
 
-      - name: build the kernel (tools/build/kbuild.sh)
-        run: tools/build/kbuild.sh kernel image
+      - name: build the kernel (tools/build/kbuild.sh --flavor ${{ matrix.flavor }})
+        run: tools/build/kbuild.sh --flavor ${{ matrix.flavor }} kernel image
+
+      - name: kernelrelease / commit / sha256
+        id: info
+        run: |
+          echo "release=$(cat ../out-${{ matrix.flavor }}/kernel.release)" >> "$GITHUB_OUTPUT"
+          cat ../out-${{ matrix.flavor }}/kernel.release
+          cat ../out-${{ matrix.flavor }}/kernel.commit
+          cat ../out-${{ matrix.flavor }}/sha256sums.txt
 
       - name: build sendspin-cli from source (rootfs/src/sendspin/build.sh)
         run: rootfs/src/sendspin/build.sh
@@ -32,7 +44,11 @@ jobs:
       # tuning containers out of the image entirely (a local build run by a
       # user, on their own machine, keeps fetching them by default). The
       # no-proprietary-files step below checks this on the build's output,
-      # not just this env var.
+      # not just this env var. Built once per flavor leg (the rootfs itself
+      # is flavor-independent -- rootfs/build-rootfs.sh's tarball carries
+      # both kernels' /lib/modules trees -- but this workflow does not share
+      # state between matrix legs, so it is rebuilt here rather than pulled
+      # from another job).
       - name: build the rootfs + initramfs (rootfs/build-rootfs.sh all)
         env:
           TFA_VENDOR_FETCH: "no"
@@ -41,7 +57,9 @@ jobs:
       - name: no proprietary files in the build output (ci/check-no-proprietary.sh)
         run: ci/check-no-proprietary.sh rootfs/out/rootfs.tar.gz rootfs/out/rootfs.ext4
 
-      - name: pack the installed-system boot image (rootfs/mkbootimg.sh)
+      - name: pack the installed-system boot image (rootfs/mkbootimg.sh, this flavor's kernel)
+        env:
+          KDIR: ../out-${{ matrix.flavor }}
         run: rootfs/mkbootimg.sh
 
       # Needs a stage-2 (tsx-autoinstall) base image integrated first
@@ -52,29 +70,35 @@ jobs:
         continue-on-error: true
         run: installer/rescue/mkrescue.sh --out rootfs/out/tsx-rescue-tsw1060.img
 
-      - name: build the installer payload bundle - two-stage, rootfs tarball + boot image
+      - name: build the installer payload bundle - two-stage, rootfs tarball + this flavor's boot image
         run: |
           mkdir -p release/payload
           installer/payload/mkpayload --out release/payload \
             --rootfs rootfs/out/rootfs.tar.gz --bootimg-tsw1060 rootfs/out/tsxboot.img --allow-stale
-          tar -C release/payload -czf release/tsx-xx60-payload.tar.gz .
+          tar -C release/payload -czf release/tsx-xx60-${{ matrix.flavor }}-payload.tar.gz .
 
-      - name: collect the release files and their SHA256SUMS
+      - name: collect the release files and their SHA256SUMS (flavor-prefixed, so both flavors land in the same release)
         run: |
           set -eu
+          F=${{ matrix.flavor }}
           O=release/out; mkdir -p "$O"
-          cp ../out/zImage ../out/meson8m2-crestron-tsw1060.dtb "$O/"
-          cp ../out/kernel.release ../out/kernel.commit "$O/"
-          cp rootfs/out/rootfs.tar.gz rootfs/out/rootfs.ext4 rootfs/out/rootfs.manifest rootfs/out/rootfs.sizes "$O/"
-          cp rootfs/out/tsxboot.img "$O/"
-          [ -f rootfs/out/tsx-rescue-tsw1060.img ] && cp rootfs/out/tsx-rescue-tsw1060.img "$O/" || true
-          cp release/tsx-xx60-payload.tar.gz "$O/"
-          (cd "$O" && find . -maxdepth 1 -type f -exec sha256sum {} + | sort -k2 > /tmp/SHA256SUMS && mv /tmp/SHA256SUMS SHA256SUMS)
+          cp ../out-$F/zImage "$O/zImage-$F"
+          cp ../out-$F/meson8m2-crestron-tsw1060.dtb "$O/meson8m2-crestron-tsw1060-$F.dtb"
+          cp ../out-$F/kernel.release "$O/kernel.release-$F"
+          cp ../out-$F/kernel.commit "$O/kernel.commit-$F"
+          cp rootfs/out/rootfs.tar.gz "$O/rootfs-$F.tar.gz"
+          cp rootfs/out/rootfs.ext4 "$O/rootfs-$F.ext4"
+          cp rootfs/out/rootfs.manifest "$O/rootfs-$F.manifest"
+          cp rootfs/out/rootfs.sizes "$O/rootfs-$F.sizes"
+          cp rootfs/out/tsxboot.img "$O/tsxboot-$F.img"
+          [ -f rootfs/out/tsx-rescue-tsw1060.img ] && cp rootfs/out/tsx-rescue-tsw1060.img "$O/tsx-rescue-tsw1060-$F.img" || true
+          cp release/tsx-xx60-$F-payload.tar.gz "$O/"
+          (cd "$O" && find . -maxdepth 1 -type f -exec sha256sum {} + | sort -k2 > "/tmp/SHA256SUMS-$F" && mv "/tmp/SHA256SUMS-$F" "SHA256SUMS-$F")
           ls -l "$O"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: tsx-xx60-${{ github.ref_name }}
+          name: tsx-xx60-${{ matrix.flavor }}-${{ steps.info.outputs.release }}
           path: release/out
           if-no-files-found: error
 
@@ -86,8 +110,15 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: tsx-xx60-${{ github.ref_name }}
+          pattern: tsx-xx60-*
           path: release/out
+          merge-multiple: true
+      - name: combined SHA256SUMS (both flavors)
+        run: |
+          cd release/out
+          cat SHA256SUMS-lts SHA256SUMS-stable > SHA256SUMS
+          rm -f SHA256SUMS-lts SHA256SUMS-stable
+          ls -l .
       - name: attach the build to the GitHub release for this tag
         env:
           GH_TOKEN: ${{ github.token }}

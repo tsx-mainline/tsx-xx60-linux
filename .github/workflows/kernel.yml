@@ -7,32 +7,38 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [lts, stable]
     steps:
       - uses: actions/checkout@v4
 
-      - name: cache the kernel fork checkout
+      - name: cache the kernel fork checkout (${{ matrix.flavor }})
         uses: actions/cache@v4
         with:
-          path: ../linux
-          key: linux-${{ hashFiles('kernel/KERNEL_REV') }}
+          path: ../linux-${{ matrix.flavor }}
+          key: linux-${{ matrix.flavor }}-${{ hashFiles(format('kernel/KERNEL_REV.{0}', matrix.flavor)) }}
 
-      - name: build (tools/build/kbuild.sh, clones ../linux at kernel/KERNEL_REV if not cached)
-        run: tools/build/kbuild.sh kernel image
+      - name: build (tools/build/kbuild.sh --flavor ${{ matrix.flavor }}, clones ../linux-${{ matrix.flavor }} at kernel/KERNEL_REV.${{ matrix.flavor }} if not cached)
+        run: tools/build/kbuild.sh --flavor ${{ matrix.flavor }} kernel image
 
       - name: kernelrelease / commit / sha256
+        id: info
         run: |
-          cat ../out/kernel.release
-          cat ../out/kernel.commit
-          cat ../out/sha256sums.txt
+          echo "release=$(cat ../out-${{ matrix.flavor }}/kernel.release)" >> "$GITHUB_OUTPUT"
+          cat ../out-${{ matrix.flavor }}/kernel.release
+          cat ../out-${{ matrix.flavor }}/kernel.commit
+          cat ../out-${{ matrix.flavor }}/sha256sums.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kernel
+          name: kernel-${{ matrix.flavor }}-${{ steps.info.outputs.release }}
           path: |
-            ../out/zImage
-            ../out/meson8m2-crestron-tsw1060.dtb
-            ../out/test.img
-            ../out/kernel.release
-            ../out/kernel.commit
-            ../out/sha256sums.txt
+            ../out-${{ matrix.flavor }}/zImage
+            ../out-${{ matrix.flavor }}/meson8m2-crestron-tsw1060.dtb
+            ../out-${{ matrix.flavor }}/test.img
+            ../out-${{ matrix.flavor }}/kernel.release
+            ../out-${{ matrix.flavor }}/kernel.commit
+            ../out-${{ matrix.flavor }}/sha256sums.txt
           if-no-files-found: error

@@ -89,7 +89,7 @@ frame() {
 	echo "-----------------------------------------------------------------"
 	echo "what next: this screen refreshes itself. An installer driver on the"
 	echo "network normally finds this unit and finishes the install for you."
-	echo "If nothing happens: power-cycle the panel TWICE without doing"
+	echo "If nothing happens: power-cycle the panel ONCE without doing"
 	echo "anything else -- it falls back to stock Android on its own (no"
 	echo "UART needed). To look around by hand: ssh in, then 'tsx-rescue"
 	echo "status' or 'tsx-rescue done && reboot -f' once repairs are done."

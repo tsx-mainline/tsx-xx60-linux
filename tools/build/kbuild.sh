@@ -4,7 +4,7 @@
 # no network, other than the one-time image build and, if LINUX_DIR does not
 # exist yet, cloning the kernel fork.
 #
-#   tools/build/kbuild.sh [-w LINUX_DIR] [-o BUILD_DIR] [-d OUT_DIR] [-j N] <step>...
+#   tools/build/kbuild.sh [-f lts|stable | --flavor lts|stable] [-w LINUX_DIR] [-o BUILD_DIR] [-d OUT_DIR] [-j N] <step>...
 #   steps: config   : multi_v7_defconfig + arch/arm/configs/tsx-xx60.config + olddefconfig
 #                      (also done automatically by "kernel" when BUILD_DIR/.config
 #                      is missing or the fragment is newer)
@@ -17,17 +17,23 @@
 #          stats    : ccache statistics (only with CCACHE=1)
 #   (default steps: kernel image)
 #
-# Kernel source: LINUX_DIR (default: ../linux, a sibling checkout of this
-# repo). If it does not exist, it is cloned from
-# https://github.com/tsx-mainline/linux and checked out at the commit in
-# kernel/KERNEL_REV. An EXISTING LINUX_DIR is used as-is and never modified
-# (no fetch, no checkout) -- it is expected to already have the right commit
-# checked out; a mismatch is only a warning.
+# Flavor: -f / --flavor / $FLAVOR selects which of the two kernel flavors to
+# build -- lts (default; tracks kernel/KERNEL_REV.lts, branch tsx-xx60-6.18)
+# or stable (kernel/KERNEL_REV.stable, branch tsx-xx60-7.2). Both branches use
+# the same config fragment name, arch/arm/configs/tsx-xx60.config.
 #
-# Env: LINUX_DIR, BUILD_DIR (default <LINUX_DIR>/../build), OUT_DIR (default
-# <LINUX_DIR>/../out), J (default: all cores). CCACHE=1 turns on ccache
-# (ci/Dockerfile.ccache, cache dir CCACHE_DIR, default ~/.cache/tsx-ccache) --
-# optional, off by default so a first-time build needs nothing persistent.
+# Kernel source: LINUX_DIR (default: ../linux-<flavor>, a sibling checkout of
+# this repo, e.g. ../linux-lts). If it does not exist, it is cloned from
+# https://github.com/tsx-mainline/linux and checked out at the commit in
+# kernel/KERNEL_REV.<flavor>. An EXISTING LINUX_DIR is used as-is and never
+# modified (no fetch, no checkout) -- it is expected to already have the
+# right commit checked out; a mismatch is only a warning.
+#
+# Env: LINUX_DIR, BUILD_DIR (default <LINUX_DIR>/../build-<flavor>), OUT_DIR
+# (default <LINUX_DIR>/../out-<flavor>), J (default: all cores). CCACHE=1
+# turns on ccache (ci/Dockerfile.ccache, cache dir CCACHE_DIR, default
+# ~/.cache/tsx-ccache) -- optional, off by default so a first-time build
+# needs nothing persistent.
 #
 # To build on another machine instead of here, see tools/build/remote-build.sh
 # (opt-in, driven by BUILD_HOST).
@@ -35,24 +41,38 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 TOP=$(cd "$REPO/.." && pwd)
-KERNEL_REV=$(grep -v '^#' "$REPO/kernel/KERNEL_REV" | tr -d ' \t\r\n')
-LINUX_DIR=${LINUX_DIR:-$TOP/linux}
-B= OUT= J=$(nproc)
-while getopts "w:o:d:j:" o; do case $o in
-	w) LINUX_DIR=$(cd "$OPTARG" && pwd);; o) B=$OPTARG;; d) OUT=$OPTARG;; j) J=$OPTARG;;
-	*) sed -n '2,29p' "$0"; exit 1;; esac; done
+FLAVOR=${FLAVOR:-lts}
+# --flavor/--flavor=X alongside the short getopts below (getopts has no long-option support)
+ARGS=()
+while [ $# -gt 0 ]; do case "$1" in
+	--flavor=*) FLAVOR=${1#--flavor=}; shift;;
+	--flavor) FLAVOR=$2; shift 2;;
+	*) ARGS+=("$1"); shift;; esac; done
+set -- "${ARGS[@]}"
+B= OUT= J=$(nproc) WDIR=
+while getopts "f:w:o:d:j:" o; do case $o in
+	f) FLAVOR=$OPTARG;; w) WDIR=$OPTARG;; o) B=$OPTARG;; d) OUT=$OPTARG;; j) J=$OPTARG;;
+	*) sed -n '2,39p' "$0"; exit 1;; esac; done
 shift $((OPTIND-1))
+case $FLAVOR in lts|stable) ;; *) echo "kbuild: --flavor/-f must be lts or stable (got $FLAVOR)"; exit 1;; esac
+
+REV_FILE=$REPO/kernel/KERNEL_REV.$FLAVOR
+[ -f "$REV_FILE" ] || { echo "kbuild: no $REV_FILE"; exit 1; }
+KERNEL_REV=$(grep -v '^#' "$REV_FILE" | tr -d ' \t\r\n')
+LINUX_DIR=${WDIR:-${LINUX_DIR:-$TOP/linux-$FLAVOR}}
+[ -n "$WDIR" ] && LINUX_DIR=$(cd "$WDIR" && pwd)
 
 if [ ! -e "$LINUX_DIR" ]; then
-	echo "kbuild: $LINUX_DIR does not exist, cloning tsx-mainline/linux at $KERNEL_REV"
+	echo "kbuild: $LINUX_DIR does not exist, cloning tsx-mainline/linux ($FLAVOR) at $KERNEL_REV"
 	git clone -q https://github.com/tsx-mainline/linux "$LINUX_DIR"
 	git -C "$LINUX_DIR" checkout -q "$KERNEL_REV"
 fi
 HEAD=$(git -C "$LINUX_DIR" rev-parse HEAD 2>/dev/null || echo '?')
-[ "$HEAD" = "$KERNEL_REV" ] || echo "kbuild: WARNING: $LINUX_DIR is at $HEAD, kernel/KERNEL_REV wants $KERNEL_REV (not touching your checkout)"
+[ "$HEAD" = "$KERNEL_REV" ] || echo "kbuild: WARNING: $LINUX_DIR is at $HEAD, $REV_FILE wants $KERNEL_REV (not touching your checkout)"
 
-P=$(dirname "$LINUX_DIR"); B=${BUILD_DIR:-${B:-$P/build}}; OUT=${OUT_DIR:-${OUT:-$P/out}}
+P=$(dirname "$LINUX_DIR"); B=${BUILD_DIR:-${B:-$P/build-$FLAVOR}}; OUT=${OUT_DIR:-${OUT:-$P/out-$FLAVOR}}
 mkdir -p "$B" "$OUT"
+echo "kernel flavor: $FLAVOR ($REV_FILE)"
 
 docker image inspect tsx-mainline >/dev/null 2>&1 || docker build -q -t tsx-mainline -f "$REPO/ci/Dockerfile.mainline" "$REPO/ci"
 IMG=tsx-mainline

@@ -26,8 +26,8 @@ read at --offset, default 0x100000):
       with the per-unit identity removed (see NEUTRAL) + the hook.
   tsx-env.py unhook SRC OUT
       factory state for Crestron's Android (factory/puf-tool.sh): stock
-      switch_bootmode, tsx_boot deleted, boot_retry/golden_boot_retry 0, fwUpgrade 0,
-      reformat* 0, DataRecoveryDone 0. Identity and everything else unchanged.
+      switch_bootmode, tsx_boot and tsx_once deleted, boot_retry/golden_boot_retry 0,
+      fwUpgrade 0, reformat* 0, DataRecoveryDone 0. Identity and everything else unchanged.
   tsx-env.py write BLOCK DST                write a bare 64 KiB block at DST+offset
   tsx-env.py diff A B                       variable-level diff of two env blocks
 """
@@ -43,9 +43,15 @@ TSX_BOOT = ('mmcinfo; if fatexist mmc 0 tsxboot.off; then echo tsx: mainline dis
 GUARDS = {
     'fallback': STOCK_SWITCH + 'if itest ${boot_retry} -lt 6; then run tsx_boot; fi',
     'nogolden': STOCK_SWITCH + 'if itest ${boot_retry} -lt 6 || itest ${boot_retry} -gt 9; then run tsx_boot; fi',
+    # true one-shot (tsx-rescue-arm.sh's default): gated on tsx_once, not
+    # boot_retry. U-Boot clears tsx_once (setenv 0; saveenv) BEFORE running
+    # tsx_boot, so installing this hook does nothing until something else
+    # sets tsx_once=1, and the shot is spent the instant this line runs.
+    'once': STOCK_SWITCH + 'if itest ${tsx_once} -eq 1; then setenv tsx_once 0; saveenv; run tsx_boot; fi',
 }
 KNOWN_SWITCH = {STOCK_SWITCH: 'stock', STOCK_SWITCH + 'run tsx_boot': 'plain',
-                GUARDS['fallback']: 'fallback', GUARDS['nogolden']: 'nogolden'}
+                GUARDS['fallback']: 'fallback', GUARDS['nogolden']: 'nogolden',
+                GUARDS['once']: 'once'}
 
 # Per-unit variables. Derived by diffing three real env blocks (TSW-1060 A
 # ethaddr ..:b8:30, TSW-1060 B ..:b8:37, TSW-760 C from xx60-FACTORY.img)
@@ -228,6 +234,7 @@ def main():
             sys.exit('source env not usable (CRC or not a xx60 env)')
         env.set('switch_bootmode', STOCK_SWITCH)
         env.unset('tsx_boot')
+        env.unset('tsx_once')
         for n, v in (('boot_retry', '0'), ('golden_boot_retry', '0'), ('fwUpgrade', '0'), ('reformatDataPartition', '0'),
                      ('reformatExtendedPartition', '0'), ('DataRecoveryDone', '0')):
             if env.get(n) is not None or n in ('boot_retry', 'golden_boot_retry'):

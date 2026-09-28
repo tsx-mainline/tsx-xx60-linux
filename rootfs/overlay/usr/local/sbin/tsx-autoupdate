@@ -1,0 +1,397 @@
+#!/bin/sh
+# tsx-autoupdate: automatic Alpine package updates for the xx60 kiosk.
+#
+# Daily: `apk update`, compute pending upgrades, decide whether Chromium's
+# ES2-patch pin should move. Installs only inside the night window
+# (/etc/tsx/autoupdate.conf WINDOW) and only while the screen is idle
+# (tsx-idled's state file); reboots only if the upgrade touched the kernel,
+# musl, openrc or busybox/the init system, and only inside the window.
+#
+# Chromium (rootfs/packages.txt pins it "chromium=<ver>" in /etc/apk/world
+# for the ES2 GPU patch, rootfs/src/chromium-es2/): a newer build with no
+# known patch signature is held (logged "held since ..."); after HOLD_DAYS
+# it is taken anyway, unpatched (software rendering, logged clearly). A
+# build WITH a known signature is upgraded and re-patched right away, using
+# the same patch-chromium.py + sigs.json shipped alongside this script
+# (/usr/local/share/tsx/chromium-es2/) that mkrootfs.sh uses at build time.
+#
+# Usage:
+#   tsx-autoupdate            the scheduled tick (cron): check, install if
+#                              the window+idle gate allows it
+#   tsx-autoupdate now         check + install right away (window still
+#                              gates the reboot itself, never the install)
+#   tsx-autoupdate check       refresh the status only, never installs
+#   tsx-autoupdate status      print the current state
+#   tsx-autoupdate healthcheck post-reboot check (called by the init.d
+#                              script's background job; a no-op unless an
+#                              automatic update rebooted the panel)
+#
+# Status: $TSX_RUN_DIR/update.json (+ update-ha-state.json for tsx-mqtt),
+# refreshed every run; a persistent copy lives under $TSX_STATE_DIR
+# (default /var/lib/tsx/autoupdate, moved onto /data by tsx-data) so
+# "status"/the HA entity have something to show right after boot.
+#
+# Env overrides (for host tests only; see rootfs/tests/test-autoupdate*.sh):
+#   TSX_AUTOUPDATE_CONF TSX_RUN_DIR TSX_STATE_DIR TSX_LOG TSX_IDLED_STATE
+#   TSX_KIOSK_CONF TSX_WORLD TSX_SIGS TSX_PATCH_TOOL TSX_ES2_MARKER
+#   TSX_CHROMIUM_BIN TSX_BUILD_ID_FILE
+#
+# __in_window / __needs_reboot / __chromium_decision / __write_status are
+# internal: they call the matching shell function directly and are used by
+# the host tests to check that logic without a real apk/date/reboot.
+set -u
+
+CONF=${TSX_AUTOUPDATE_CONF:-/etc/tsx/autoupdate.conf}
+RUN=${TSX_RUN_DIR:-/run/tsx}
+STATE=${TSX_STATE_DIR:-/var/lib/tsx/autoupdate}
+LOG=${TSX_LOG:-/var/log/tsx-autoupdate.log}
+IDLED_STATE=${TSX_IDLED_STATE:-/run/tsx-idled.state}
+KIOSK_CONF=${TSX_KIOSK_CONF:-/etc/kiosk.conf}
+WORLD=${TSX_WORLD:-/etc/apk/world}
+SIGS=${TSX_SIGS:-/usr/local/share/tsx/chromium-es2/sigs.json}
+PATCH_TOOL=${TSX_PATCH_TOOL:-/usr/local/share/tsx/chromium-es2/patch-chromium.py}
+ES2_MARKER=${TSX_ES2_MARKER:-/etc/tsx/chromium-es2-patched}
+CHROMIUM_BIN=${TSX_CHROMIUM_BIN:-/usr/lib/chromium/chromium}
+BUILD_ID_FILE=${TSX_BUILD_ID_FILE:-/etc/tsx/build-id}
+
+STATUS_FIELDS="installed_hash pending_count pending_list reboot_pending chromium_decision chromium_candidate chromium_pinned chromium_held_since in_progress last_check last_install last_result health"
+
+log() { mkdir -p "$(dirname "$LOG")" 2>/dev/null; printf '%s tsx-autoupdate: %s\n' "$(now_iso)" "$*" >>"$LOG"; }
+now_iso() { date '+%Y-%m-%dT%H:%M:%S'; }
+today() { date '+%F'; }
+nowhhmm() { date '+%H:%M'; }
+
+load_conf() {
+	ENABLED=1 WINDOW=03:00-05:00 HOLD_DAYS=7 REBOOT=auto
+	[ -r "$CONF" ] && . "$CONF"
+}
+
+# ---- pure logic (host-tested directly via __in_window etc.) ---------------
+
+hhmm2min() {  # "HH:MM" -> minutes since midnight
+	h=${1%%:*}; m=${1#*:}
+	h=${h#0}; [ -n "$h" ] || h=0
+	m=${m#0}; [ -n "$m" ] || m=0
+	echo $((h * 60 + m))
+}
+
+in_window() {  # in_window HH:MM start-end  (window may cross midnight)
+	now=$1; w=$2
+	s=${w%-*}; e=${w#*-}
+	ns=$(hhmm2min "$now"); ss=$(hhmm2min "$s"); ee=$(hhmm2min "$e")
+	if [ "$ss" -le "$ee" ]; then
+		[ "$ns" -ge "$ss" ] && [ "$ns" -lt "$ee" ]
+	else
+		[ "$ns" -ge "$ss" ] || [ "$ns" -lt "$ee" ]
+	fi
+}
+
+needs_reboot() {  # needs_reboot "pkg1 pkg2 ..." -> exit 0 if any needs a reboot
+	for n in $1; do
+		case $n in
+		linux*|musl*|openrc*|busybox*) return 0;;
+		esac
+	done
+	return 1
+}
+
+days_between() {  # days_between YYYY-MM-DD YYYY-MM-DD -> integer days (2 - 1)
+	e1=$(date -d "$1" +%s 2>/dev/null); e2=$(date -d "$2" +%s 2>/dev/null)
+	[ -n "$e1" ] && [ -n "$e2" ] || { echo 0; return; }
+	echo $(( (e2 - e1) / 86400 ))
+}
+
+chromium_decision() {  # cand old sig(0/1) since(date|empty) hold_days today -> "none|patch|unpatched|hold N"
+	cand=$1 old=$2 sig=$3 since=$4 days=$5 t=$6
+	if [ -z "$cand" ] || [ "$cand" = "$old" ]; then echo none; return; fi
+	if [ "$sig" = 1 ]; then echo patch; return; fi
+	if [ -z "$since" ]; then echo "hold 0"; return; fi
+	elapsed=$(days_between "$since" "$t")
+	if [ "$elapsed" -ge "$days" ]; then echo unpatched; else echo "hold $elapsed"; fi
+}
+
+# ---- status file (flat key/value; both JSON files are generated from it) --
+
+get_field() { sed -n "s/^$2 //p" "$1" 2>/dev/null | head -1; }
+
+set_fields() {  # set_fields FILE "k1=v1" "k2=v2" ...
+	f=$1; shift
+	mkdir -p "$(dirname "$f")" 2>/dev/null
+	tmp="$f.$$"
+	: > "$tmp"
+	for k in $STATUS_FIELDS; do
+		v=$(get_field "$f" "$k")
+		for kv in "$@"; do
+			ck=${kv%%=*}
+			[ "$ck" = "$k" ] && v=${kv#*=}
+		done
+		printf '%s %s\n' "$k" "$v" >> "$tmp"
+	done
+	mv "$tmp" "$f"
+}
+
+jesc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+write_update_json() {
+	f=$STATE/fields
+	installed=$(get_field "$f" installed_hash)
+	pcount=$(get_field "$f" pending_count); [ -n "$pcount" ] || pcount=0
+	plist=$(get_field "$f" pending_list)
+	rb=$(get_field "$f" reboot_pending); [ "$rb" = 1 ] && rbj=true || rbj=false
+	ip=$(get_field "$f" in_progress); [ "$ip" = 1 ] && ipj=true || ipj=false
+	items=
+	oldifs=$IFS; IFS=';'
+	for it in $plist; do
+		it=$(printf '%s' "$it" | sed 's/^ *//;s/ *$//')
+		[ -n "$it" ] || continue
+		items="${items:+$items,}\"$(jesc "$it")\""
+	done
+	IFS=$oldifs
+	mkdir -p "$RUN" "$STATE" 2>/dev/null
+	out="$RUN/update.json"
+	{
+		printf '{'
+		printf '"installed_version":"%s",' "$(jesc "$installed")"
+		printf '"pending_count":%s,' "$pcount"
+		printf '"pending":[%s],' "$items"
+		printf '"reboot_pending":%s,' "$rbj"
+		printf '"chromium_pinned":"%s",' "$(jesc "$(get_field "$f" chromium_pinned)")"
+		printf '"chromium_candidate":"%s",' "$(jesc "$(get_field "$f" chromium_candidate)")"
+		printf '"chromium_decision":"%s",' "$(jesc "$(get_field "$f" chromium_decision)")"
+		printf '"chromium_held_since":"%s",' "$(jesc "$(get_field "$f" chromium_held_since)")"
+		printf '"in_progress":%s,' "$ipj"
+		printf '"last_check":"%s",' "$(jesc "$(get_field "$f" last_check)")"
+		printf '"last_install":"%s",' "$(jesc "$(get_field "$f" last_install)")"
+		printf '"last_result":"%s",' "$(jesc "$(get_field "$f" last_result)")"
+		printf '"health":"%s"' "$(jesc "$(get_field "$f" health)")"
+		printf '}\n'
+	} > "$out"
+	cp -f "$out" "$STATE/update.json" 2>/dev/null
+}
+
+write_ha_json() {
+	f=$STATE/fields
+	installed=$(get_field "$f" installed_hash)
+	pcount=$(get_field "$f" pending_count); [ -n "$pcount" ] || pcount=0
+	plist=$(get_field "$f" pending_list)
+	rb=$(get_field "$f" reboot_pending)
+	cd=$(get_field "$f" chromium_decision); ch=$(get_field "$f" chromium_held_since); cc=$(get_field "$f" chromium_candidate)
+	ip=$(get_field "$f" in_progress); [ "$ip" = 1 ] && ipj=true || ipj=false
+	latest=$installed; [ "$pcount" -gt 0 ] 2>/dev/null && latest="$installed+${pcount}pending"
+	summary=$plist
+	[ "$rb" = 1 ] && summary="${summary:+$summary; }reboot pending"
+	word=${cd%% *}
+	case $word in
+	hold) d=${cd#* }; summary="${summary:+$summary; }chromium $cc held since $ch (day $d)";;
+	unpatched) summary="${summary:+$summary; }chromium $cc installed unpatched (software rendering) since $ch";;
+	patch) summary="${summary:+$summary; }chromium $cc: ES2 patch re-applied";;
+	esac
+	[ -n "$summary" ] || summary="up to date"
+	host=$(hostname 2>/dev/null); [ -n "$host" ] || host=tsx
+	mkdir -p "$RUN" 2>/dev/null
+	{
+		printf '{'
+		printf '"installed_version":"%s",' "$(jesc "$installed")"
+		printf '"latest_version":"%s",' "$(jesc "$latest")"
+		printf '"title":"TSX %s packages",' "$(jesc "$host")"
+		printf '"release_summary":"%s",' "$(jesc "$summary")"
+		printf '"in_progress":%s' "$ipj"
+		printf '}\n'
+	} > "$RUN/update-ha-state.json"
+}
+
+# ---- apk / chromium helpers -------------------------------------------------
+
+pinned_chromium_ver() { sed -n 's/^chromium=//p' "$WORLD" 2>/dev/null | head -1; }
+candidate_chromium_ver() { apk list -a chromium 2>/dev/null | sed -n '1s/^chromium-\([0-9][^ ]*\).*/\1/p'; }
+sig_known_for() { [ -r "$SIGS" ] && grep -qF "chromium-$1" "$SIGS" 2>/dev/null; }
+
+chromium_hold_since() {  # updates/reads $STATE/chromium-hold; echoes the since-date
+	cand=$1
+	hf=$STATE/chromium-hold
+	[ -n "$cand" ] || { rm -f "$hf"; return 0; }
+	if [ -r "$hf" ]; then
+		set -- $(cat "$hf")
+		if [ "${1:-}" = "$cand" ]; then echo "${2:-}"; return 0; fi
+	fi
+	t=$(today)
+	mkdir -p "$STATE" 2>/dev/null
+	printf '%s %s\n' "$cand" "$t" > "$hf"
+	echo "$t"
+}
+
+installed_hash() {
+	bid=; [ -r "$BUILD_ID_FILE" ] && bid=$(tr -d '\n' < "$BUILD_ID_FILE" 2>/dev/null)
+	h=$(apk info -v 2>/dev/null | sort | sha256sum 2>/dev/null | cut -c1-12)
+	[ -n "$h" ] || h=unknown
+	if [ -n "$bid" ]; then printf '%s+%s\n' "$bid" "$h"; else printf '%s\n' "$h"; fi
+}
+
+is_idle() {
+	[ -r "$IDLED_STATE" ] || return 1
+	read -r s _ < "$IDLED_STATE" 2>/dev/null
+	[ "$s" = blank ]
+}
+
+chromium_upgrade() {  # chromium_upgrade CANDVER patch|unpatched
+	cand=$1 mode=$2
+	old=$(pinned_chromium_ver)
+	command -v rc-service >/dev/null 2>&1 && rc-service kiosk stop >>"$LOG" 2>&1
+	sed -i 's/^chromium=.*/chromium/' "$WORLD" 2>/dev/null
+	apk upgrade chromium >>"$LOG" 2>&1; rc=$?
+	rm -f "$ES2_MARKER"
+	if [ $rc -eq 0 ]; then
+		sed -i "s/^chromium\$/chromium=$cand/" "$WORLD" 2>/dev/null
+		if [ "$mode" = patch ]; then
+			if command -v python3 >/dev/null 2>&1 && [ -r "$PATCH_TOOL" ]; then
+				if python3 "$PATCH_TOOL" "$CHROMIUM_BIN" --sidecar "$ES2_MARKER" --target-path "$CHROMIUM_BIN" >>"$LOG" 2>&1; then
+					log "chromium $cand: ES2 patch applied"
+				else
+					log "chromium $cand: ES2 patch NOT applied (signature mismatch); software rendering"
+				fi
+			else
+				log "chromium $cand: patch tool or python3 missing; software rendering"
+			fi
+		else
+			log "chromium $cand: taking the update with no known ES2 signature after the hold period; software rendering"
+			command -v tsx-chromium-es2 >/dev/null 2>&1 && tsx-chromium-es2 check >>"$LOG" 2>&1
+		fi
+		rm -f "$STATE/chromium-hold"
+	else
+		log "chromium upgrade to $cand FAILED (rc=$rc); re-pinning $old"
+		sed -i "s/^chromium\$/chromium=$old/" "$WORLD" 2>/dev/null
+	fi
+	command -v rc-service >/dev/null 2>&1 && rc-service kiosk start >>"$LOG" 2>&1
+}
+
+# ---- the daily check + install ---------------------------------------------
+
+do_check() {
+	mkdir -p "$RUN" "$STATE" 2>/dev/null
+	log "apk update"
+	apk update >>"$LOG" 2>&1 || log "WARNING: apk update failed"
+	sim=$(apk upgrade --simulate 2>>"$LOG")
+	pkglist=$(printf '%s\n' "$sim" | sed -n 's/.*Upgrading \([^ ]*\) (\([^ ]*\) -> \([^)]*\)).*/\1 \2 \3/p')
+	names=$(printf '%s\n' "$pkglist" | sed -n 's/^\([^ ]*\).*/\1/p')
+	pcount=0; [ -n "$pkglist" ] && pcount=$(printf '%s\n' "$pkglist" | grep -c .)
+	rb=0; needs_reboot "$names" && rb=1
+
+	oldver=$(pinned_chromium_ver)
+	candver=$(candidate_chromium_ver)
+	since=$(chromium_hold_since "$candver")
+	sig=0; [ -n "$candver" ] && sig_known_for "$candver" && sig=1
+	decision=$(chromium_decision "$candver" "$oldver" "$sig" "$since" "${HOLD_DAYS:-7}" "$(today)")
+	word=${decision%% *}
+	case $word in
+	patch|unpatched) pcount=$((pcount + 1));;
+	esac
+
+	plist=$(printf '%s\n' "$pkglist" | sed -n 's/^\([^ ]*\) \([^ ]*\) \([^ ]*\)$/\1 (\2 -> \3)/p' | tr '\n' ';' | sed 's/;$//; s/;/; /g')
+	set_fields "$STATE/fields" \
+		installed_hash="$(installed_hash)" \
+		pending_count="$pcount" \
+		pending_list="$plist" \
+		reboot_pending="$rb" \
+		chromium_pinned="$oldver" \
+		chromium_candidate="$candver" \
+		chromium_decision="$decision" \
+		chromium_held_since="$since" \
+		last_check="$(now_iso)"
+	write_update_json; write_ha_json
+	log "check: $pcount pending, reboot_pending=$rb, chromium=$decision"
+}
+
+do_install() {
+	f=$STATE/fields
+	pcount=$(get_field "$f" pending_count); [ -n "$pcount" ] || pcount=0
+	rb=$(get_field "$f" reboot_pending)
+	decision=$(get_field "$f" chromium_decision)
+	word=${decision%% *}
+	case $word in patch|unpatched) chromium_pending=1;; *) chromium_pending=0;; esac
+	if [ "$pcount" = 0 ] && [ "$chromium_pending" = 0 ]; then
+		log "install: nothing pending"
+		return 0
+	fi
+	set_fields "$f" in_progress=1; write_update_json; write_ha_json
+	log "installing (pending=$pcount reboot_needed=$rb chromium=$decision)"
+	apk upgrade >>"$LOG" 2>&1; rc=$?
+	[ $rc -eq 0 ] || log "apk upgrade FAILED rc=$rc"
+	case $word in
+	patch) chromium_upgrade "$(get_field "$f" chromium_candidate)" patch;;
+	unpatched) chromium_upgrade "$(get_field "$f" chromium_candidate)" unpatched;;
+	esac
+	set_fields "$f" in_progress=0 installed_hash="$(installed_hash)" last_install="$(now_iso)" \
+		last_result="$([ $rc -eq 0 ] && echo ok || echo "apk upgrade rc=$rc")"
+	write_update_json; write_ha_json
+	if [ "$rb" = 1 ] && [ "${REBOOT:-auto}" != never ] && in_window "$(nowhhmm)" "${WINDOW:-03:00-05:00}"; then
+		log "rebooting for a kernel/musl/openrc/busybox update"
+		mkdir -p "$STATE" 2>/dev/null; : > "$STATE/reboot-marker"
+		sync
+		reboot
+	elif [ "$rb" = 1 ]; then
+		log "reboot needed but outside the window (or REBOOT=never): staying up"
+	fi
+}
+
+do_tick() {
+	load_conf
+	if [ "$ENABLED" != 1 ]; then log "disabled (ENABLED != 1)"; return 0; fi
+	do_check
+	idle=0; is_idle && idle=1
+	inwin=0; in_window "$(nowhhmm)" "$WINDOW" && inwin=1
+	if [ "$inwin" = 1 ] && [ "$idle" = 1 ]; then
+		do_install
+	else
+		log "not installing now (in_window=$inwin idle=$idle)"
+	fi
+}
+
+cmd_status() {
+	f=$STATE/fields
+	if [ ! -r "$f" ]; then echo "tsx-autoupdate: no status yet (has it run since boot?)"; return 1; fi
+	echo "installed:      $(get_field "$f" installed_hash)"
+	echo "pending:        $(get_field "$f" pending_count) package(s)"
+	pl=$(get_field "$f" pending_list); [ -n "$pl" ] && echo "  $pl"
+	rb=$(get_field "$f" reboot_pending); echo "reboot pending: $([ "$rb" = 1 ] && echo yes || echo no)"
+	echo "chromium:       pinned $(get_field "$f" chromium_pinned), candidate $(get_field "$f" chromium_candidate), decision $(get_field "$f" chromium_decision)"
+	ch=$(get_field "$f" chromium_held_since); [ -n "$ch" ] && echo "  held since $ch"
+	echo "last check:     $(get_field "$f" last_check)"
+	echo "last install:   $(get_field "$f" last_install) ($(get_field "$f" last_result))"
+	echo "health:         $(get_field "$f" health)"
+	return 0
+}
+
+cmd_healthcheck() {
+	[ -e "$STATE/reboot-marker" ] || return 0
+	rm -f "$STATE/reboot-marker"
+	ok=1 msg=
+	if command -v rc-service >/dev/null 2>&1; then
+		rc-service kiosk status >/dev/null 2>&1 || { ok=0; msg="kiosk service not running"; }
+	fi
+	url=; [ -r "$KIOSK_CONF" ] && . "$KIOSK_CONF" 2>/dev/null
+	url=${KIOSK_URL:-$url}
+	if [ -n "$url" ] && command -v curl >/dev/null 2>&1; then
+		code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "$url" 2>/dev/null)
+		case $code in 2??|3??) ;; *) ok=0; msg="${msg:+$msg; }page not reachable (http ${code:-?})";; esac
+	fi
+	health=OK; [ "$ok" = 1 ] || health="FAILED: $msg"
+	set_fields "$STATE/fields" health="$health"
+	write_update_json; write_ha_json
+	log "post-update health check: $health"
+}
+
+main() {
+	case "${1:-}" in
+	__in_window) shift; in_window "$@";;
+	__needs_reboot) shift; needs_reboot "$@";;
+	__chromium_decision) shift; chromium_decision "$@";;
+	__write_status) write_update_json; write_ha_json;;
+	now) load_conf; do_check; do_install;;
+	check) load_conf; do_check;;
+	status) cmd_status;;
+	healthcheck) load_conf; cmd_healthcheck;;
+	''|cron) do_tick;;
+	*) echo "usage: tsx-autoupdate [now|check|status|healthcheck]" >&2; return 2;;
+	esac
+}
+main "$@"

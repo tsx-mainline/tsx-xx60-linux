@@ -6,14 +6,28 @@
 # manifest tying them together with a byte count and both sha256sums.
 #
 #   mk-v2-bundle.sh --root-img FILE --boot-img FILE --flavor lts|stable --out-dir DIR
+#
+# root_bytes is the ROOT.IMG's own (compact) size, not the eMMC p8 partition
+# size (mk-tsxroot-emmc.sh sizes root.img to content + margin, well under
+# p8's ~2.9 GiB -- see docs/boot.md). If ROOT has a sibling
+# ROOT.manifest-fragment (mk-tsxroot-emmc.sh's own output, next to the image
+# it built), its root_partition_min_bytes is carried into this manifest too,
+# so installer/steps/tsx-rescue-install can refuse an unexpectedly small p8
+# even though it no longer checks for an exact size match against root_bytes.
 set -euo pipefail
 ROOT= BOOT= FLAVOR= OUT=
-while [ $# -gt 0 ]; do case $1 in --root-img) ROOT=$2; shift;; --boot-img) BOOT=$2; shift;; --flavor) FLAVOR=$2; shift;; --out-dir) OUT=$2; shift;; *) sed -n '2,8p' "$0"; exit 2;; esac; shift; done
-[ -f "$ROOT" ] && [ -f "$BOOT" ] && [ -n "$FLAVOR" ] && [ -n "$OUT" ] || { sed -n '2,8p' "$0" >&2; exit 2; }
+while [ $# -gt 0 ]; do case $1 in --root-img) ROOT=$2; shift;; --boot-img) BOOT=$2; shift;; --flavor) FLAVOR=$2; shift;; --out-dir) OUT=$2; shift;; *) sed -n '2,14p' "$0"; exit 2;; esac; shift; done
+[ -f "$ROOT" ] && [ -f "$BOOT" ] && [ -n "$FLAVOR" ] && [ -n "$OUT" ] || { sed -n '2,14p' "$0" >&2; exit 2; }
 mkdir -p "$OUT"
 cp "$ROOT" "$OUT/root.img"; cp "$BOOT" "$OUT/boot.img"
 RSHA=$(sha256sum < "$OUT/root.img" | cut -d' ' -f1); BSHA=$(sha256sum < "$OUT/boot.img" | cut -d' ' -f1)
 RBYTES=$(stat -c %s "$OUT/root.img")
-{ echo "format=tsx-rescue-install-1"; echo "kernel_flavor=$FLAVOR"; echo "root_bytes=$RBYTES"; echo "root_sha256=$RSHA"; echo "boot_sha256=$BSHA"; } > "$OUT/manifest"
+MINPART=
+[ -f "$ROOT.manifest-fragment" ] && MINPART=$(sed -n 's/^root_partition_min_bytes=//p' "$ROOT.manifest-fragment" | tail -n 1)
+{
+	echo "format=tsx-rescue-install-1"; echo "kernel_flavor=$FLAVOR"; echo "root_bytes=$RBYTES"
+	[ -n "$MINPART" ] && echo "root_partition_min_bytes=$MINPART"
+	echo "root_sha256=$RSHA"; echo "boot_sha256=$BSHA"
+} > "$OUT/manifest"
 (cd "$OUT" && sha256sum root.img boot.img > SHA256SUMS)
-echo "mk-v2-bundle.sh: $OUT ($FLAVOR): root $RBYTES bytes ($RSHA), boot $(stat -c %s "$OUT/boot.img") bytes ($BSHA)"
+echo "mk-v2-bundle.sh: $OUT ($FLAVOR): root $RBYTES bytes ($RSHA)${MINPART:+, partition floor $MINPART bytes}, boot $(stat -c %s "$OUT/boot.img") bytes ($BSHA)"

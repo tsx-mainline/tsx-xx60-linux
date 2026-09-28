@@ -9,6 +9,7 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 TOOL="$HERE/tsx-usb-recovery"
 STOCK_SWITCH='usb start 0;if fatexist usb 0 jabil.txt; then run jabil_factory; else   fi;'
 FALLBACK_HOOK="${STOCK_SWITCH}if itest \${boot_retry} -lt 6; then run tsx_boot; fi"
+ONCE_HOOK="${STOCK_SWITCH}if itest \${tsx_once} -eq 1; then setenv tsx_once 0; saveenv; run tsx_boot; fi"
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 N=0 F=0
 ok() { echo "  ok: $*"; N=$((N+1)); }
@@ -81,6 +82,14 @@ TSX_ENV_DEV="$E2" TSX_RUN="$W" "$TOOL" enable >/dev/null
 TSX_ENV_DEV="$E2" TSX_RUN="$W" "$TOOL" disable >/dev/null
 [ "$(swval "$E2")" = "$FALLBACK_HOOK" ] && ok "disable on the fallback-guard hook: back to byte-identical"
 crcok "$E2" && ok "env CRC valid after the fallback-hook round trip"
+
+echo "== 7b. round trip on the once-guard hook variant (rescue-arm.sh's default, v2 one-shot)"
+E2B=$W/env2b.bin; mkenv "$E2B" "$ONCE_HOOK"
+TSX_ENV_DEV="$E2B" TSX_RUN="$W" "$TOOL" enable >/dev/null
+[ "$(swval "$E2B")" = "gset GPIOX_18 out high; msleep 500; ${ONCE_HOOK}" ] && ok "enable on the once-guard hook: VBUS prefix + hook byte-identical"
+TSX_ENV_DEV="$E2B" TSX_RUN="$W" "$TOOL" disable >/dev/null
+[ "$(swval "$E2B")" = "$ONCE_HOOK" ] && ok "disable on the once-guard hook: back to byte-identical"
+crcok "$E2B" && ok "env CRC valid after the once-hook round trip"
 
 echo "== 8. a bad CRC is refused"
 E3=$W/env3.bin; mkenv "$E3" "$STOCK_SWITCH"; printf '\xff' | dd of="$E3" bs=1 seek=100 conv=notrunc 2>/dev/null
