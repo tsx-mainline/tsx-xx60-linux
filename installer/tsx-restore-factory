@@ -92,6 +92,7 @@ PRISTINE_PUF_SHA=96438108e3175b66c09f1df284ded5fe155593ba06e069e154688b04f395e40
 ADMIN_PW=${TSX_ADMIN_PW:-}   # required before step 7 checks the Crestron console; see below
 ADMIN_USER=${TSX_ADMIN_USER:-admin}
 ENVPY="python3 $HERE/sdcard/tsx-env.py"
+. "$HERE/lib/tsx-rescue.sh"   # is_crestron_sshd (its discovery helpers are redefined below)
 usage() { sed -n '2,78p' "$0" >&2; }
 while [ $# -gt 0 ]; do case "$1" in
 	--bundle) BUNDLE=$2; shift 2;; --puf) PUF=$2; shift 2;; --env) ENVFILE=$2; shift 2;; --results) RESULTS=$2; shift 2;; --from-step) FROM_STEP=$2; shift 2;; --to-step) TO_STEP=$2; shift 2;;
@@ -129,10 +130,10 @@ ANDROID_IP=$PANEL
 set_rhost() { RHOST=$1; SSH="sshpass -p $RPW ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$RHOST"; }
 set_rhost "$PANEL"
 rescue_ip_from_log() { tr -d '\0' < "$SERLOG" | grep -a -o 'tsx-rescue: network: eth0 [0-9.]*' | tail -n 1 | awk '{print $NF}'; }
-ssh_ok() { $SSH true >/dev/null 2>&1; }
-in_rescue() { $SSH 'test -f /etc/tsx/rescue-image' >/dev/null 2>&1; }
+ssh_ok() { is_crestron_sshd "$RHOST" && return 1; $SSH true >/dev/null 2>&1; }
+in_rescue() { is_crestron_sshd "$RHOST" && return 1; $SSH 'test -f /etc/tsx/rescue-image' >/dev/null 2>&1; }
 # --- network-only (no UART) rescue-IP discovery -----------------------------
-ssh_test_rescue() { sshpass -p "$RPW" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3 "root@$1" 'test -f /etc/tsx/rescue-image' >/dev/null 2>&1; }
+ssh_test_rescue() { is_crestron_sshd "$1" && return 1; sshpass -p "$RPW" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3 "root@$1" 'test -f /etc/tsx/rescue-image' >/dev/null 2>&1; }
 find_rescue_by_mac() {  # MAC PREFIX: echo an IP in PREFIX.0/24 whose neighbor MAC matches (ip neigh, case-insensitive), or nothing
 	local mac=$1 prefix=$2
 	if command -v fping >/dev/null 2>&1; then fping -a -q -r0 -t200 -g "${prefix}.1" "${prefix}.254" >/dev/null 2>&1 || true

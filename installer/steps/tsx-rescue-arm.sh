@@ -170,7 +170,7 @@ log "backups in $BK"
 
 # 2. p1: golden slot + one-shot target, both <- rescue
 RSHA=$(sha256sum < "$RESCUE" | cut -d' ' -f1)
-if [ "$(sha256sum < "$MNT_P1/boot.img" 2>/dev/null | cut -d' ' -f1)" != "$RSHA" ]; then
+if [ "$(sha256sum 2>/dev/null < "$MNT_P1/boot.img" | cut -d' ' -f1)" != "$RSHA" ]; then
 	rm -f "$MNT_P1/boot.new"
 	if [ "$(df -Pk "$MNT_P1" | awk 'NR==2{print $4}')" -le $(( $(tsx_size "$RESCUE") / 1024 + 64 )) ]; then rm -f "$MNT_P1/boot.img"; sync; fi
 	cp "$RESCUE" "$MNT_P1/boot.new" && sync
@@ -180,7 +180,7 @@ if [ "$(sha256sum < "$MNT_P1/boot.img" 2>/dev/null | cut -d' ' -f1)" != "$RSHA" 
 else
 	log "p1:boot.img is already this rescue image ($RSHA)"
 fi
-if [ "$(sha256sum < "$MNT_P1/tsxboot.img" 2>/dev/null | cut -d' ' -f1)" != "$RSHA" ]; then
+if [ "$(sha256sum 2>/dev/null < "$MNT_P1/tsxboot.img" | cut -d' ' -f1)" != "$RSHA" ]; then
 	rm -f "$MNT_P1/tsxboot.new"
 	FREE=$(df -Pk "$MNT_P1" | awk 'NR==2{print $4}')
 	NEED=$(( $(tsx_size "$RESCUE") / 1024 + 256 ))

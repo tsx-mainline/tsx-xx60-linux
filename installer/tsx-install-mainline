@@ -70,7 +70,7 @@ log "== tsx-install-mainline v2: PANEL=$PANEL PAYLOAD=$PAYLOAD KERNEL=$KERNEL ua
 MPW=${TSX_MAINLINE_PW:-tsx}
 RPW=tsx   # the rescue's documented default (docs/recovery.md); never overridden here
 MSSH="sshpass -p $MPW ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$PANEL"
-is_mainline_kiosk() { local out; out=$($MSSH 'awk "\$2==\"/\"{print \$1}" /proc/mounts' 2>/dev/null) || return 1; [ "$out" = /dev/mmcblk1p8 ]; }
+is_mainline_kiosk() { local out; is_crestron_sshd "$PANEL" && return 1; out=$($MSSH 'awk "\$2==\"/\"{print \$1}" /proc/mounts' 2>/dev/null) || return 1; [ "$out" = /dev/mmcblk1p8 ]; }
 run_stream_at() {  # SSHCMD REMOTECMD: like tsx-restore-factory's run_stream, parameterised on the ssh command
 	local sshcmd=$1 cmd=$2 tmp rc
 	tmp=$(mktemp "$RESULTS.XXXXXX")

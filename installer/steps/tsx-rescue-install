@@ -122,7 +122,7 @@ GOT=$(dd if="$EBOOT" bs=1M count="$BOOT_MIB" 2>/dev/null | head -c "$(stat -c %s
 say "eMMC boot verified ($GOT)"
 
 # ---- 2. eMMC root (p8): write only the (compact) image, then grow it ------
-set_state "writing eMMC root (p8) 0%"
+set_state "writing eMMC root (p8)"
 ROOT_MIB=$((ROOT_BYTES / 1048576))
 say "discarding $EROOT, then writing root.img ($ROOT_MIB MiB; p8 itself is $((GOT_ROOT_BYTES / 1048576)) MiB, grown into below)"
 blkdiscard "$EROOT" 2>&1 || say "blkdiscard $EROOT failed (continuing)"

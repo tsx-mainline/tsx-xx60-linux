@@ -141,8 +141,25 @@ tsx_mkfs_tsxdata() {
 # parameterised (no globals) so both the v2 driver and, later, a rewritten
 # tsx-restore-factory can call these directly.
 
-# ssh_test_rescue HOST PW: true if HOST answers ssh as the rescue
+# ssh_server_id HOST: HOST's SSH identification line (e.g. SSH-2.0-dropbear,
+# SSH-2.0-OpenSSH_..., SSH-2.0-CrestronSSH), or nothing. No login is attempted.
+# Crestron's sshd sends its line only after the client's, so send one first.
+ssh_server_id() {
+	timeout 3 bash -c "exec 3<>/dev/tcp/$1/22 && printf 'SSH-2.0-tsx-probe\r\n' >&3 && head -c 64 <&3" 2>/dev/null \
+		| tr -d '\r\0' | head -n 1
+}
+# is_crestron_sshd HOST: true if HOST runs stock Android's Crestron sshd.
+# Never try a root/password login there: every failed login counts, and after
+# 3 (Crestron's SETLOGINATTEMPTS default) the sshd blocks the source IP for
+# 24 hours (SETLOCKOUTTIME), which also blocks steps/rootsh from that host.
+is_crestron_sshd() {
+	case "$(ssh_server_id "$1")" in *CrestronSSH*) return 0;; *) return 1;; esac
+}
+
+# ssh_test_rescue HOST PW: true if HOST answers ssh as the rescue (no login
+# attempt when HOST is Crestron's sshd, see is_crestron_sshd)
 ssh_test_rescue() {
+	is_crestron_sshd "$1" && return 1
 	sshpass -p "$2" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3 \
 		"root@$1" 'test -f /etc/tsx/rescue-image' >/dev/null 2>&1
 }

@@ -22,6 +22,7 @@ HERE=$(cd "$(dirname "$0")" && pwd); INSTALLER=$(cd "$HERE/.." && pwd)
 SERIALDIR=$(cd "$INSTALLER/../tools/bench" && pwd 2>/dev/null || echo "$INSTALLER/../tools/bench")
 UC="$SERIALDIR/uc.sh"
 ROOTSH="$INSTALLER/steps/rootsh"
+. "$INSTALLER/lib/tsx-rescue.sh"   # is_crestron_sshd: never try root/password logins on Crestron's sshd
 CRESTRONADMIN="$INSTALLER/steps/crestron-admin"
 usage() { sed -n '2,17p' "$0" >&2; }
 PANEL= UART_OPT=auto SSHSHELL= PORT=8079 WSIP= RESULTS= DRYRUN=0
@@ -46,7 +47,7 @@ esac
 log "== tsx-ensure-root: PANEL=$PANEL uart=$UART_OPT ($UART_MODE)"
 
 MSSH="sshpass -p ${TSX_MAINLINE_PW:-tsx} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$PANEL"
-is_mainline() { local out; out=$($MSSH uname -r 2>/dev/null) || return 1; case "$out" in [6-9].*|[1-9][0-9].*) return 0;; *) return 1;; esac; }
+is_mainline() { local out; is_crestron_sshd "$PANEL" && return 1; out=$($MSSH uname -r 2>/dev/null) || return 1; case "$out" in [6-9].*|[1-9][0-9].*) return 0;; *) return 1;; esac; }
 rootsh_ok() { local out; out=$(TSX_SSH_TIMEOUT=30 "$ROOTSH" "$PANEL" id 2>/dev/null) || true; grep -q '^uid=0(' <<<"$out"; }
 uart() { local w=5; if [ "$1" = -w ]; then w=$2; shift 2; fi; [ ${#1} -le 80 ] || die "UART command >80 chars: $1"; "$UC" -w "$w" "$1"; }
 wait_serial() { local pat=$1 timeout=$2; shift 2; local waited=0 poll=15 out a

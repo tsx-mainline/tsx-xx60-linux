@@ -172,6 +172,12 @@ set -- --ozone-platform=wayland \
 	--pull-to-refresh=0 --autoplay-policy=no-user-gesture-required \
 	--force-device-scale-factor="$KIOSK_SCALE" \
 	--renderer-process-limit=2 --disk-cache-size=67108864 --log-level=2
+# cache off the data partition (see KIOSK_CACHE_DIR in kiosk.conf); drop the
+# old copy inside the profile once, it would only take space on the card
+if [ -n "${KIOSK_CACHE_DIR:-}" ] && [ -d "$KIOSK_CACHE_DIR" ] && [ -w "$KIOSK_CACHE_DIR" ]; then
+	[ -z "$(ls -A "$KIOSK_CACHE_DIR")" ] && rm -rf "$KIOSK_PROFILE/Default/Cache" "$KIOSK_PROFILE/Default/Code Cache"
+	set -- "$@" --disk-cache-dir="$KIOSK_CACHE_DIR"
+fi
 # Chromium sandbox: user namespaces, or the setuid chrome-sandbox helper (needs
 # PID + net namespaces). The panel kernel has CONFIG_NAMESPACES off today
 # (see config/kernel-userland.config), so it runs with --no-sandbox until then.
