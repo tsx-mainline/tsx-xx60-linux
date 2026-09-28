@@ -4,7 +4,7 @@
 1. Container/file integrity for every vendor variant (CRCs, sizes, message
    boundaries: config 55 words, speaker 141 words, preset 29 words, EQ 6 words).
 2. Transaction-exact comparison of our cold start + unmute plan with the
-   vendor climax_hostsx 3.1 trace against NXP's TFA9890 simulator
+   vendor climax_hostsw 3.1 trace against NXP's TFA9890 simulator
    (golden/start-<variant>.trace, produced by tools/climax.sh -d dummy90).
 Run: python3 tests/test_tfa_dsp.py
 """

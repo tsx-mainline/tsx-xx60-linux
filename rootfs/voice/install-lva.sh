@@ -1,8 +1,8 @@
 #!/bin/sh
 # Install linux-voice-assistant (OHF-Voice, Home Assistant Assist satellite over
 # the ESPHome native API) into DESTROOT/opt/lva and the launcher
-# DESTROOT/usr/local/bin/linux-voice-assistant. Replaces wyoming-satellite
-# . Runs in the armv7 Alpine build container (mkrootfs.sh
+# DESTROOT/usr/local/bin/linux-voice-assistant. Runs in the armv7 Alpine
+# build container (mkrootfs.sh
 # qemu test); the target needs the Alpine packages listed under "voice" in
 # packages.txt (python3, py3-numpy, py3-protobuf, py3-cryptography,
 # py3-tzlocal, py3-aiohappyeyeballs, py3-zeroconf, py3-mpv + mpv-libs,

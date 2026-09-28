@@ -12,7 +12,7 @@ jobs:
       - name: build the test-runner image (busybox + bash + python3)
         run: docker build -t tsx-test -f ci/Dockerfile.test ci
       - name: ci/lint.sh - busybox sh -n, bash -n, py_compile, driver --help
-        run: docker run --rm -v "$PWD:$PWD" -w "$PWD" tsx-test bash ci/lint.sh
+        run: docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:$PWD" -w "$PWD" tsx-test bash ci/lint.sh
 
   # These host tests exercise real code against fake sysfs/loopback devices or
   # (for the loop-device ones) their OWN "docker run --privileged" call --

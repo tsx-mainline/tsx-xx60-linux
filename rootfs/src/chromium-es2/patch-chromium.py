@@ -312,7 +312,7 @@ def cmd_derive(a, sigs):
                              [od, "-d", "--triple=thumbv7a", f"--start-address={lo:#x}", f"--stop-address={hi:#x}", a.binary],
                              capture_output=True, text=True).stdout
         print(f"--- {os.path.basename(od)} around the site:")
-        print("\n".join(l for l in out.splitlines() if l.strip().startsxith(tuple("0123456789abcdef")) and ":" in l))
+        print("\n".join(l for l in out.splitlines() if l.strip().startswith(tuple("0123456789abcdef")) and ":" in l))
     key = a.name or f"chromium-{orig_sha[:12]}"
     entry = {"package": a.package or "", "sha256_orig": orig_sha, "sha256_patched": patched_sha,
              "offset": hex(c["offset"]), "vaddr": hex(c["vaddr"]), "kind": c["kind"],

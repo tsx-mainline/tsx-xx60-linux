@@ -1,0 +1,183 @@
+#!/bin/sh
+# xx60 mainline installer v2, step 2: runs INSIDE the mainline rescue system
+# (RAM root, busybox ash), pushed there by installer/tsx-install-mainline as
+# part of a bundle at /tmp/b (same delivery pattern as installer/tsx-restore-factory).
+# Writes the eMMC boot+root regions from pre-built images, deploys the TFA9890
+# DSP files and (optionally) KIOSK_URL into the new root, folds the SD card's
+# p5..p8 into p4 (tsxdata), and writes the FINAL env (see docs/boot.md "The v2
+# env state machine"). Never touches U-Boot itself; only the env at 1 MiB.
+#
+#   tsx-rescue-install check BUNDLE_DIR
+#   tsx-rescue-install run   BUNDLE_DIR [--yes]
+#
+# BUNDLE_DIR layout (built by the host, see installer/emmc/mk-tsxroot-emmc.sh
+# and installer/tsx-install-mainline):
+#   manifest              key=value: root_bytes, root_sha256, boot_sha256, kernel flavor
+#   root.img              ext4, exactly p8-sized (LABEL=tsxroot-emmc), OR
+#   root-url.txt          one line: an http URL serving that root.img. The root
+#                          image (~2.9 GiB) does not fit in the rescue's RAM
+#                          (~2 GiB), so the host driver serves it and this
+#                          script streams it straight onto p8 (wget -O - | dd);
+#                          the readback sha256 against the manifest verifies it.
+#   boot.img              the eMMC boot image (kernel+DTB+initramfs), <= 32 MiB
+#   tsx-rescue.sh          installer/lib/tsx-rescue.sh (pr_dd, tsx_env_apply, tsx_mbr_fold, tsx_mkfs_tsxdata)
+#   tsx-usb-recovery       installer/emmc/tsx-usb-recovery (copied verbatim, runs standalone)
+#   tfa/<variant>/stereo.cnt   (optional) TFA9890 DSP tuning files
+#   kiosk-url.txt          (optional) one line: the KIOSK_URL to set
+# Test hooks: TSX_EMMC/TSX_BOOT0 (as tsx-emmc-restore), TSX_RUN, TSX_SYSBLOCK
+# (card disk), TSX_STATUS (status-screen state file, default /run/tsx-install-state).
+set -eu
+RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
+say() { echo "tsx-rescue-install: $(date +%T 2>/dev/null) $*" >&2; }
+die() { say "ERROR: $*"; set_state "failed: $*"; exit 1; }
+CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,24p' "$0"; exit 2; }
+YES=0
+while [ $# -gt 0 ]; do case "$1" in --yes) YES=1;; *) die "unknown option $1";; esac; shift; done
+case "$CMD" in check|run) ;; *) sed -n '2,24p' "$0"; exit 2;; esac
+[ -f "$B/manifest" ] && grep -q '^format=tsx-rescue-install-1$' "$B/manifest" || die "$B is not a v2 install bundle (no manifest)"
+. "$B/tsx-rescue.sh"
+. /usr/share/tsx/tsx-lib.sh   # tsx_find_disk, TSX_MBR_P4_TYPE_OFFSET, TSX_ENV_OFFSET/SIZE (already on the rescue image)
+
+STATUS=${TSX_STATUS:-/run/tsx-install-state}
+set_state() { printf '%s\n' "$1" > "$STATUS" 2>/dev/null || true; }
+set_state "starting ($CMD)"
+
+conf() { sed -n "s/^$1=//p" "$B/manifest" | tail -n 1; }
+ROOT_BYTES=$(conf root_bytes); ROOT_SHA=$(conf root_sha256); BOOT_SHA=$(conf boot_sha256); FLAVOR=$(conf kernel_flavor)
+[ -n "$ROOT_BYTES" ] && [ -n "$ROOT_SHA" ] && [ -n "$BOOT_SHA" ] || die "manifest missing root_bytes/root_sha256/boot_sha256"
+[ -f "$B/boot.img" ] || die "$B missing boot.img"
+ROOT_URL=
+if [ ! -f "$B/root.img" ]; then
+	[ -f "$B/root-url.txt" ] || die "$B has neither root.img nor root-url.txt"
+	ROOT_URL=$(head -n 1 "$B/root-url.txt")
+	[ -n "$ROOT_URL" ] || die "$B/root-url.txt is empty"
+fi
+
+# ---- the eMMC: the mmcblk with a boot0 sibling (as tsx-emmc-restore) -------
+if [ -n "${TSX_EMMC:-}" ]; then EDEV=$TSX_EMMC; EBOOT0=${TSX_BOOT0:?TSX_BOOT0}
+else
+	EDEV=; for d in /sys/block/mmcblk[0-9]; do n=${d##*/}; [ -e "/sys/block/${n}boot0" ] && { EDEV=/dev/$n; EBOOT0=/dev/${n}boot0; break; }; done
+	[ -n "$EDEV" ] || die "no mmcblk with a boot0 area (the eMMC) found"
+fi
+EBOOT=${EDEV}p7 EROOT=${EDEV}p8
+[ -b "$EBOOT" ] && [ -b "$EROOT" ] || die "$EBOOT / $EROOT not found (blkdevparts not on the kernel cmdline?)"
+GOT_ROOT_SECT=$(cat "/sys/class/block/${EROOT#/dev/}/size" 2>/dev/null || echo 0)
+[ "$((GOT_ROOT_SECT * 512))" = "$ROOT_BYTES" ] || die "$EROOT is $((GOT_ROOT_SECT * 512)) bytes, manifest root_bytes=$ROOT_BYTES"
+grep -q "^$EBOOT \| $EBOOT \|^$EROOT \| $EROOT " /proc/mounts && die "$EBOOT or $EROOT is mounted: refusing to write the eMMC"
+
+# ---- the card (SD): tsx_find_disk from tsx-lib.sh --------------------------
+tsx_find_disk || die "no card with the Crestron/card-stage partition layout found"
+CWHOLE=$WHOLE CP1=$P1 CP4=$P4
+
+say "eMMC $EDEV: boot $EBOOT ($ROOT_BYTES bytes wanted on root), card $CWHOLE ($TSX_DISK_LAYOUT layout)"
+if [ -z "$ROOT_URL" ]; then
+	say "checking the bundle (sha256 of root.img/boot.img; this can take a minute)"
+	[ "$(sha256sum < "$B/root.img" | cut -d' ' -f1)" = "$ROOT_SHA" ] || die "root.img sha256 mismatch (corrupt transfer?)"
+else
+	say "checking the bundle (boot.img sha256; root.img is streamed from $ROOT_URL and verified by readback after the write)"
+	GOTN=$(wget -q -O - "$ROOT_URL" 2>/dev/null | head -c 4096 | wc -c)
+	[ "$GOTN" = 4096 ] || die "cannot read the root image from $ROOT_URL (got $GOTN bytes)"
+fi
+[ "$(sha256sum < "$B/boot.img" | cut -d' ' -f1)" = "$BOOT_SHA" ] || die "boot.img sha256 mismatch (corrupt transfer?)"
+say "bundle OK (flavor: ${FLAVOR:-unknown})"
+
+if [ "$CMD" = check ]; then say "check OK (nothing written)"; set_state "checked OK"; exit 0; fi
+if [ $YES != 1 ]; then
+	printf 'Type INSTALL to write the eMMC (boot+root) and fold the card of this unit: ' >&2
+	read -r ans; [ "$ans" = INSTALL ] || die "not confirmed"
+fi
+
+# ---- 1. eMMC boot (p7), pr_dd + readback ------------------------------------
+set_state "writing eMMC boot (p7)"
+BOOT_MIB=$(( ($(stat -c %s "$B/boot.img") + 1048575) / 1048576 ))
+say "writing boot.img -> $EBOOT ($BOOT_MIB MiB)"
+pr_dd "$EBOOT" 0 "$BOOT_MIB" "eMMC boot" -- if="$B/boot.img" bs=1M conv=fsync || die "write to $EBOOT failed"
+sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+GOT=$(dd if="$EBOOT" bs=1M count="$BOOT_MIB" 2>/dev/null | head -c "$(stat -c %s "$B/boot.img")" | sha256sum | cut -d' ' -f1)
+[ "$GOT" = "$BOOT_SHA" ] || die "eMMC boot readback mismatch ($GOT != $BOOT_SHA)"
+say "eMMC boot verified ($GOT)"
+
+# ---- 2. eMMC root (p8): pre-built to the exact partition size --------------
+set_state "writing eMMC root (p8) 0%"
+ROOT_MIB=$((ROOT_BYTES / 1048576))
+say "discarding $EROOT, then writing root.img ($ROOT_MIB MiB)"
+blkdiscard "$EROOT" 2>&1 || say "blkdiscard $EROOT failed (continuing)"
+if [ -z "$ROOT_URL" ]; then
+	pr_dd "$EROOT" 0 "$ROOT_MIB" "eMMC root" -- if="$B/root.img" bs=1M conv=fsync || die "write to $EROOT failed"
+else
+	# sequential writes of whatever the pipe delivers: correct without
+	# iflag=fullblock; a short or failed download is caught by the readback
+	wget -q -O - "$ROOT_URL" | pr_dd "$EROOT" 0 "$ROOT_MIB" "eMMC root" -- bs=1M conv=fsync || die "write to $EROOT failed"
+fi
+sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+set_state "verifying eMMC root"
+GOT=$(dd if="$EROOT" bs=1M count="$ROOT_MIB" 2>/dev/null | sha256sum | cut -d' ' -f1)
+[ "$GOT" = "$ROOT_SHA" ] || die "eMMC root readback mismatch ($GOT != $ROOT_SHA)"
+say "eMMC root verified ($GOT)"
+
+# ---- 3. deploy TFA9890 DSP files + KIOSK_URL into the new root -------------
+set_state "configuring the new root"
+MNT=$RUN/newroot; mkdir -p "$MNT"
+mount -t ext4 -o rw "$EROOT" "$MNT" || die "cannot mount $EROOT"
+if [ -d "$B/tfa" ]; then
+	for v in "$B"/tfa/*/; do
+		[ -d "$v" ] || continue
+		variant=$(basename "$v")
+		mkdir -p "$MNT/usr/local/share/tsx/tfa9890/$variant"
+		cp "$v/stereo.cnt" "$MNT/usr/local/share/tsx/tfa9890/$variant/stereo.cnt" 2>/dev/null \
+			&& say "  tfa: $variant/stereo.cnt deployed" \
+			|| say "  WARNING: tfa: $variant/stereo.cnt copy failed (non-fatal, see docs/install.md)"
+	done
+fi
+if [ -f "$B/kiosk-url.txt" ] && [ -f "$MNT/etc/kiosk.conf" ]; then
+	URL=$(head -n 1 "$B/kiosk-url.txt")
+	sed -i "s|^KIOSK_URL=.*|KIOSK_URL=\"$URL\"|" "$MNT/etc/kiosk.conf" && say "  KIOSK_URL set: $URL"
+fi
+sync; umount "$MNT"
+
+# ---- 4. card fold: p5..p8 -> p4 tsxdata (tsx-rescue.sh, TSX_MBR_P4_TYPE_OFFSET from tsx-lib.sh) --
+set_state "folding the card (p5..p8 -> p4 tsxdata)"
+if [ "$TSX_DISK_LAYOUT" = stock ]; then
+	tsx_mbr_fold "$CWHOLE" "$TSX_MBR_P4_TYPE_OFFSET" || die "MBR fold failed"
+	# the kernel keeps the old table (p4 = the 1 KiB extended stub, p5..p8) until
+	# it is re-read; without this, p4 would still be the stub below
+	blockdev --rereadpt "$CWHOLE" 2>/dev/null || partx -u "$CWHOLE" 2>/dev/null || true
+	sleep 1
+	tsx_find_disk || true   # re-detect: the layout just changed stock -> card, P4 now names the new primary partition
+	[ "$TSX_DISK_LAYOUT" = card ] || die "the kernel did not pick up the folded card table (blockdev --rereadpt failed?); the MBR itself is folded: re-run this step once the table is re-read"
+	CP4=$P4
+else
+	say "card already folded (layout=card): p4 is $CP4"
+fi
+P4SECT=$(cat "/sys/class/block/${CP4##*/}/size" 2>/dev/null || echo 0)
+[ "$P4SECT" -gt 131072 ] || die "$CP4 is only $P4SECT sectors: refusing to mkfs it as tsxdata"
+say "card p4 (tsxdata): $CP4, $((P4SECT / 2048)) MiB"
+MKUUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null) || die "cannot generate a UUID for tsxdata"
+say "mkfs.ext4 -L tsxdata -U $MKUUID $CP4"
+tsx_mkfs_tsxdata "$CP4" "$MKUUID" || die "mkfs of $CP4 (tsxdata) failed"
+
+# ---- 5. final env: one verified write (docs/boot.md "The v2 env state machine") --
+set_state "finalizing (env + tsx-usb-recovery)"
+# fw_env.config wants hex offset/size (see installer/steps/tsx-rescue-arm.sh for why)
+printf '%s 0x%x 0x%x\n' "$CWHOLE" "$TSX_ENV_OFFSET" "$TSX_ENV_SIZE" > "$RUN/tsx-final-env.cfg"
+WANT="boot_retry 0
+golden_boot_retry 0
+DataRecoveryDone 1"
+OUT=$(tsx_env_apply "$RUN/tsx-final-env.cfg" "$WANT" 2>&1) || die "$OUT"
+say "$OUT"
+if [ -x "$B/tsx-usb-recovery" ]; then
+	sh "$B/tsx-usb-recovery" enable 2>&1 | while IFS= read -r l; do say "  usb-recovery: $l"; done   # finds the card disk itself (p1/p2 offsets), same as tsx_find_disk
+else
+	say "WARNING: $B/tsx-usb-recovery missing; USB recovery not (re-)armed. Run it by hand later."
+fi
+mount -t vfat "$CP1" "$RUN/p1" 2>/dev/null || { mkdir -p "$RUN/p1"; mount -t vfat "$CP1" "$RUN/p1"; }
+touch "$RUN/p1/tsxboot.off"; sync; umount "$RUN/p1"
+say "p1:tsxboot.off written: the hook is disabled, stock bootcmd now boots eMMC boot (p7) directly"
+
+set_state "done, rebooting"
+say "DONE. Rebooting into the kiosk from the eMMC (boot p7, root p8)."
+sync
+# in the background, so the host's ssh session ends cleanly instead of hanging
+# on a connection the reboot never closes (same pattern as tsx-restore-factory)
+(sleep 3; reboot -f) >/dev/null 2>&1 </dev/null &
+exit 0

@@ -1,6 +1,6 @@
 #!/bin/sh
-# Re-syncs the installer stage-2 tool set (tsx-autoinstall incl. the R1 p4
-# order, the factory restore tsx-factory-restore + crestron-fs.sh, and the
+# Re-syncs the installer stage-2 tool set (tsx-autoinstall incl. the card-stage
+# p4 order, the factory restore tsx-factory-restore + crestron-fs.sh, and the
 # shared tsx-lib.sh) from their canonical source
 # locations (this dir, installer/android, installer/factory)
 # into the rootfs switch_root initramfs overlay, in case any of them was

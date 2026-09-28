@@ -10,7 +10,7 @@ ROM check + patch, soft mute, config / speaker / preset / EQ messages,
 SBSL=1 ("configured"), calibration check, and finally unmute.
 
 The register/xmem/RPC sequence is verified byte for byte against a trace of
-the vendor climax_hostsx run under qemu against NXP's own TFA9890 simulator
+the vendor climax_hostsw run under qemu against NXP's own TFA9890 simulator
 ("-d dummy90"), see tests/test_tfa_dsp.py and golden/*.trace.
 
 Protocol facts are taken from the vendor trace and the GPL-2.0 NXP tfa98xx

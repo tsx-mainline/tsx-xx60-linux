@@ -76,7 +76,7 @@ alsa-utils
 avahi
 avahi-compat-libdns_sd
 # voice : Assist satellite linux-voice-assistant (ESPHome API,
-# installed by voice/install-lva.sh; replaces wyoming-satellite): python3 +
+# installed by voice/install-lva.sh): python3 +
 # zeroconf, numpy, protobuf, cryptography (aioesphomeapi imports), tzlocal,
 # aiohappyeyeballs, libmpv via python-mpv (TTS / media playback on ALSA)
 python3

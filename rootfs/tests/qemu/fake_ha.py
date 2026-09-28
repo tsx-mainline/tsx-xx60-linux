@@ -109,7 +109,7 @@ async def main():
     info = await c.device_info()
     log(f"Master at connect: {vol('Master')}")
     log("device_info:", info.name, "|", info.friendly_name, "|", info.model, "| flags", info.voice_assistant_feature_flags)
-    check("ESPHome API connect + device_info (name lva-*)", info.name.startsxith("lva-"))
+    check("ESPHome API connect + device_info (name lva-*)", info.name.startswith("lva-"))
     check("voice assistant feature flags set", bool(info.voice_assistant_feature_flags))
     entities, _services = await c.list_entities_services()
     kinds = sorted({type(e).__name__ for e in entities})

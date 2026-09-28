@@ -44,7 +44,7 @@ cat /opt/lva/VERSION
 cat /opt/lva/../lva/lib/pymicro_wakeword/lib/../../../VERSION >/dev/null 2>&1
 P="env PYTHONPATH=/opt/lva/shim:/opt/lva/app:/opt/lva/lib python3"
 check "all LVA modules import (aioesphomeapi, zeroconf, mpv, numpy, netifaces2, websockets 12)" \
-	$P -c 'import linux_voice_assistant.__main__, linux_voice_assistant.satellite, linux_voice_assistant.peripheral_api, mpv, netifaces, websockets; assert websockets.__version__.startsxith("12"), websockets.__version__; print("import ok, aioesphomeapi", __import__("importlib.metadata").metadata.version("aioesphomeapi"))'
+	$P -c 'import linux_voice_assistant.__main__, linux_voice_assistant.satellite, linux_voice_assistant.peripheral_api, mpv, netifaces, websockets; assert websockets.__version__.startswith("12"), websockets.__version__; print("import ok, aioesphomeapi", __import__("importlib.metadata").metadata.version("aioesphomeapi"))'
 
 echo "--- TensorFlow Lite C (musl armv7 build) + microWakeWord on the upstream test samples"
 pos=0; neg=0

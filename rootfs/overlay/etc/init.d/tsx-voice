@@ -1,6 +1,6 @@
 #!/sbin/openrc-run
 # Home Assistant Assist voice satellite: linux-voice-assistant (ESPHome native
-# API, port 6053; replaces wyoming-satellite), /etc/tsx/voice.conf.
+# API, port 6053), /etc/tsx/voice.conf.
 # Not in a runlevel by default: "tsx-audio enable voice".
 description="Assist voice satellite (linux-voice-assistant, ESPHome API)"
 supervisor=supervise-daemon

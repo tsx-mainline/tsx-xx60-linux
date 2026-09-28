@@ -12,7 +12,6 @@ PRINT=${TSX_VOICE_PRINT:-0}; [ "${1-}" = --print ] && PRINT=1
 [ -r "$CONF" ] && . "$CONF"
 case $WAKE in
 ptt|local) ;;
-ha|uri) echo "tsx-voice-run: WAKE=$WAKE was a wyoming-satellite mode; using local" >&2; WAKE=local;;
 *) echo "tsx-voice-run: WAKE must be ptt or local" >&2; exit 1;;
 esac
 case $WAKE_WORD in ok_nabu) WAKE_WORD=okay_nabu;; esac   # audio default name

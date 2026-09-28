@@ -36,7 +36,7 @@ assert zlib.crc32(b[4:]) & 0xffffffff == struct.unpack('<I', b[:4])[0], 'env CRC
 f.seek(0); mbr = f.read(512); st, ln = struct.unpack_from('<II', mbr, 446 + 8)
 assert mbr[446 + 4] != 0 and st == 81920, 'MBR entry 1'
 env = dict(x.split('=', 1) for x in b[4:].split(b'\0\0')[0].decode('latin1').split('\0') if '=' in x)
-assert 'run tsx_boot' in env['switch_bootmode'] and env['tsx_boot'].startsxith('mmcinfo;')
+assert 'run tsx_boot' in env['switch_bootmode'] and env['tsx_boot'].startswith('mmcinfo;')
 out = subprocess.run(['mcopy', '-n', '-i', '%s@@%d' % (img, st * 512), '::tsxboot.img', '/dev/stdout'],
                      capture_output=True, env=dict(os.environ, MTOOLS_SKIP_CHECK='1')).stdout
 assert out[:8] == b'ANDROID!', 'tsxboot.img header'

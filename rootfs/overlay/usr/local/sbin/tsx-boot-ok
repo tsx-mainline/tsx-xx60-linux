@@ -19,14 +19,14 @@ mode=${1:-write}
 die() { echo "tsx-boot-ok: $*" >&2; exit 1; }
 
 # find the disk: "emmc" = the MMC-type device that has boot0 hw partitions;
-# "sd" = the SD-class device holding the Crestron MBR or layout R1
+# "sd" = the SD-class device holding the Crestron MBR or the card layout
 disk=
 for d in /sys/block/mmcblk[0-9]; do
 	[ -e "$d" ] || continue
 	t=$(cat "$d/device/type" 2>/dev/null || true)
 	case "$ENV_DISK" in
 	emmc) [ "$t" = MMC ] && [ -e "${d}boot0" ] && disk=/dev/${d##*/};;
-	# p1 at 81920 and p2 at 206849: the Crestron MBR (p5 = rootfs) and layout R1
+	# p1 at 81920 and p2 at 206849: the Crestron MBR (p5 = rootfs) and the card layout
 	# (p2 = rootfs, no p5; installer) alike
 	sd) [ -e "$d/${d##*/}p2" ] && [ "$(cat "$d/${d##*/}p1/start" 2>/dev/null)" = 81920 ] && [ "$(cat "$d/${d##*/}p2/start")" = 206849 ] && disk=/dev/${d##*/};;
 	/dev/*) disk=$ENV_DISK;;

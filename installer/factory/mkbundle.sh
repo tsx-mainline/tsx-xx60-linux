@@ -22,7 +22,8 @@
 #                                       tsx-emmc-restore checks boot0 is unchanged by the run
 #
 #   mkbundle.sh --puf FILE --env SRC --out DIR [--emmc-raw FILE --boot0 FILE]
-#               [--puf-sha256 HEX] [--emmc-sha256 HEX] [--boot0-sha256 HEX] [--root-ssh FILE]
+#               [--puf-sha256 HEX] [--emmc-sha256 HEX] [--boot0-sha256 HEX]
+#               [--sshshell FILE | --stock-sshshell]
 #
 #   --puf       the Crestron package (pristine: sha256 96438108...; the copy at the
 #               project root, b027097c..., has a modified system.img)
@@ -32,16 +33,30 @@
 #               model); the mainline hook is removed (tsx-env.py unhook)
 #   --emmc-raw  optional: the unit's raw eMMC image (zcat of captures/tsw-1060-unitB/emmc/*.img.gz)
 #   --boot0     optional (with --emmc-raw): the unit's mmcblk1boot0 image
-#   --root-ssh  optional: a patched /system/bin/sshShell.sh (out/sshShell.sh) baked
-#               into system.img with debugfs -w (no mount, no root needed on the host);
-#               the original inode's mode/uid/gid and all extended attributes (security.selinux)
-#               are read first and put back on the new inode, then verified (e2fsck -fn, byte
-#               compare, stat, ea_list). Without it a factory-restored unit needs the UART to
-#               get root over ssh (see installer/steps/rootsh); with it, `ssh -tt $TSX_ADMIN_USER@panel
-#               rootsh` works right after the restore, no UART. system.img is used both for
-#               the eMMC "system" region and for card p2 (golden /system): the patch is in both.
+# Root over ssh (DEFAULT): /system/bin/sshShell.sh inside the .puf's own system.img
+#               gets a `rootsh` branch: the interactive (tty) branch's single line
+#                 /system/bin/telnetSSHProxy SSH $1
+#               becomes
+#                 if [ "$command" == "rootsh" ]; then /system/bin/bash -l;
+#                 else /system/bin/telnetSSHProxy SSH $1; fi
+#               (5 lines, same indentation); the rest of the file is unchanged and this is
+#               verified (diff against the stock file). A firmware whose sshShell.sh does not
+#               have that line right after `if [ -t $fd ]; then` is refused (unknown or
+#               already modified image: use the pristine .puf, --sshshell or --stock-sshshell).
+#               Nothing from the firmware is kept in this repo: the patch is the awk recipe
+#               below. `ssh -tt $TSX_ADMIN_USER@panel rootsh` then gets root right after the
+#               restore, no UART (installer/steps/rootsh); the Crestron console is unchanged.
+#   --sshshell  optional: put FILE (your own sshShell.sh) in as is instead of patching the
+#               image's copy. (Old forms `--root-ssh` / `--root-ssh FILE` still work.)
+#   --stock-sshshell  optional: leave system.img byte-identical to the .puf (no rootsh; root
+#               over ssh after the restore then needs the UART)
+#               Either way a new file goes into system.img with debugfs -w (no mount, no root
+#               needed on the host); the original inode's mode/uid/gid and all extended
+#               attributes (security.selinux) are read first and put back on the new inode,
+#               then verified (e2fsck -fn, byte compare, stat, ea_list). system.img is used both
+#               for the eMMC "system" region and for card p2 (golden /system): the patch is in both.
 # Output DIR: everything tsx-factory-restore (card) and tsx-emmc-restore (eMMC)
-# need, plus factory.manifest (card, puf-tool format; --root-ssh: system.img's file line
+# need, plus factory.manifest (card, puf-tool format; rootsh patch: system.img's file line
 # reflects the patched image, plus a harmless system_patch= line), emmc.manifest (ditto),
 # uboot-check.txt, env-identity.txt, puf.info, SHA256SUMS. Nothing here touches a panel.
 set -euo pipefail
@@ -49,16 +64,17 @@ HERE=$(cd "$(dirname "$0")" && pwd); WORK=$(cd "$HERE/.." && pwd)
 ENVPY="python3 $WORK/sdcard/tsx-env.py"
 die() { echo "mkbundle: ERROR: $*" >&2; exit 1; }
 say() { echo "mkbundle: $*" >&2; }
-PUF= RAW= BOOT0= ENVSRC= OUT= PUFSHA= RAWSHA= B0SHA= ROOTSSH=
+PUF= RAW= BOOT0= ENVSRC= OUT= PUFSHA= RAWSHA= B0SHA= ROOTSSH=1 SSHSHELL=
 while [ $# -gt 0 ]; do case $1 in
 	--puf) PUF=$2; shift;; --emmc-raw) RAW=$2; shift;; --boot0) BOOT0=$2; shift;; --env) ENVSRC=$2; shift;;
 	--out) OUT=$2; shift;; --puf-sha256) PUFSHA=$2; shift;; --emmc-sha256) RAWSHA=$2; shift;; --boot0-sha256) B0SHA=$2; shift;;
-	--root-ssh) ROOTSSH=$2; shift;;
-	*) sed -n '2,46p' "$0" >&2; exit 2;; esac; shift; done
-[ -n "$PUF" ] && [ -n "$ENVSRC" ] && [ -n "$OUT" ] || { sed -n '2,46p' "$0" >&2; exit 2; }
+	--root-ssh) ROOTSSH=1; case ${2:-} in ""|--*) ;; *) SSHSHELL=$2; shift;; esac;;   # old form: --root-ssh FILE
+	--sshshell) ROOTSSH=1; SSHSHELL=$2; shift;; --stock-sshshell) ROOTSSH=; SSHSHELL=;;
+	*) sed -n '2,61p' "$0" >&2; exit 2;; esac; shift; done
+[ -n "$PUF" ] && [ -n "$ENVSRC" ] && [ -n "$OUT" ] || { sed -n '2,61p' "$0" >&2; exit 2; }
 [ -n "$RAW" ] && [ -n "$BOOT0" ] && BACKUP=1 || BACKUP=0
 [ -z "$RAW$BOOT0" ] || [ $BACKUP = 1 ] || die "--emmc-raw and --boot0 go together"
-for f in "$PUF" "$ENVSRC" $RAW $BOOT0 $ROOTSSH; do [ -f "$f" ] || die "$f: no such file"; done
+for f in "$PUF" "$ENVSRC" $RAW $BOOT0 $SSHSHELL; do [ -f "$f" ] || die "$f: no such file"; done
 sha() { sha256sum < "$1" | cut -d' ' -f1; }
 M=1048576
 # eMMC layout as U-Boot prints it (the eMMC-migration notes): name offset_MiB length_MiB
@@ -86,12 +102,36 @@ UNIT=$(sed -n 's/^unit=//p' "$OUT/factory.manifest")
 
 ROOTSSH_NOTE=
 if [ -n "$ROOTSSH" ]; then
-say "2/7 baking --root-ssh into system.img (debugfs -w: no mount, no root; lands on card p2 too)"
-command -v debugfs >/dev/null || die "debugfs (e2fsprogs) missing (--root-ssh)"
+say "2/7 rootsh patch of sshShell.sh in system.img (debugfs -w: no mount, no root; lands on card p2 too)"
+command -v debugfs >/dev/null || die "debugfs (e2fsprogs) missing (rootsh patch; --stock-sshshell skips it)"
 SIMG=$OUT/system.img; SPATH=/bin/sshShell.sh
 stat_field() { sed -n "s/.*$2: *\\([0-9]\\{1,7\\}\\).*/\\1/p" <<<"$1" | head -n1; }   # $1=stat output $2=field name
-STOCK_SHA=$(debugfs -R "cat $SPATH" "$SIMG" 2>/dev/null | sha256sum | cut -d' ' -f1)
-[ -n "$STOCK_SHA" ] || die "debugfs cat $SPATH failed (no such file in system.img?)"
+STOCKF=$OUT/.sshShell.stock; NEWF=$OUT/.sshShell.new
+debugfs -R "cat $SPATH" "$SIMG" > "$STOCKF" 2>/dev/null && [ -s "$STOCKF" ] || die "debugfs cat $SPATH failed (no such file in system.img?)"
+STOCK_SHA=$(sha "$STOCKF")
+if [ -n "$SSHSHELL" ]; then
+	cp "$SSHSHELL" "$NEWF"; NEWSRC="$SSHSHELL (--sshshell, used as is)"
+else
+	# the image's own file + the rootsh branch (see "Root over ssh" above)
+	grep -qF 'command=${2%%" "*}' "$STOCKF" || die "$SPATH in system.img does not set \$command the stock way: unknown firmware (use --sshshell FILE)"
+	grep -qF '"rootsh"' "$STOCKF" && die "$SPATH in system.img already mentions rootsh: already modified image (use the pristine .puf, or --sshshell FILE)"
+	debugfs -R "stat /bin/bash" "$SIMG" 2>/dev/null | grep -q 'Type: regular' || die "system.img has no /system/bin/bash for the rootsh branch"
+	awk '
+		tty && /^[ \t]*\/system\/bin\/telnetSSHProxy SSH [$]1[ \t]*$/ {
+			match($0, /^[ \t]*/); i = substr($0, 1, RLENGTH)
+			print i "if [ \"$command\" == \"rootsh\" ]; then"; print i "  /system/bin/bash -l"; print i "else"
+			print i "  /system/bin/telnetSSHProxy SSH $1"; print i "fi"; n++; tty = 0; next }
+		{ tty = ($0 ~ /^if \[ -t [$]fd \]; then[ \t]*$/); print }
+		END { exit(n == 1 ? 0 : 3) }' "$STOCKF" > "$NEWF" || die "$SPATH in system.img has no single '/system/bin/telnetSSHProxy SSH \$1' line right after 'if [ -t \$fd ]; then': unknown or already modified firmware (use the pristine .puf, or --sshshell FILE)"
+	# verify: exactly that one line replaced by the 5-line block, nothing else changed
+	D=$(diff "$STOCKF" "$NEWF" || true); IND=$(grep -m1 '^[[:space:]]*/system/bin/telnetSSHProxy SSH \$1[[:space:]]*$' "$STOCKF" | sed 's|/system/bin/telnetSSHProxy.*||')
+	EXP=$(printf '< %s\n---\n> %s\n> %s\n> %s\n> %s\n> %s' "$(grep -m1 '^[[:space:]]*/system/bin/telnetSSHProxy SSH \$1[[:space:]]*$' "$STOCKF")" \
+		"${IND}if [ \"\$command\" == \"rootsh\" ]; then" "${IND}  /system/bin/bash -l" "${IND}else" "${IND}  /system/bin/telnetSSHProxy SSH \$1" "${IND}fi")
+	grep -qE '^[0-9]+c[0-9]+,[0-9]+$' <<<"$(head -n1 <<<"$D")" && [ "$(tail -n +2 <<<"$D")" = "$EXP" ] || die "rootsh patch verification failed: diff stock/patched is not the expected one-line -> 5-line change: $D"
+	[ "$(wc -l < "$NEWF")" = $(( $(wc -l < "$STOCKF") + 4 )) ] || die "rootsh patch verification failed: line count"
+	NEWSRC="the image's own $SPATH + rootsh branch (diff verified: 1 line -> 5)"
+	say "  rootsh patch (diff stock -> patched):"; printf '%s\n' "$D" | sed 's/^/mkbundle:     /' >&2
+fi
 ST=$(debugfs -R "stat $SPATH" "$SIMG" 2>&1)
 OMODE=$(stat_field "$ST" Mode); OUID=$(stat_field "$ST" User); OGID=$(stat_field "$ST" Group)
 [ -n "$OMODE" ] && [ -n "$OUID" ] && [ -n "$OGID" ] || die "could not parse stat of $SPATH in system.img"
@@ -100,22 +140,22 @@ XD=$OUT/.xattr; rm -rf "$XD"; mkdir -p "$XD"
 for ea in $EANAMES; do debugfs -R "ea_get -f $XD/$ea $SPATH $ea" "$SIMG" >/dev/null 2>&1 || die "ea_get $ea on $SPATH failed"; done
 say "  stock $SPATH: mode=0$OMODE uid=$OUID gid=$OGID xattrs=[${EANAMES:-none}] sha256=$STOCK_SHA"
 debugfs -w -R "rm $SPATH" "$SIMG" >/dev/null 2>&1 || die "debugfs rm $SPATH failed"
-debugfs -w -R "write $ROOTSSH $SPATH" "$SIMG" >/dev/null 2>&1 || die "debugfs write $SPATH failed"
+debugfs -w -R "write $NEWF $SPATH" "$SIMG" >/dev/null 2>&1 || die "debugfs write $SPATH failed"
 FULLMODE=$(( 8#100000 + 8#$OMODE ))
 debugfs -w -R "sif $SPATH mode $FULLMODE" "$SIMG" >/dev/null 2>&1 || die "sif mode failed"
 debugfs -w -R "sif $SPATH uid $OUID" "$SIMG" >/dev/null 2>&1 || die "sif uid failed"
 debugfs -w -R "sif $SPATH gid $OGID" "$SIMG" >/dev/null 2>&1 || die "sif gid failed"
 for ea in $EANAMES; do debugfs -w -R "ea_set -f $XD/$ea $SPATH $ea" "$SIMG" >/dev/null 2>&1 || die "ea_set $ea on $SPATH failed"; done
 rm -rf "$XD"
-e2fsck -fn "$SIMG" >/dev/null 2>&1 || die "system.img fails e2fsck -fn after the --root-ssh patch"
-debugfs -R "cat $SPATH" "$SIMG" 2>/dev/null | cmp -s - "$ROOTSSH" || die "$SPATH in system.img does not match $ROOTSSH byte for byte after the patch"
+e2fsck -fn "$SIMG" >/dev/null 2>&1 || die "system.img fails e2fsck -fn after the rootsh patch"
+debugfs -R "cat $SPATH" "$SIMG" 2>/dev/null | cmp -s - "$NEWF" || die "$SPATH in system.img does not match the new file byte for byte after the patch"
 ST2=$(debugfs -R "stat $SPATH" "$SIMG" 2>&1)
 NMODE=$(stat_field "$ST2" Mode); NUID=$(stat_field "$ST2" User); NGID=$(stat_field "$ST2" Group)
 [ "$NMODE" = "$OMODE" ] && [ "$NUID" = "$OUID" ] && [ "$NGID" = "$OGID" ] || die "mode/uid/gid of $SPATH changed by the patch (was 0$OMODE/$OUID/$OGID, now 0$NMODE/$NUID/$NGID)"
 NEANAMES=$(debugfs -R "ea_list $SPATH" "$SIMG" 2>&1 | sed -n 's/^[[:space:]]*\([A-Za-z0-9_.]*\) (.*/\1/p')
 [ "$NEANAMES" = "$EANAMES" ] || die "xattrs of $SPATH changed by the patch (was [$EANAMES], now [$NEANAMES])"
-NEWFILE_SHA=$(sha "$ROOTSSH")
-say "  patched $SPATH: sha256=$NEWFILE_SHA (from $ROOTSSH); mode/uid/gid/xattrs unchanged, e2fsck -fn clean, content verified byte-for-byte"
+NEWFILE_SHA=$(sha "$NEWF"); rm -f "$STOCKF" "$NEWF"
+say "  patched $SPATH: sha256=$NEWFILE_SHA (from $NEWSRC); mode/uid/gid/xattrs unchanged, e2fsck -fn clean, content verified byte-for-byte"
 # factory.manifest's 'file system.img ...' line was written by puf-tool.sh from the
 # stock image (size is unchanged, only content); fix it up so tsx-factory-restore's
 # bundle-file sha256 check still passes
@@ -123,7 +163,7 @@ sed -i "s|^file system\\.img .*|file system.img $(stat -c %s "$SIMG") $(sha "$SI
 ROOTSSH_NOTE="system_patch=root-ssh sshShell.sh $NEWFILE_SHA stock=$STOCK_SHA"
 echo "$ROOTSSH_NOTE" >> "$OUT/factory.manifest"
 else
-say "2/7 --root-ssh not given: system.img is stock (root over ssh after the restore needs the UART; see installer/steps/rootsh)"
+say "2/7 --stock-sshshell: system.img is stock (byte-identical to the .puf) (root over ssh after the restore needs the UART; see installer/steps/rootsh)"
 fi
 
 say "3/7 env identity check (unhook must change state only)"

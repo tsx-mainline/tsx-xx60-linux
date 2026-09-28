@@ -1,12 +1,12 @@
 #!/sbin/openrc-run
-# Layout R1's p2 is a fixed 800 MiB and ships ~786 MiB used by packages alone,
-# leaving almost no room for writable growth (Chromium profile/cache, logs).
-# If /data (p4, label tsxdata, formatted by the first mainline boot; see
-# installer/r1/tsx-r1-migrate) is present and mounted, move each of the
-# directories below off the rootfs and onto it once, then bind-mount it back
-# onto its old path on every boot. On layout r0 (no p4, or the first-boot
-# mkfs failed) /data stays a bare empty mount point: this service logs that
-# and does nothing else, so r0 panels are unaffected.
+# The card stage's p2 is a fixed 800 MiB and ships ~786 MiB used by packages
+# alone, leaving almost no room for writable growth (Chromium profile/cache,
+# logs). If /data (p4, label tsxdata, formatted by the first mainline boot)
+# is present and mounted, move each of the directories below off the rootfs
+# and onto it once, then bind-mount it back onto its old path on every boot.
+# On the stock layout (no p4, or the first-boot mkfs failed) /data stays a
+# bare empty mount point: this service logs that and does nothing else, so
+# stock panels are unaffected.
 #
 # First run per directory: cp -a into /data/<name>, verify every file's
 # sha256 (symlinks by target) against the source, THEN write a marker file
@@ -69,7 +69,7 @@ start() {
 	ebegin "TSX data (/data)"
 	: > "$LOG"
 	if ! mountpoint -q /data 2>/dev/null; then
-		einfo "tsx-data: /data not mounted (layout r0, or the first-boot mkfs hasn't run): nothing to do"
+		einfo "tsx-data: /data not mounted (stock layout, or the first-boot mkfs hasn't run): nothing to do"
 		eend 0; return 0
 	fi
 	# no findmnt in this rootfs: read the source device + fstype straight out

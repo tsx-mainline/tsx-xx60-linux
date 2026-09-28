@@ -6,7 +6,7 @@
 # touched: root comes from Crestron's own patched sshd (steps/rootsh) and the
 # payload travels over HTTP.
 #
-#   steps/tsx-android-to-card --stick DIR --rootfs FILE PANEL_IP [options]
+#   steps/tsx-android-to-card --payload DIR --rootfs FILE PANEL_IP [options]
 #
 #   DIR                a payload directory built by mkpayload --rootfs-p2
 #                       (e.g. out/payload), MUST be a subdirectory of the
@@ -55,7 +55,7 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-INSTALLER=$(cd "$HERE/.." && pwd)
+INSTALLER=$(cd "$HERE/../.." && pwd)   # installer/steps/legacy/ -> installer/
 SERIALDIR=$(cd "$INSTALLER/../tools/bench" && pwd)
 UC="$SERIALDIR/uc.sh"
 ROOTSH="$INSTALLER/steps/rootsh"
@@ -87,16 +87,18 @@ run_with_heartbeat() {  # LABEL CMD...: runs CMD in the background (its stdout+s
 		sleep 5; w=$((w + 5))
 		[ $((w % 30)) -eq 0 ] && log "  $label: still running, ${w}s elapsed"
 	done
-	wait "$cpid"; HB_RC=$?
+	# set -e is on: a failing CMD (e.g. rc=255 when the install reboots the panel
+	# under the ssh session) must not end the script here; the caller checks $HB_RC
+	if wait "$cpid"; then HB_RC=0; else HB_RC=$?; fi
 	HB_OUT=$(cat "$tmp"); rm -f "$tmp"
 	log "  $label: finished after ${w}s (rc=$HB_RC)"
 }
 
-STICK= ROOTFS= PANEL= PORT=8080 WSIP= DEST=/logs/tsx-payload
+PAYLOAD= ROOTFS= PANEL= PORT=8080 WSIP= DEST=/logs/tsx-payload
 RESULTS= FROM_STEP=1 YES=0 DRYRUN=0 UART_OPT=auto
 while [ $# -gt 0 ]; do
 	case "$1" in
-	--stick) STICK=$2; shift 2;;
+	--payload) PAYLOAD=$2; shift 2;;
 	--rootfs) ROOTFS=$2; shift 2;;
 	--port) PORT=$2; shift 2;;
 	--ws-ip) WSIP=$2; shift 2;;
@@ -111,11 +113,11 @@ while [ $# -gt 0 ]; do
 	*) [ -z "$PANEL" ] || die "unexpected extra argument: $1"; PANEL=$1; shift;;
 	esac
 done
-[ -n "$STICK" ] && [ -n "$ROOTFS" ] && [ -n "$PANEL" ] || { usage; exit 2; }
+[ -n "$PAYLOAD" ] && [ -n "$ROOTFS" ] && [ -n "$PANEL" ] || { usage; exit 2; }
 case "$UART_OPT" in auto|yes|no) ;; *) echo "tsx-android-to-card: --uart must be auto, yes, or no (got: $UART_OPT)" >&2; usage; exit 2;; esac
 [ -n "$RESULTS" ] || RESULTS="results/tsx-android-to-card-$(date +%Y%m%d).txt"
 mkdir -p "$(dirname "$RESULTS")"
-log "== tsx-android-to-card: PANEL=$PANEL STICK=$STICK ROOTFS=$ROOTFS from-step=$FROM_STEP dry-run=$DRYRUN uart=$UART_OPT"
+log "== tsx-android-to-card: PANEL=$PANEL PAYLOAD=$PAYLOAD ROOTFS=$ROOTFS from-step=$FROM_STEP dry-run=$DRYRUN uart=$UART_OPT"
 
 # control-channel choice: auto uses the UART only if serlog.py looks like it
 # is running AND uc.sh exists; --uart yes/no force it on/off. Resolved early
@@ -142,10 +144,10 @@ fi
 # Inputs, sanity checks, workstation IP, HTTP server (always runs: later
 # steps depend on its output even when --from-step skips the earlier ones).
 for c in sshpass ssh python3 split sha256sum ip awk; do need_cmd "$c"; done
-[ -d "$STICK" ] || die "$STICK is not a directory"
+[ -d "$PAYLOAD" ] || die "$PAYLOAD is not a directory"
 [ -f "$ROOTFS" ] || die "$ROOTFS not found"
-CONF="$STICK/tsx-install/tsx-install.conf"
-[ -f "$CONF" ] || die "$CONF not found (not a stick directory?)"
+CONF="$PAYLOAD/tsx-install/tsx-install.conf"
+[ -f "$CONF" ] || die "$CONF not found (not a payload directory?)"
 conf_get() { sed -n "s/^$1=//p" "$2" | tail -n 1; }
 P2BYTES=$(conf_get ROOTFS_P2_BYTES "$CONF")
 P2SHA=$(conf_get ROOTFS_P2_SHA256 "$CONF")
@@ -159,10 +161,12 @@ GOT=
 log "step 1: $ROOTFS matches tsx-install.conf ($P2SHA, $((P2BYTES / 1048576)) MiB)"
 
 OUTDIR=$(cd "$(dirname "$ROOTFS")" && pwd)
-STICKABS=$(cd "$STICK" && pwd)
-case "$STICKABS" in "$OUTDIR"/*) STICKBASE=$(basename "$STICKABS");; *) die "$STICK must be a subdirectory of $OUTDIR (the HTTP server serves $OUTDIR)";; esac
+PAYLOADABS=$(cd "$PAYLOAD" && pwd)
+case "$PAYLOADABS" in "$OUTDIR"/*) PAYLOADBASE=$(basename "$PAYLOADABS");; *) die "$PAYLOAD must be a subdirectory of $OUTDIR (the HTTP server serves $OUTDIR)";; esac
+# The patched sshShell.sh is only needed when rootsh is not root yet AND the
+# UART is used to install it (step 4); a unit whose sshd already gives a root
+# shell needs nothing here.
 SSHSHELL="$OUTDIR/sshShell.sh"
-[ -f "$SSHSHELL" ] || die "$SSHSHELL not found (needed to root Crestron's sshd; see README.md)"
 [ -x "$ROOTSH" ] || die "$ROOTSH not found/executable"
 [ -x "$MKPANELFETCH" ] || die "$MKPANELFETCH not found/executable"
 [ -x "$CRESTRONADMIN" ] || die "$CRESTRONADMIN not found/executable"
@@ -205,7 +209,7 @@ fi
 MSSH="sshpass -p $MAINLINE_PW ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$PANEL"
 is_mainline() {
 	local out; out=$($MSSH uname -r 2>/dev/null) || return 1
-	case "$out" in 6.*) return 0;; *) return 1;; esac
+	case "$out" in [6-9].*|[1-9][0-9].*) return 0;; *) return 1;; esac   # 6.x LTS, 7.x stable, ...
 }
 rootsh_ok() {
 	# a stock sshShell.sh drops "rootsh" into the Crestron console, which never exits: short timeout
@@ -295,7 +299,9 @@ wait_android_stable_net() {  # timeout_s -- network-only equivalent of wait_andr
 	while :; do
 		if rootsh_ok; then
 			fw=$("$ROOTSH" "$PANEL" 'fw_printenv fwUpgrade' 2>/dev/null) || fw=
-			ls=$("$ROOTSH" "$PANEL" 'ls /mnt/sdcard/ROMDISK/romdisk/user/system/image' 2>/dev/null) || ls=
+			# ls is EXPECTED to fail here ("No such file"): rootsh returns the remote
+			# exit status, so keep the output instead of blanking it on rc != 0.
+			ls=$("$ROOTSH" "$PANEL" 'ls /mnt/sdcard/ROMDISK/romdisk/user/system/image' 2>/dev/null) || true
 			bc=$("$ROOTSH" "$PANEL" 'getprop sys.boot_completed' 2>/dev/null) || bc=
 			mounted=$("$ROOTSH" "$PANEL" 'grep -c mmcblk0p5 /proc/mounts' 2>/dev/null) || mounted=
 			if grep -q 'fwUpgrade=0' <<<"$fw" \
@@ -319,6 +325,10 @@ if [ "$FROM_STEP" -le 2 ]; then
 	log "== step 2: ensure the next boot is stock Android"
 	if [ "$DRYRUN" = 1 ]; then
 		log "[dry-run] would check 'ssh root@$PANEL uname -r'; if it answers Linux 6.x: mount p1, touch tsxboot.off, sync, umount, reboot; then wait_serial 'root@Crestron Touchpanel:/ #' 180"
+	elif is_mainline && [ "$UART_MODE" != yes ]; then
+		# going back to Android needs the UART prompt below; without it, the
+		# usual cause is a finished card stage (a re-run after a later step failed)
+		die "panel $PANEL already runs mainline ($($MSSH 'uname -r' 2>/dev/null)). Network-only mode cannot take it back to stock Android. If the card stage is done (root /dev/mmcblk0p2), continue with: steps/tsx-card-to-emmc $PANEL, steps/tsx-deploy-tfa.sh $PANEL, then emmc/tsx-usb-recovery enable on the panel (see tsx-install-mainline)"
 	elif is_mainline; then
 		log "  panel is on mainline; creating p1:tsxboot.off and rebooting"
 		$MSSH 'mkdir -p /mnt/p1 && mount -t vfat /dev/mmcblk0p1 /mnt/p1 && touch /mnt/p1/tsxboot.off && sync && umount /mnt/p1 && reboot' >>"$RESULTS" 2>&1 || true
@@ -392,6 +402,7 @@ if [ "$FROM_STEP" -le 4 ]; then
 		if rootsh_ok; then
 			log "  ok: rootsh now answers uid=0 (the account was the only thing missing)"
 		else
+			[ -f "$SSHSHELL" ] || die "rootsh is not root and $SSHSHELL is missing: put your patched sshShell.sh there (see docs/install.md) or enable the root shell first"
 			log "  rootsh is still not root; installing $SSHSHELL from the UART"
 			uart -w 5 "busybox wget -q -O /logs/sshShell.sh $BASEURL/sshShell.sh"
 			REMOTESHA=$(uart -w 5 'busybox sha256sum /logs/sshShell.sh' | grep -oE '^[0-9a-f]{64}' | tail -n 1)
@@ -433,12 +444,12 @@ fi
 # fetch script (mkpanelfetch.sh), push it with rootsh + wget, run it in the
 # background, poll the log for ALL DONE.
 if [ "$FROM_STEP" -le 5 ]; then
-	log "== step 5: payload over HTTP (p2 chunks + stick files)"
+	log "== step 5: payload over HTTP (p2 chunks + payload files)"
 	CHUNKDIR="$OUTDIR/p2-chunks"
 	PANELFETCH="$OUTDIR/panel-fetch.sh"
 	if [ "$DRYRUN" = 1 ]; then
 		log "[dry-run] would: split -b 64M -d -a 2 $ROOTFS $CHUNKDIR/rootfs-p2.part"
-		log "[dry-run] would: $MKPANELFETCH $ROOTFS $CHUNKDIR $STICK $BASEURL/p2-chunks $BASEURL/$STICKBASE $DEST > $PANELFETCH"
+		log "[dry-run] would: $MKPANELFETCH $ROOTFS $CHUNKDIR $PAYLOAD $BASEURL/p2-chunks $BASEURL/$PAYLOADBASE $DEST > $PANELFETCH"
 		log "[dry-run] would: rootsh wget $PANELFETCH -> /logs/panel-fetch.sh, verify sha256, nohup bash it, poll tail -n 1 /logs/panel-fetch.log every 20s for ALL DONE"
 	else
 		if [ -d "$CHUNKDIR" ] && [ -n "$(ls -A "$CHUNKDIR" 2>/dev/null)" ]; then
@@ -448,7 +459,7 @@ if [ "$FROM_STEP" -le 5 ]; then
 			log "  splitting $ROOTFS into 64 MiB chunks under $CHUNKDIR"
 			split -b 64M -d -a 2 "$ROOTFS" "$CHUNKDIR/rootfs-p2.part"
 		fi
-		"$MKPANELFETCH" "$ROOTFS" "$CHUNKDIR" "$STICK" "$BASEURL/p2-chunks" "$BASEURL/$STICKBASE" "$DEST" >"$PANELFETCH"
+		"$MKPANELFETCH" "$ROOTFS" "$CHUNKDIR" "$PAYLOAD" "$BASEURL/p2-chunks" "$BASEURL/$PAYLOADBASE" "$DEST" >"$PANELFETCH"
 		log "  generated $PANELFETCH"
 		"$ROOTSH" "$PANEL" "busybox wget -q -O /logs/panel-fetch.sh $BASEURL/panel-fetch.sh" >>"$RESULTS" 2>&1
 		REMOTESHA=$("$ROOTSH" "$PANEL" "busybox sha256sum /logs/panel-fetch.sh" | awk '{print $1}')
@@ -495,7 +506,8 @@ if [ "$FROM_STEP" -le 6 ]; then
 			read -r -p "Type INSTALL to proceed (this writes p1/p2 and reboots the panel): " ans </dev/tty
 			[ "$ans" = INSTALL ] || die "aborted: operator did not type INSTALL"
 		fi
-		SERIAL_MARK=$(wc -l < "$SERIALDIR/boot-2200.log")
+		# the serial log only exists with the UART; network-only mode has none
+		if [ "$UART_MODE" = yes ]; then SERIAL_MARK=$(wc -l < "$SERIALDIR/boot-2200.log"); fi
 		run_with_heartbeat "install" "$ROOTSH" "$PANEL" "$INSTALL_CMD"
 		INSTOUT=$HB_OUT; IRC=$HB_RC
 		log_multiline "install output (rc=$IRC, 255 expected: reboot kills the ssh session)" "$INSTOUT"
@@ -515,7 +527,7 @@ if [ "$FROM_STEP" -le 7 ]; then
 			log "[dry-run] (uart) would wait_serial 'tsx: booting tsxboot.img' 90, then 'switch_root to /dev/mmcblk0p2' 240, then 'tsx: starting kiosk' 90 (abort on 'Kernel panic' / 'tsx: mainline disabled')"
 			log "[dry-run] (uart) would then wait_mainline_ssh 120"
 		else
-			log "[dry-run] (network) would poll 'ssh root@$PANEL uname -r' (is_mainline) up to 400s, tolerating the install reboot dropping ssh; then log 'cat /proc/cmdline', 'findmnt -no SOURCE /' (expect /dev/mmcblk0p2) and 'pgrep -f chromium' (kiosk)"
+			log "[dry-run] (network) would poll 'ssh root@$PANEL uname -r' (is_mainline) up to 400s, tolerating the install reboot dropping ssh; then log 'cat /proc/cmdline', the root device from /proc/mounts (expect /dev/mmcblk0p2) and 'pgrep -f chromium' (kiosk)"
 		fi
 	else
 		if [ "$UART_MODE" = yes ]; then
@@ -530,7 +542,8 @@ if [ "$FROM_STEP" -le 7 ]; then
 			wait_mainline_ssh 400
 			CMDLINE=$($MSSH 'cat /proc/cmdline' 2>&1) || CMDLINE="(ssh failed)"
 			log "  /proc/cmdline: $CMDLINE"
-			ROOTSRC=$($MSSH 'findmnt -no SOURCE /' 2>&1) || ROOTSRC="(ssh failed)"
+			# busybox has no findmnt
+			ROOTSRC=$($MSSH "awk '\$2==\"/\"{print \$1}' /proc/mounts" 2>&1) || ROOTSRC="(ssh failed)"
 			log "  root filesystem source: $ROOTSRC"
 			grep -q '/dev/mmcblk0p2' <<<"$ROOTSRC" || log "  WARNING: root filesystem source is not /dev/mmcblk0p2: $ROOTSRC"
 			if $MSSH 'pgrep -f chromium' >/dev/null 2>&1; then

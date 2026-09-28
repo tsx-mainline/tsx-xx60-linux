@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# Host: make sure PANEL_IP is stock Android, settled, and answers root over
+# Crestron's own patched sshd (steps/rootsh). This is the network/UART
+# bootstrap every install flow needs before it can do anything else; factored
+# out of steps/tsx-android-to-card (its old steps 2-4) so tsx-install-mainline
+# v2 (the rescue-first flow) can reuse it without depending on the old
+# card-stage driver. steps/tsx-android-to-card keeps its own copy (untouched,
+# installer/steps/legacy/ once v2 replaces the network path) -- this is a
+# straight extraction, not a behaviour change.
+#
+#   steps/tsx-ensure-root PANEL_IP [--uart auto|yes|no] [--sshshell FILE]
+#                         [--port N] [--ws-ip IP] [--results FILE] [--dry-run]
+#
+# On success, `steps/rootsh PANEL_IP id` answers uid=0. Needs $TSX_ADMIN_PW
+# (Crestron console/web-UI admin password; user $TSX_ADMIN_USER, default admin).
+# --uart auto (default): UART only if serlog.py looks like it is running and
+# ../../tools/bench/uc.sh exists; --uart no is fully network-only, and needs
+# rootsh to already work OR --sshshell already installed by some other means
+# (this script cannot install the sshShell.sh patch itself without the UART).
+set -euo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd); INSTALLER=$(cd "$HERE/.." && pwd)
+SERIALDIR=$(cd "$INSTALLER/../tools/bench" && pwd 2>/dev/null || echo "$INSTALLER/../tools/bench")
+UC="$SERIALDIR/uc.sh"
+ROOTSH="$INSTALLER/steps/rootsh"
+CRESTRONADMIN="$INSTALLER/steps/crestron-admin"
+usage() { sed -n '2,17p' "$0" >&2; }
+PANEL= UART_OPT=auto SSHSHELL= PORT=8079 WSIP= RESULTS= DRYRUN=0
+while [ $# -gt 0 ]; do case "$1" in
+	--uart) UART_OPT=$2; shift 2;; --sshshell) SSHSHELL=$2; shift 2;; --port) PORT=$2; shift 2;;
+	--ws-ip) WSIP=$2; shift 2;; --results) RESULTS=$2; shift 2;; --dry-run) DRYRUN=1; shift;;
+	-h|--help) usage; exit 0;; --*) echo "unknown option $1" >&2; usage; exit 2;;
+	*) [ -z "$PANEL" ] || { echo "extra argument $1" >&2; exit 2; }; PANEL=$1; shift;;
+esac; done
+[ -n "$PANEL" ] || { usage; exit 2; }
+case "$UART_OPT" in auto|yes|no) ;; *) echo "--uart must be auto, yes, or no" >&2; exit 2;; esac
+[ -n "$RESULTS" ] || RESULTS="results/tsx-ensure-root-$(date +%Y%m%d-%H%M).txt"
+mkdir -p "$(dirname "$RESULTS")"
+log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$RESULTS" >&2; }
+die() { log "ERROR: $*"; exit 1; }
+
+case "$UART_OPT" in
+yes) UART_MODE=yes;;
+no) UART_MODE=no;;
+auto) if command -v pgrep >/dev/null 2>&1 && pgrep -f 'serlog\.py' >/dev/null 2>&1 && [ -x "$UC" ]; then UART_MODE=yes; else UART_MODE=no; fi;;
+esac
+log "== tsx-ensure-root: PANEL=$PANEL uart=$UART_OPT ($UART_MODE)"
+
+MSSH="sshpass -p ${TSX_MAINLINE_PW:-tsx} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$PANEL"
+is_mainline() { local out; out=$($MSSH uname -r 2>/dev/null) || return 1; case "$out" in [6-9].*|[1-9][0-9].*) return 0;; *) return 1;; esac; }
+rootsh_ok() { local out; out=$(TSX_SSH_TIMEOUT=30 "$ROOTSH" "$PANEL" id 2>/dev/null) || true; grep -q '^uid=0(' <<<"$out"; }
+uart() { local w=5; if [ "$1" = -w ]; then w=$2; shift 2; fi; [ ${#1} -le 80 ] || die "UART command >80 chars: $1"; "$UC" -w "$w" "$1"; }
+wait_serial() { local pat=$1 timeout=$2; shift 2; local waited=0 poll=15 out a
+	log "  waiting on the serial log for: $pat (timeout ${timeout}s)"
+	while [ "$waited" -lt "$timeout" ]; do
+		out=$("$UC" -w "$poll" 2>/dev/null || true)
+		if [ -n "$out" ]; then for a in "$@"; do grep -qF -- "$a" <<<"$out" && die "serial log abort pattern: $a"; done
+			grep -qF -- "$pat" <<<"$out" && { log "  ok: seen '$pat'"; return 0; }; fi
+		waited=$((waited + poll)); [ $((waited % 30)) -eq 0 ] && log "  still waiting for '$pat': ${waited}/${timeout}s"
+	done
+	die "timeout (${timeout}s) waiting for: $pat"
+}
+wait_android_stable() { local timeout=$1 waited=0 poll=20 fw ls raw bc
+	log "  waiting for stock Android to settle (UART, tolerates one self-reboot, timeout ${timeout}s)"
+	while :; do
+		fw=$(uart -w 5 'fw_printenv fwUpgrade' 2>/dev/null || true)
+		ls=$(uart -w 5 'ls /mnt/sdcard/ROMDISK/romdisk/user/system/image' 2>/dev/null || true)
+		raw=$(uart -w 5 'getprop sys.boot_completed' 2>/dev/null || true)
+		bc=$(printf '%s\n' "$raw" | grep -oE '^[01]$' | tail -n 1)
+		if grep -q 'fwUpgrade=0' <<<"$fw" && grep -qi 'no such file' <<<"$ls" && [ "${bc:-}" = 1 ] && grep -qF "root@Crestron Touchpanel:/ #" <<<"$raw"; then
+			log "  ok: Android settled"; return 0; fi
+		waited=$((waited + poll)); [ "$waited" -lt "$timeout" ] || die "timeout (${timeout}s) waiting for Android to settle"
+		sleep "$poll"
+	done
+}
+wait_android_stable_net() { local timeout=$1 waited=0 poll=20 fw ls bc mounted
+	log "  waiting for stock Android to settle (network-only, tolerates one self-reboot, timeout ${timeout}s)"
+	while :; do
+		if rootsh_ok; then
+			fw=$("$ROOTSH" "$PANEL" 'fw_printenv fwUpgrade' 2>/dev/null) || fw=
+			ls=$("$ROOTSH" "$PANEL" 'ls /mnt/sdcard/ROMDISK/romdisk/user/system/image' 2>/dev/null) || true
+			bc=$("$ROOTSH" "$PANEL" 'getprop sys.boot_completed' 2>/dev/null) || bc=
+			mounted=$("$ROOTSH" "$PANEL" 'grep -c mmcblk0p5 /proc/mounts' 2>/dev/null) || mounted=
+			if grep -q 'fwUpgrade=0' <<<"$fw" && grep -qi 'no such file' <<<"$ls" && grep -q '^1$' <<<"$bc" && grep -qE '^[1-9][0-9]*$' <<<"$mounted"; then
+				log "  ok: Android settled (network-only)"; return 0; fi
+		fi
+		waited=$((waited + poll)); [ "$waited" -lt "$timeout" ] || die "timeout (${timeout}s) waiting for Android to settle (network-only)"
+		log "  still waiting (network-only): ${waited}/${timeout}s"
+		sleep "$poll"
+	done
+}
+
+if [ -z "$WSIP" ]; then WSIP=$(ip route get "$PANEL" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
+	[ -n "$WSIP" ] || die "could not auto-detect the workstation IP towards $PANEL (--ws-ip)"; fi
+BASEURL="http://$WSIP:$PORT"
+
+if [ "$DRYRUN" = 1 ]; then
+	log "[dry-run] would check is_mainline; if mainline and UART: p1:tsxboot.off + reboot + wait_serial prompt"
+	log "[dry-run] would then wait_android_stable(_net) up to 720s, then rootsh_ok; if not root: crestron-admin, then (UART only) install \$SSHSHELL via wget+ish.sh"
+	exit 0
+fi
+
+if is_mainline && [ "$UART_MODE" = yes ]; then
+	log "  panel is on mainline; forcing p1:tsxboot.off and rebooting to stock Android"
+	$MSSH 'mkdir -p /mnt/p1 && mount -t vfat /dev/mmcblk0p1 /mnt/p1 && touch /mnt/p1/tsxboot.off && sync && umount /mnt/p1 && reboot' >>"$RESULTS" 2>&1 || true
+	wait_serial "root@Crestron Touchpanel:/ #" 180
+elif is_mainline; then
+	die "panel $PANEL runs mainline and --uart is not yes: network-only mode cannot force it back to stock Android (needs the UART once)"
+fi
+
+if [ "$UART_MODE" = yes ]; then wait_android_stable 720; else wait_android_stable_net 720; fi
+
+if rootsh_ok; then
+	log "== done: rootsh already answers uid=0 on $PANEL"
+	exit 0
+fi
+log "  rootsh is not root yet; trying crestron-admin (factory-fresh unit may have no account)"
+"$CRESTRONADMIN" "$PANEL" >>"$RESULTS" 2>&1 || log "  crestron-admin did not confirm console login (continuing; an account may already exist)"
+if rootsh_ok; then log "== done: rootsh now answers uid=0 (account was the only thing missing)"; exit 0; fi
+
+[ "$UART_MODE" = yes ] || die "root over ssh needs the patched sshShell.sh installed already (see docs/install.md); network-only mode cannot install it. Re-run with --uart yes, or install it by hand once."
+[ -n "$SSHSHELL" ] && [ -f "$SSHSHELL" ] || die "rootsh is not root and --sshshell FILE was not given: supply your patched sshShell.sh (docs/install.md 'TSX Android root over SSH')"
+log "  installing $SSHSHELL from the UART"
+OUTDIR=$(cd "$(dirname "$SSHSHELL")" && pwd)
+( cd "$OUTDIR" && nohup python3 -m http.server "$PORT" --bind 0.0.0.0 >/dev/null 2>&1 & echo $! > "$OUTDIR/.tsx-ensure-root-http.pid" )
+trap '[ -f "$OUTDIR/.tsx-ensure-root-http.pid" ] && kill "$(cat "$OUTDIR/.tsx-ensure-root-http.pid")" 2>/dev/null; rm -f "$OUTDIR/.tsx-ensure-root-http.pid"' EXIT
+sleep 1
+uart -w 5 "busybox wget -q -O /logs/sshShell.sh $BASEURL/$(basename "$SSHSHELL")"
+REMOTESHA=$(uart -w 5 'busybox sha256sum /logs/sshShell.sh' | grep -oE '^[0-9a-f]{64}' | tail -n 1)
+LOCALSHA=$(sha256sum "$SSHSHELL" | awk '{print $1}')
+[ "$REMOTESHA" = "$LOCALSHA" ] || die "sshShell.sh sha256 mismatch after wget: $REMOTESHA != $LOCALSHA"
+INSTSCRIPT="$OUTDIR/ish.sh"
+cat >"$INSTSCRIPT" <<-'EOF'
+	#!/system/bin/sh
+	set -e
+	mount -o remount,rw /system
+	cp /system/bin/sshShell.sh /logs/sshShell.sh.stock
+	cp /logs/sshShell.sh /system/bin/sshShell.sh
+	chmod 755 /system/bin/sshShell.sh
+	sync
+	mount -o remount,ro /system
+	echo INSTALL_SSHSHELL_DONE
+EOF
+uart -w 5 "busybox wget -q -O /logs/ish.sh $BASEURL/ish.sh"
+OUT=$(uart -w 8 'busybox sh /logs/ish.sh')
+grep -q INSTALL_SSHSHELL_DONE <<<"$OUT" || die "ish.sh (sshShell.sh install) did not report done: $OUT"
+rootsh_ok || die "rootsh still does not answer uid=0 after installing sshShell.sh"
+log "== done: rootsh now answers uid=0 on $PANEL"

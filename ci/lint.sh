@@ -8,6 +8,10 @@
 #   - every *.py file must byte-compile
 #   - the host installer drivers must support --help
 # work/ (old per-session reports, not part of the shipped tree) is skipped.
+# Run in docker as the calling user (-u "$(id -u):$(id -g)"), so any file this
+# leaves behind is owned by that user, not root. `python3 -m py_compile`
+# always writes a __pycache__/*.pyc next to each file regardless of
+# PYTHONDONTWRITEBYTECODE, so those are removed again at the end.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 fail=0
@@ -37,10 +41,12 @@ echo "== python3 -m py_compile =="
 while IFS= read -r f; do
 	python3 -m py_compile "$f" || { echo "FAIL: py_compile $f"; fail=1; }
 done < <(find . -name '*.py' -not -path './work/*' -not -path './.git/*')
+find . -name __pycache__ -not -path './work/*' -not -path './.git/*' -exec rm -rf {} + 2>/dev/null
 
 echo "== installer driver --help =="
-for f in installer/steps/tsx-android-to-card installer/tsx-restore-factory \
-         installer/tsx-install-mainline installer/steps/tsx-card-to-emmc \
+for f in installer/steps/legacy/tsx-android-to-card installer/tsx-restore-factory \
+         installer/tsx-install-mainline installer/steps/legacy/tsx-card-to-emmc \
+         installer/steps/tsx-ensure-root \
          installer/payload/mkpayload installer/emmc/tsx-usb-recovery \
          installer/emmc/tsx-update-boot installer/steps/tsx-deploy-tfa.sh; do
 	"$f" --help >/dev/null 2>&1 || { echo "FAIL: $f --help"; fail=1; }

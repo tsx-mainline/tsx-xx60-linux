@@ -124,7 +124,7 @@ class Env:
         if not self.crc_ok:
             p.append('CRC mismatch (U-Boot would use its built-in default env)')
         aml = self.get('aml_dt') or ''
-        if not (aml.startsxith('yushan_one') or aml.startsxith('m8m2_n200')):
+        if not (aml.startswith('yushan_one') or aml.startswith('m8m2_n200')):
             p.append('aml_dt=%r is not a xx60 value' % aml)
         if not self.get('crestron_uboot_version'):
             p.append('no crestron_uboot_version')

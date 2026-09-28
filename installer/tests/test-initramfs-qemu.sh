@@ -4,7 +4,7 @@
 #  1. rootfs/out initramfs (before installer)       -> must switch_root
 #  2. installer/out/tsxboot-audio-autoinstall.img's initramfs (stage 2 integrated,
 #     no install order = the normal path)          -> must switch_root
-#  4. the same kiosk initramfs with out/rootfs-p2.ext4 (layout R1 p2 image) -> switch_root
+#  4. the same kiosk initramfs with out/rootfs-p2.ext4 (card layout p2 image) -> switch_root
 #  5. same as 4. + a second virtio-blk disk, a small ext4 LABEL=tsxdata standing
 #     in for p4: OpenRC's fstab entry (LABEL=tsxdata /data ext4 nofail) mounts
 #     it with no initramfs/kernel changes needed, so this checks the real
@@ -97,7 +97,7 @@ boot() {   # boot NAME INITRD MODE(root|rescue) [DISK] [full] [DATADISK]
 boot "rootfs initramfs (before)" "$ROOTFS_DIR/out/initramfs-switchroot.cpio.gz" root
 boot "tsxboot-audio-autoinstall.img" "$W/auto.gz" root
 boot "tsx-rescue-tsw1060.img" "$W/rescue.gz" rescue
-boot "R1 rootfs-p2.ext4 (800 MiB) with tsxboot-audio-autoinstall.img" "$W/auto.gz" root "$INSTALLER_DIR/out/rootfs-p2.ext4" full
+boot "card layout rootfs-p2.ext4 (800 MiB) with tsxboot-audio-autoinstall.img" "$W/auto.gz" root "$INSTALLER_DIR/out/rootfs-p2.ext4" full
 truncate -s 32M "$W/tsxdata.img"; mkfs.ext4 -q -F -L tsxdata "$W/tsxdata.img" >/dev/null
-boot "R1 rootfs-p2.ext4 + tsxdata (p4) attached" "$W/auto.gz" root "$INSTALLER_DIR/out/rootfs-p2.ext4" full "$W/tsxdata.img"
+boot "card layout rootfs-p2.ext4 + tsxdata (p4) attached" "$W/auto.gz" root "$INSTALLER_DIR/out/rootfs-p2.ext4" full "$W/tsxdata.img"
 echo "== $N ok, $F failed"; [ $F = 0 ] && echo PASS test-initramfs-qemu || echo FAIL test-initramfs-qemu; exit $F

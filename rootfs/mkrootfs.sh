@@ -52,9 +52,8 @@ install -m 755 /build/cage-build/cage $R/usr/bin/cage
 # rootfs/src/sendspin/build.sh (CI runs it before this script; a local build
 # runs it by hand first) and never committed -- read it from that build's
 # output dir here.
-# voice: the Assist voice satellite linux-voice-assistant (pinned; replaces
-# wyoming-satellite, whose installer ../src/tsx-voice/install-wyoming.sh is no
-# longer called)
+# voice: the Assist voice satellite linux-voice-assistant (pinned; see
+# voice/install-lva.sh below)
 install -m 755 /build/tsx-peak $R/usr/local/bin/tsx-peak
 SENDSPIN_CLI=${SENDSPIN_CLI:-"$HERE/src/sendspin/out/sendspin-cli"}
 [ -x "$SENDSPIN_CLI" ] || { echo "no sendspin-cli at $SENDSPIN_CLI (run rootfs/src/sendspin/build.sh first)"; exit 1; }

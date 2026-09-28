@@ -4,7 +4,7 @@
 # Inputs (read only): tsw-xx60_3.002.1061.001.puf, unit A's factory-state card
 # (captures/tsw-1060/backup, fw 3.002.1061 = the .puf's version) as the reference,
 # unit B's card (captures/tsw-1060-unitB/backup) as the card to restore, after a
-# simulated R1 conversion. The panel tool runs in a privileged Alpine 3.24
+# simulated card-stage conversion. The panel tool runs in a privileged Alpine 3.24
 # container on a loop device (the rescue's tool set). ~10 GB in $TMPDIR.
 set -uo pipefail
 INSTALLER_DIR=$(cd "$(dirname "$0")/.." && pwd); ROOT=$(cd "$INSTALLER_DIR/.." && pwd); CAPTURES=${CAPTURES_DIR:-}
@@ -75,9 +75,9 @@ t=0; for s in 1847297 4904961 5931009 6137857; do dd if="$W/card.img" of="$W/fs.
 [ $t = 4 ] && ok "p5..p8 e2fsck clean"
 cmp -s <(dd if="$W/card.img" bs=65536 skip=16 count=1 status=none) "$W/b/env.bin" && ok "env block = bundle env.bin"
 
-echo "== 4. panel tool (rescue) on unit B's card after a simulated R1 conversion"
+echo "== 4. panel tool (rescue) on unit B's card after a simulated card-stage conversion"
 cp --sparse=always "$BU" "$W/unitB.img"
-printf '\203' | dd of="$W/unitB.img" bs=1 seek=498 conv=notrunc status=none                 # R1 MBR byte
+printf '\203' | dd of="$W/unitB.img" bs=1 seek=498 conv=notrunc status=none                 # card-stage MBR byte
 [ -f "$INSTALLER_DIR/out/rootfs-p2.ext4" ] && dd if="$INSTALLER_DIR/out/rootfs-p2.ext4" of="$W/unitB.img" bs=512 seek=206849 conv=notrunc status=none
 HEAD0=$(dd if="$W/unitB.img" bs=512 count=2048 status=none | python3 -c "import sys,hashlib; d=bytearray(sys.stdin.buffer.read()); d[440:512]=b'\0'*72; print(hashlib.sha256(d).hexdigest())")
 "$T" bundle "$W/x" --env "$A" --out "$W/bA" > /dev/null 2>&1
@@ -89,7 +89,7 @@ for p in /sys/block/$n/${n}p*; do b=${p##*/}; [ -b /dev/$b ] || mknod /dev/$b b 
 export TSX_SHARE=/installer/android TSX_SYSBLOCK=/sys/block/$n TSX_DEVDIR=/dev TSX_RUN=/run/t
 FR="sh /installer/factory/tsx-factory-restore"
 ok() { echo "  ok: $*"; }; fail() { echo "  FAIL: $*"; }
-ls /sys/block/$n | grep -c "${n}p" | grep -qx 4 && mkfs.ext4 -q -F -L tsxdata /dev/${n}p4 && ok "simulated R1 card: 4 partitions, p4 = tsxdata, p2 = kiosk rootfs"
+ls /sys/block/$n | grep -c "${n}p" | grep -qx 4 && mkfs.ext4 -q -F -L tsxdata /dev/${n}p4 && ok "simulated card-stage card: 4 partitions, p4 = tsxdata, p2 = kiosk rootfs"
 $FR check /w/b > /tmp/c 2>&1 && grep -q "layout now card" /tmp/c && ok "check: card-stage layout recognised, bundle verified, nothing written"
 $FR run /w/bA --yes > /tmp/r 2>&1 && fail "env of unit A accepted on unit B" || { grep -q "wrong unit" /tmp/r && ok "bundle of another unit refused"; }
 mkdir -p /mnt/x; mount /dev/${n}p2 /mnt/x; $FR run /w/b --yes > /tmp/r 2>&1 && fail "ran with p2 mounted" || { grep -q "is mounted" /tmp/r && ok "refused while a card partition is mounted"; }; umount /mnt/x

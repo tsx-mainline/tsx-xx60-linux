@@ -228,7 +228,7 @@ async def main():
              "draw_frames": cnt("DrawFrame"), "draw_fps": round(cnt("DrawFrame") / dt, 1),
              "begin_frames": cnt("BeginFrame"), "dropped_frames": cnt("DroppedFrame"),
              "scroll_frames": states,
-             "scroll_presented_pct": round(100 * sum(v for k, v in states.items() if k.startsxith("presented")) / max(1, sum(v for k, v in states.items() if k != "no_update_desired")), 1), "trace_events": len(ev), "cpu": cpu_delta(a, bb, dt)}
+             "scroll_presented_pct": round(100 * sum(v for k, v in states.items() if k.startswith("presented")) / max(1, sum(v for k, v in states.items() if k != "no_update_desired")), 1), "trace_events": len(ev), "cpu": cpu_delta(a, bb, dt)}
         print(json.dumps(r))
     else:
         print(__doc__); sys.exit(2)

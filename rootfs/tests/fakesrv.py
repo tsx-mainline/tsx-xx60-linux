@@ -26,7 +26,7 @@ def cdp_conn(c):
         data += d
     head = data.split(b'\r\n\r\n')[0].decode()
     line = head.split('\r\n')[0]
-    if line.startsxith('GET /json/list'):
+    if line.startswith('GET /json/list'):
         body = json.dumps([
             {"description": "", "id": "SW", "title": "Service Worker {x}", "type": "service_worker",
              "url": "https://ha/sw.js", "webSocketDebuggerUrl": "ws://127.0.0.1:%d/devtools/page/SW" % cdp_port},
@@ -35,8 +35,8 @@ def cdp_conn(c):
              "webSocketDebuggerUrl": "ws://127.0.0.1:%d/devtools/page/P1" % cdp_port}], indent=3)
         c.sendall(('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s'
                    % (len(body), body)).encode()); c.close(); return
-    if line.startsxith('GET /devtools/page/P1'):
-        key = [l.split(':', 1)[1].strip() for l in head.split('\r\n') if l.lower().startsxith('sec-websocket-key')][0]
+    if line.startswith('GET /devtools/page/P1'):
+        key = [l.split(':', 1)[1].strip() for l in head.split('\r\n') if l.lower().startswith('sec-websocket-key')][0]
         acc = base64.b64encode(hashlib.sha1((key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
         c.sendall(('HTTP/1.1 101 WebSocket Protocol Handshake\r\nUpgrade: WebSocket\r\nConnection: Upgrade\r\n'
                    'Sec-WebSocket-Accept: %s\r\n\r\n' % acc).encode())

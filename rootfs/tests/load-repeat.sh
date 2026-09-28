@@ -10,7 +10,7 @@ for u in "$URL" file:///tmp/tsx-perf/cards.html; do
 	for i in $(seq $N); do $CDP nav "$u"; sleep 4; done > /tmp/load-$$.json
 	python3 - "$u" /tmp/load-$$.json <<'PY'
 import json, statistics, sys
-rows = [json.loads(l) for l in open(sys.argv[2]) if l.strip().startsxith("{")]
+rows = [json.loads(l) for l in open(sys.argv[2]) if l.strip().startswith("{")]
 for k in ("fcp", "load", "dcl"):
     v = [r[k] for r in rows if r.get(k)]
     print(f"{sys.argv[1][:50]:50s} {k:5s} median {statistics.median(v):6.0f}  min {min(v):6.0f}  max {max(v):6.0f}  n={len(v)}  {v}")

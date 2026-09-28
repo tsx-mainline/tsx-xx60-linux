@@ -68,12 +68,14 @@
 #          --uart auto|yes|no (default auto: UART mode is used only if the serial
 #          logger is running and uc.sh exists; otherwise steps 2/6/7 fall back to the
 #          network-only checks described above; --uart yes/no forces the mode)
-#          --root-ssh --sshshell FILE (bake your own patched sshShell.sh into system.img
-#          via mkbundle.sh --root-ssh, so `ssh -tt $TSX_ADMIN_USER@panel rootsh` gets root right
-#          after the restore with no UART; --sshshell FILE is required with --root-ssh,
-#          or set $SSHSHELL -- there is no bundled default). Only used in step 3 when a
-#          bundle is built here (no --bundle); with --bundle, mkbundle.sh has already
-#          run and --root-ssh/--sshshell are ignored (warned)
+#          Root over ssh is ON by default: mkbundle.sh adds a `rootsh` branch to the
+#          sshShell.sh inside the .puf's own system.img, so `ssh -tt $TSX_ADMIN_USER@panel
+#          rootsh` gets root right after the restore with no UART (the Crestron console is
+#          unchanged). It needs the pristine .puf; a modified image is refused in step 3.
+#          --sshshell FILE (bake your own sshShell.sh in as is instead; also $SSHSHELL)
+#          --stock-sshshell (opt out: system.img byte-identical to the .puf). --root-ssh is
+#          accepted and is the default. Only used in step 3 when a bundle is built here (no
+#          --bundle); with --bundle, mkbundle.sh has already run and these are ignored
 # Needs: sshpass ssh python3 sha256sum ip awk curl; in UART mode (see --uart) also
 # ../../tools/bench/serlog.py running (logging to ../../tools/bench/boot-2200.log) and
 # ../../tools/bench/uc.sh. Network-only mode's rescue-IP sweep prefers fping if installed.
@@ -81,20 +83,20 @@
 #   sshpass -p tsx ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@IP '...'
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); WORK=$(cd "$HERE/.." && pwd)
-SERIALDIR=$WORK/../tools/bench; UC=$SERIALDIR/uc.sh; SERLOG=$SERIALDIR/boot-2200.log
+SERIALDIR=$WORK/../tools/bench; UC=$SERIALDIR/uc.sh; SERLOG=${TSX_SERIAL_LOG:-$SERIALDIR/boot-2200.log}
 BUNDLE= PANEL= RESULTS= FROM_STEP=1 TO_STEP=7 YES=0 DRYRUN=0 PORT=8081 WSIP= STABLE_MIN=9 RPW=tsx RIP= UART=auto
 PUF=${TSX_PUF:-} ENVFILE=
-ROOTSSH=0 SSHSHELL=${SSHSHELL:-}
+ROOTSSH=1 ROOTSSH_SET=0 SSHSHELL=${SSHSHELL:-}   # rootsh patch by default
 PRISTINE_PUF_SHA=96438108e3175b66c09f1df284ded5fe155593ba06e069e154688b04f395e40b   # dl/README.txt
 ADMIN_PW=${TSX_ADMIN_PW:-}   # required before step 7 checks the Crestron console; see below
 ADMIN_USER=${TSX_ADMIN_USER:-admin}
-ENVPY="python3 $WORK/sdcard/tsx-env.py"
-usage() { sed -n '2,76p' "$0" >&2; }
+ENVPY="python3 $HERE/sdcard/tsx-env.py"
+usage() { sed -n '2,78p' "$0" >&2; }
 while [ $# -gt 0 ]; do case "$1" in
 	--bundle) BUNDLE=$2; shift 2;; --puf) PUF=$2; shift 2;; --env) ENVFILE=$2; shift 2;; --results) RESULTS=$2; shift 2;; --from-step) FROM_STEP=$2; shift 2;; --to-step) TO_STEP=$2; shift 2;;
 	--yes) YES=1; shift;; --dry-run) DRYRUN=1; shift;; --port) PORT=$2; shift 2;; --ws-ip) WSIP=$2; shift 2;;
 	--stable-min) STABLE_MIN=$2; shift 2;; --rescue-ip) RIP=$2; shift 2;; --rescue-pw) RPW=$2; shift 2;; --uart) UART=$2; shift 2;;
-	--root-ssh) ROOTSSH=1; shift;; --sshshell) ROOTSSH=1; SSHSHELL=$2; shift 2;; -h|--help) usage; exit 0;;
+	--root-ssh) ROOTSSH=1; ROOTSSH_SET=1; shift;; --sshshell) ROOTSSH=1; ROOTSSH_SET=1; SSHSHELL=$2; shift 2;; --stock-sshshell) ROOTSSH=0; SSHSHELL=; shift;; -h|--help) usage; exit 0;;
 	--*) echo "unknown option $1" >&2; usage; exit 2;; *) [ -z "$PANEL" ] || { echo "extra argument $1" >&2; exit 2; }; PANEL=$1; shift;; esac; done
 [ -n "$PANEL" ] || { usage; exit 2; }
 case "$UART" in auto|yes|no) ;; *) echo "--uart must be auto, yes, or no" >&2; exit 2;; esac
@@ -117,8 +119,8 @@ run_stream() {  # CMD
 	return $rc
 }
 if [ "$ROOTSSH" = 1 ]; then
-	if [ -n "$BUNDLE" ]; then log "  WARNING: --root-ssh/--sshshell ignored: --bundle was already built (bake it in with mkbundle.sh --root-ssh instead)"; ROOTSSH=0
-	else [ -n "$SSHSHELL" ] && [ -f "$SSHSHELL" ] || die "--root-ssh needs --sshshell FILE (or \$SSHSHELL): the path to your own patched sshShell.sh; none is bundled here"
+	if [ -n "$BUNDLE" ]; then [ "$ROOTSSH_SET" = 0 ] || log "  WARNING: --root-ssh/--sshshell ignored: --bundle was already built (its system.img is whatever mkbundle.sh made)"; ROOTSSH=0
+	elif [ -n "$SSHSHELL" ]; then [ -f "$SSHSHELL" ] || die "--sshshell $SSHSHELL: no such file"
 	fi
 fi
 RHOST=$PANEL
@@ -166,7 +168,7 @@ uart() { local w=4; if [ "$1" = -w ]; then w=$2; shift 2; fi; [ ${#1} -le 80 ] |
 uart_last() {  # uart_last CMD REGEX: the last line matching REGEX in the answer, echo excluded
 	uart "$1" | grep -v '^>>> ' | grep -E -- "$2" | tail -n 1 || true
 }
-serial_lines() { wc -l < "$SERLOG"; }
+serial_lines() { if [ -f "$SERLOG" ]; then wc -l < "$SERLOG"; else echo 0; fi; }   # no serial log without the UART
 wait_serial() {  # PATTERN TIMEOUT_S FROMLINE [ABORT...]: waits for PATTERN in log lines after FROMLINE
 	local pat=$1 t=$2 from=$3; shift 3; local w=0 new a
 	log "  waiting up to ${t}s on the serial log for: $pat"
@@ -198,7 +200,7 @@ else
 	command -v mke2fs >/dev/null && command -v e2fsck >/dev/null || die "mke2fs/e2fsck (e2fsprogs) needed to build the bundle"
 	PUFSHA=$(sha256sum < "$PUF" | cut -d' ' -f1)
 	if [ "$PUFSHA" = "$PRISTINE_PUF_SHA" ]; then log "  .puf $PUF: pristine 3.002.1061.001 ($PUFSHA)"
-	else log "  WARNING: .puf $PUF sha256 $PUFSHA is not the known pristine package (dl/README.txt)"; fi
+	else log "  WARNING: .puf $PUF sha256 $PUFSHA is not the known pristine package (dl/README.txt)$([ "$ROOTSSH" = 1 ] && [ -z "$SSHSHELL" ] && echo "; the rootsh patch (default) refuses a modified sshShell.sh in step 3: use the pristine .puf, --sshshell FILE or --stock-sshshell")"; fi
 	[ -z "$ENVFILE" ] || { [ -f "$ENVFILE" ] || die "--env $ENVFILE: no such file"; }
 	log "  no bundle given: it is built in step 3 from the .puf + the unit's ${ENVFILE:-live} env (no backup)"
 fi
@@ -228,7 +230,7 @@ if [ "$DRYRUN" = 1 ]; then
 	else
 		log "[dry-run] step 2 (network-only): record eth0 MAC over ssh before reboot; try the kiosk's own IP $PANEL first, then every ~10s up to 300s sweep \$WSIP's /24 (fping or bounded parallel ping -c1 -W1) and match the MAC in 'ip neigh'; accept once ssh root@IP test -f /etc/tsx/rescue-image succeeds; --rescue-ip overrides"
 	fi
-	[ -n "$BUNDLE" ] || log "[dry-run] step 3a: rescue: dd if=/dev/mmcblk0 bs=65536 skip=16 count=1 > results/env-live-<unit>-<date>.bin (or --env); tsx-env.py unit (CRC, ethaddr); mkbundle.sh --puf $PUF --env <env> --out out/bundle-<unit>-<date>$([ "$ROOTSSH" = 1 ] && echo " --root-ssh $SSHSHELL")"
+	[ -n "$BUNDLE" ] || log "[dry-run] step 3a: rescue: dd if=/dev/mmcblk0 bs=65536 skip=16 count=1 > results/env-live-<unit>-<date>.bin (or --env); tsx-env.py unit (CRC, ethaddr); mkbundle.sh --puf $PUF --env <env> --out out/bundle-<unit>-<date>$(if [ "$ROOTSSH" = 1 ]; then echo "${SSHSHELL:+ --sshshell $SSHSHELL} (rootsh patch)"; else echo " --stock-sshshell"; fi)"
 	log "[dry-run] step 3: python3 -m http.server $PORT --directory <bundle parent>; on the panel: mkdir /tmp/b; wget every file of SHA256SUMS + SHA256SUMS; sha256sum -c SHA256SUMS"
 	log "[dry-run] step 4: sh /tmp/b/tsx-emmc-restore check /tmp/b; TSX_SHARE=/usr/share/tsx sh /tmp/b/tsx-factory-restore check /tmp/b"
 	log "[dry-run] step 5: gate FACTORY; sh /tmp/b/tsx-emmc-restore run /tmp/b --yes; TSX_SHARE=/usr/share/tsx sh /tmp/b/tsx-factory-restore run /tmp/b --yes"
@@ -237,7 +239,7 @@ if [ "$DRYRUN" = 1 ]; then
 		log "[dry-run] step 7 (UART): mount|grep mmcblk0p5, fw_printenv fwUpgrade, ls image dir, getprop sys.boot_completed; stability ${STABLE_MIN} min; https://$PANEL/index_device.html -> createUser.html (no account, expected) or ssh -tt $ADMIN_USER@$PANEL ver"
 	else
 		log "[dry-run] step 6 (network-only): reboot -f; wait for rescue ssh to go away, then poll https://$PANEL/ (200/301/302) up to 420s; beyond that, MAC lookup as in step 2 and log the IP found"
-		log "[dry-run] step 7 (network-only): fwUpgrade/boot_completed/p5 checks SKIPPED (no root without UART; with --root-ssh the load driver gets root over ssh once an account exists); poll web UI reachable, then stability watch every 30s for ${STABLE_MIN} min (fail on >90s down straight); https://$PANEL/index_device.html -> createUser.html (no account, expected) or ssh -tt $ADMIN_USER@$PANEL ver"
+		log "[dry-run] step 7 (network-only): fwUpgrade/boot_completed/p5 checks SKIPPED (no root without UART; with the rootsh patch (default) the load driver gets root over ssh once an account exists); poll web UI reachable, then stability watch every 30s for ${STABLE_MIN} min (fail on >90s down straight); https://$PANEL/index_device.html -> createUser.html (no account, expected) or ssh -tt $ADMIN_USER@$PANEL ver"
 	fi
 	log "== dry-run done"; exit 0
 fi
@@ -295,9 +297,9 @@ if [ "$FROM_STEP" -le 3 ] && [ "$TO_STEP" -ge 3 ]; then
 		logblock "env identity (tsx-env.py unit)" "$unit"
 		eth=$($ENVPY show "$ENVSRC" ethaddr | sed -n 's/^ethaddr=//p'); [ -n "$eth" ] || die "the env has no ethaddr: the unit's identity is missing (--env)"
 		BUNDLE=$HERE/out/bundle-$(echo "$eth" | tr -d ':' | tr 'A-F' 'a-f')-$(date +%Y%m%d-%H%M)
-		MKARGS=(--puf "$PUF" --env "$ENVSRC" --out "$BUNDLE"); [ "$ROOTSSH" = 1 ] && MKARGS+=(--root-ssh "$SSHSHELL")
-		log "  building the bundle (no backup$([ "$ROOTSSH" = 1 ] && echo ", --root-ssh $SSHSHELL")): $BUNDLE"
-		out=$("$HERE/mkbundle.sh" "${MKARGS[@]}" 2>&1) || { logblock "mkbundle" "$out"; die "mkbundle.sh failed"; }
+		MKARGS=(--puf "$PUF" --env "$ENVSRC" --out "$BUNDLE"); if [ "$ROOTSSH" != 1 ]; then MKARGS+=(--stock-sshshell); elif [ -n "$SSHSHELL" ]; then MKARGS+=(--sshshell "$SSHSHELL"); fi
+		log "  building the bundle (no backup$(if [ "$ROOTSSH" = 1 ]; then echo ", rootsh patch${SSHSHELL:+ from --sshshell $SSHSHELL}"; else echo ", --stock-sshshell"; fi)): $BUNDLE"
+		out=$("$HERE/factory/mkbundle.sh" "${MKARGS[@]}" 2>&1) || { logblock "mkbundle" "$out"; die "mkbundle.sh failed"; }
 		logblock "mkbundle (tail)" "$(printf '%s\n' "$out" | tail -n 25)"
 		check_bundle; set_bundle_paths
 	fi
@@ -411,7 +413,7 @@ if [ "$FROM_STEP" -le 7 ] && [ "$TO_STEP" -ge 7 ]; then
 	done
 	log "  ok: no reboot in $STABLE_MIN min; uptime: $(uart_last 'cat /proc/uptime' '^[0-9]')"
 	else
-		log "  network-only (--uart $UART): fwUpgrade / boot_completed / p5-mounted checks are SKIPPED (no root console on a factory unit without the UART); with --root-ssh baked into system.img, the load driver (steps/tsx-android-to-card) gets root over 'ssh -tt $TSX_ADMIN_USER@panel rootsh' as soon as a Crestron account exists, no UART needed"
+		log "  network-only (--uart $UART): fwUpgrade / boot_completed / p5-mounted checks are SKIPPED (no root console on a factory unit without the UART); with the rootsh patch (default) in system.img, the load driver (steps/tsx-android-to-card) gets root over 'ssh -tt $ADMIN_USER@panel rootsh' as soon as a Crestron account exists, no UART needed"
 		w=0; ok=0; code=000
 		while [ $w -lt 300 ]; do
 			code=$(curl -sk -m 8 -o /dev/null -w '%{http_code}' "https://$ANDROID_IP/" 2>/dev/null || true); code=${code:-000}
