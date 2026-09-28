@@ -4,10 +4,25 @@ on:
     tags:
       - 'v*'
 
-# Nothing here downloads or bundles a Crestron file: the boot image, the
-# rootfs, and the rescue image are all built from this repo's own sources.
+# Nothing here downloads or bundles a Crestron file: the boot images, the
+# rootfs, the rescue image and the v2 install payload are all built from this
+# repo's own sources (rootfs/vendor-fetch.sh's proprietary DSP files are
+# fetched by the PANEL itself at install time over the network, never bundled
+# into a release asset).
+#
+# Job graph (each job runs on a plain ubuntu-latest runner, no --privileged
+# and no loop-device mounts anywhere -- mk-tsxroot-emmc.sh builds its ext4
+# with `mke2fs -d` straight from a directory tree, never a loopback mount):
+#   kernel (matrix lts/stable) -> rescue -----\
+#                               \-> rootfs ---> payload (matrix lts/stable) -> bundle -> publish
+# rootfs and the armv7 initramfs steps need the qemu-user armv7 binfmt
+# (docker/setup-qemu-action); the kernel build is a plain x86 cross-compile
+# and needs no qemu. NOTE: GitHub's arm64 hosted runners (Azure Cobalt 100,
+# an Armv9 core) most likely cannot execute armv7 (AArch32) code natively, so
+# the armv7 steps would still need qemu there and would gain little; the x86
+# runners are used for everything.
 jobs:
-  build:
+  kernel:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -15,9 +30,6 @@ jobs:
         flavor: [lts, stable]
     steps:
       - uses: actions/checkout@v4
-
-      - name: register the armv7 qemu-user binfmt (docker --platform linux/arm/v7)
-        uses: docker/setup-qemu-action@v3
 
       - name: cache the kernel fork checkout (${{ matrix.flavor }})
         uses: actions/cache@v4
@@ -36,89 +48,289 @@ jobs:
           cat ../out-${{ matrix.flavor }}/kernel.commit
           cat ../out-${{ matrix.flavor }}/sha256sums.txt
 
-      - name: build sendspin-cli from source (rootfs/src/sendspin/build.sh)
-        run: rootfs/src/sendspin/build.sh
+      # rootfs/build-rootfs.sh's own "modules" case: strips this flavor's
+      # *.ko into rootfs/modules/lib/modules/<release>/ (uses the same
+      # tsx-mainline docker image kbuild.sh just built/reused above, for the
+      # strip step). Uploaded separately from the kernel artifact below so
+      # the rootfs job (which needs BOTH flavors' modules but neither
+      # flavor's zImage) does not have to pull either flavor's ~30 MiB
+      # zImage/dtb pair for nothing.
+      - name: this flavor's kernel modules tree (rootfs/build-rootfs.sh modules)
+        run: KBUILD=../build-${{ matrix.flavor }} rootfs/build-rootfs.sh modules
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.flavor }}
+          path: |
+            ../out-${{ matrix.flavor }}/zImage
+            ../out-${{ matrix.flavor }}/meson8m2-crestron-tsw1060.dtb
+            ../out-${{ matrix.flavor }}/kernel.release
+            ../out-${{ matrix.flavor }}/kernel.commit
+            ../out-${{ matrix.flavor }}/sha256sums.txt
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: modules-${{ matrix.flavor }}
+          path: rootfs/modules
+          if-no-files-found: error
+
+  # Rebuilt only when its own inputs change (installer/rescue*/**, the stage-2
+  # initramfs pieces, or the lts kernel it happens to be packed with -- see
+  # ci/build-rescue.sh's NOTE on why the flavor choice there is cosmetic).
+  rescue:
+    needs: [kernel, rootfs]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cache the built rescue image
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: rescue-out
+          key: rescue-${{ hashFiles('installer/rescue/**', 'installer/rescue-v2/**', 'installer/initramfs/**', 'rootfs/initramfs/**', 'rootfs/overlay/**', 'kernel/KERNEL_REV.lts') }}
+
+      - name: register the armv7 qemu-user binfmt (docker --platform linux/arm/v7)
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - uses: actions/download-artifact@v4
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          name: kernel-lts
+          path: ../out-lts
+
+      - uses: actions/download-artifact@v4
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          name: rootfs
+          path: rootfs/out
+
+      - name: ci/build-rescue.sh --kdir ../out-lts --flavor shared
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p rescue-out
+          ci/build-rescue.sh --kdir ../out-lts --flavor shared --out rescue-out/rescue.img
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rescue
+          path: rescue-out
+          if-no-files-found: error
+
+  rootfs:
+    needs: kernel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cache the built rootfs + initramfs
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: rootfs/out
+          key: rootfs-${{ hashFiles('rootfs/**', 'kernel/KERNEL_REV.lts', 'kernel/KERNEL_REV.stable') }}
+
+      - name: register the armv7 qemu-user binfmt (docker --platform linux/arm/v7)
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - uses: actions/download-artifact@v4
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          pattern: modules-*
+          path: rootfs/modules
+          merge-multiple: true
 
       # No Crestron file is ever fetched or bundled here: TFA_VENDOR_FETCH=no
       # and TFA_VENDOR_SRC unset means mkrootfs.sh leaves the TFA9890 DSP
       # tuning containers out of the image entirely (a local build run by a
       # user, on their own machine, keeps fetching them by default). The
       # no-proprietary-files step below checks this on the build's output,
-      # not just this env var. Built once per flavor leg (the rootfs itself
-      # is flavor-independent -- rootfs/build-rootfs.sh's tarball carries
-      # both kernels' /lib/modules trees -- but this workflow does not share
-      # state between matrix legs, so it is rebuilt here rather than pulled
-      # from another job).
-      - name: build the rootfs + initramfs (rootfs/build-rootfs.sh all)
+      # not just this env var. KVER is left at its default (every release dir
+      # under rootfs/modules/lib/modules -- both flavors, merged above), so
+      # this ONE rootfs tarball carries both kernels' modules; see
+      # installer/emmc/mk-tsxroot-emmc.sh's header for why the eMMC root
+      # image built from it later keeps only one flavor's tree.
+      - name: build the rootfs (rootfs/build-rootfs.sh rootfs)
+        if: steps.cache.outputs.cache-hit != 'true'
         env:
           TFA_VENDOR_FETCH: "no"
-        run: rootfs/build-rootfs.sh all
+        run: rootfs/build-rootfs.sh rootfs
+
+      - name: build the switch_root initramfs (rootfs/build-rootfs.sh initramfs)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: rootfs/build-rootfs.sh initramfs
+
+      - name: manifest / sizes / sha256
+        run: |
+          cat rootfs/out/rootfs.manifest
+          cat rootfs/out/rootfs.sizes
+          cat rootfs/out/rootfs.sha256
 
       - name: no proprietary files in the build output (ci/check-no-proprietary.sh)
         run: ci/check-no-proprietary.sh rootfs/out/rootfs.tar.gz rootfs/out/rootfs.ext4
 
-      - name: pack the installed-system boot image (rootfs/mkbootimg.sh, this flavor's kernel)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rootfs
+          path: |
+            rootfs/out/rootfs.tar.gz
+            rootfs/out/rootfs.ext4
+            rootfs/out/rootfs.manifest
+            rootfs/out/rootfs.sizes
+            rootfs/out/rootfs.sha256
+            rootfs/out/initramfs-switchroot.cpio.gz
+          if-no-files-found: error
+
+  # Assembles this flavor's slice of the v2 install payload: the compact eMMC
+  # root image (content-sized, not partition-sized -- see
+  # mk-tsxroot-emmc.sh's header for why) and this flavor's installed-system
+  # boot image, bundled with a manifest + SHA256SUMS.
+  payload:
+    needs: [kernel, rootfs]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [lts, stable]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kernel-${{ matrix.flavor }}
+          path: ../out-${{ matrix.flavor }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: rootfs
+          path: rootfs/out
+
+      - name: this flavor's installed-system boot image (rootfs/mkbootimg.sh)
         env:
           KDIR: ../out-${{ matrix.flavor }}
         run: rootfs/mkbootimg.sh
 
-      # Needs a stage-2 (tsx-autoinstall) base image integrated first
-      # (installer/initramfs/build-initramfs.sh + integrate.sh), which this
-      # workflow does not build; best effort only, and the bundle ships
-      # without a rescue image when it fails.
-      - name: build the golden-slot rescue image (best effort)
-        continue-on-error: true
-        run: installer/rescue/mkrescue.sh --out rootfs/out/tsx-rescue-tsw1060.img
-
-      - name: build the installer payload bundle - two-stage, rootfs tarball + this flavor's boot image
+      # --bytes is the eMMC "system/root" region size (2932 MiB, i.e. the
+      # rest of a 4 GB Hynix device past the "boot" region -- see
+      # docs/boot.md's eMMC region table); mk-tsxroot-emmc.sh refuses if the
+      # compact image would not fit it, and records it in the manifest for
+      # installer/steps/tsx-rescue-install's own sanity check.
+      - name: this flavor's compact eMMC root image (installer/emmc/mk-tsxroot-emmc.sh)
         run: |
-          mkdir -p release/payload
-          installer/payload/mkpayload --out release/payload \
-            --rootfs rootfs/out/rootfs.tar.gz --bootimg-tsw1060 rootfs/out/tsxboot.img --allow-stale
-          tar -C release/payload -czf release/tsx-xx60-${{ matrix.flavor }}-payload.tar.gz .
+          mkdir -p payload-out
+          installer/emmc/mk-tsxroot-emmc.sh \
+            --rootfs-tar rootfs/out/rootfs.tar.gz \
+            --modules-ver "$(cat ../out-${{ matrix.flavor }}/kernel.release)" \
+            --bytes 3074424832 \
+            --flavor ${{ matrix.flavor }} \
+            --out payload-out/root.img
 
-      - name: collect the release files and their SHA256SUMS (flavor-prefixed, so both flavors land in the same release)
+      - name: bundle root.img + boot.img + manifest (installer/emmc/mk-v2-bundle.sh)
         run: |
-          set -eu
-          F=${{ matrix.flavor }}
-          O=release/out; mkdir -p "$O"
-          cp ../out-$F/zImage "$O/zImage-$F"
-          cp ../out-$F/meson8m2-crestron-tsw1060.dtb "$O/meson8m2-crestron-tsw1060-$F.dtb"
-          cp ../out-$F/kernel.release "$O/kernel.release-$F"
-          cp ../out-$F/kernel.commit "$O/kernel.commit-$F"
-          cp rootfs/out/rootfs.tar.gz "$O/rootfs-$F.tar.gz"
-          cp rootfs/out/rootfs.ext4 "$O/rootfs-$F.ext4"
-          cp rootfs/out/rootfs.manifest "$O/rootfs-$F.manifest"
-          cp rootfs/out/rootfs.sizes "$O/rootfs-$F.sizes"
-          cp rootfs/out/tsxboot.img "$O/tsxboot-$F.img"
-          [ -f rootfs/out/tsx-rescue-tsw1060.img ] && cp rootfs/out/tsx-rescue-tsw1060.img "$O/tsx-rescue-tsw1060-$F.img" || true
-          cp release/tsx-xx60-$F-payload.tar.gz "$O/"
-          (cd "$O" && find . -maxdepth 1 -type f -exec sha256sum {} + | sort -k2 > "/tmp/SHA256SUMS-$F" && mv "/tmp/SHA256SUMS-$F" "SHA256SUMS-$F")
-          ls -l "$O"
+          installer/emmc/mk-v2-bundle.sh \
+            --root-img payload-out/root.img \
+            --boot-img rootfs/out/tsxboot.img \
+            --flavor ${{ matrix.flavor }} \
+            --out-dir payload-out/${{ matrix.flavor }}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: tsx-xx60-${{ matrix.flavor }}-${{ steps.info.outputs.release }}
-          path: release/out
+          name: payload-${{ matrix.flavor }}
+          path: payload-out/${{ matrix.flavor }}
+          if-no-files-found: error
+
+  # Assembles installer/tsx-install-mainline's exact --payload DIR layout
+  # (DIR/rescue.img, DIR/<flavor>/{root.img,boot.img,manifest,SHA256SUMS}) and
+  # packs it as one archive per flavor (each self-sufficient: unpacking either
+  # tarball alone gives a complete --payload DIR for that flavor). Per-flavor,
+  # not one combined archive, because GitHub release assets cap out at 2 GiB
+  # each and a combined archive (rescue + both ~940 MiB flavor dirs) would sit
+  # too close to that ceiling as the rootfs grows.
+  bundle:
+    needs: [rescue, payload]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: rescue
+          path: bundle
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: payload-lts
+          path: bundle/lts
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: payload-stable
+          path: bundle/stable
+
+      - name: sanity-check the payload layout installer/tsx-install-mainline expects
+        run: |
+          set -eu
+          for f in bundle/rescue.img bundle/lts/manifest bundle/lts/root.img bundle/lts/boot.img bundle/lts/SHA256SUMS \
+                   bundle/stable/manifest bundle/stable/root.img bundle/stable/boot.img bundle/stable/SHA256SUMS; do
+            [ -f "$f" ] || { echo "bundle: missing $f"; exit 1; }
+          done
+          (cd bundle/lts && sha256sum -c --quiet SHA256SUMS)
+          (cd bundle/stable && sha256sum -c --quiet SHA256SUMS)
+          echo "bundle: layout OK"
+
+      - name: pack one archive per flavor (rescue.img + that flavor's dir), zstd-compressed
+        run: |
+          set -eu
+          mkdir -p out
+          for f in lts stable; do
+            tar --zstd -cf out/tsx-xx60-$f-payload.tar.zst -C bundle rescue.img rescue.img.sha256 $f
+            ls -l out/tsx-xx60-$f-payload.tar.zst
+          done
+          (cd out && sha256sum tsx-xx60-*-payload.tar.zst > SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-payload
+          path: out
           if-no-files-found: error
 
   publish:
-    needs: build
+    needs: [kernel, bundle]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: collect the small kernel dev files (renamed per flavor)
+        run: mkdir -p release/out release/k-lts release/k-stable
+
       - uses: actions/download-artifact@v4
         with:
-          pattern: tsx-xx60-*
+          name: kernel-lts
+          path: release/k-lts
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kernel-stable
+          path: release/k-stable
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-payload
           path: release/out
-          merge-multiple: true
-      - name: combined SHA256SUMS (both flavors)
+
+      - name: rename the per-flavor kernel dev files into release/out
         run: |
-          cd release/out
-          cat SHA256SUMS-lts SHA256SUMS-stable > SHA256SUMS
-          rm -f SHA256SUMS-lts SHA256SUMS-stable
-          ls -l .
+          set -eu
+          for f in lts stable; do
+            cp release/k-$f/zImage release/out/zImage-$f
+            cp release/k-$f/meson8m2-crestron-tsw1060.dtb release/out/meson8m2-crestron-tsw1060-$f.dtb
+            cp release/k-$f/kernel.release release/out/kernel.release-$f
+            cp release/k-$f/kernel.commit release/out/kernel.commit-$f
+          done
+          (cd release/out && find . -maxdepth 1 -type f ! -name SHA256SUMS -exec sha256sum {} + | sort -k2 > SHA256SUMS)
+          ls -l release/out
+
       - name: attach the build to the GitHub release for this tag
         env:
           GH_TOKEN: ${{ github.token }}

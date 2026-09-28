@@ -10,7 +10,10 @@ R=/tmp/rootfs; rm -rf $R; mkdir -p $R
 apk add --root $R --initdb --no-cache -q \
     --repositories-file /etc/apk/repositories --keys-dir /etc/apk/keys \
     alpine-baselayout busybox busybox-binsh dropbear i2c-tools evtest e2fsprogs \
-    dosfstools util-linux-misc blkid sfdisk u-boot-tools
+    e2fsprogs-extra dosfstools util-linux-misc blkid sfdisk u-boot-tools
+    # e2fsprogs-extra: resize2fs (installer/steps/tsx-rescue-install grows the
+    # compact eMMC root to fill p8 after writing it; e2fsck/mke2fs/mkfs.ext4
+    # are in e2fsprogs above, blkdiscard is in util-linux-misc)
 cp -a "$HERE"/overlay/. $R/
 # installer stage 2: the rootfs installer inside the initramfs (tsx-autoinstall uses it)
 mkdir -p $R/usr/share/tsx

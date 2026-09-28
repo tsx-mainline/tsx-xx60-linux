@@ -30,7 +30,13 @@ ALPINE=${ALPINE:-v3.24}
 IMAGE=${IMAGE:-alpine:3.24}
 KBUILD=${KBUILD:-$TOP/build}
 MODULES=$HERE/modules
-KVER=${KVER:-$(ls "$MODULES/lib/modules" 2>/dev/null | tr '\n' ' ')}
+# "|| true" after the pipe: under pipefail, ls's exit status (nonzero when
+# $MODULES/lib/modules does not exist yet -- the normal case before "modules"
+# has ever been run) still fails the pipeline and kills the script under set
+# -e, even with stderr redirected to /dev/null (the same class of bug as the
+# "ash dd stdin trap" in docs/recovery.md, just pipefail instead of a
+# backgrounded job).
+KVER=${KVER:-$(ls "$MODULES/lib/modules" 2>/dev/null | tr '\n' ' ' || true)}
 IMG_MB=${IMG_MB:-1492}
 UIDGID="$(id -u):$(id -g)"
 [ -e /proc/sys/fs/binfmt_misc/qemu-arm ] || { echo "need qemu-arm binfmt (qemu-user-static)"; exit 1; }

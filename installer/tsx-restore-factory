@@ -20,7 +20,8 @@
 #      helper scripts present; UART mode (see --uart below) also needs the
 #      serial logger running
 #   2  get the panel into the RESCUE system: from the kiosk, copy p1:boot.img
-#      (the mainline rescue in the golden slot) to p1:tsxboot.img, verify, reboot;
+#      (the mainline rescue in the golden slot) to p1:tsxboot.img, verify, remove
+#      p1:tsxboot.off, arm tsx_once=1 if the hook is the v2 once guard, reboot;
 #      wait for ssh with /etc/tsx/rescue-image. (If the panel is already in the
 #      rescue, nothing to do. If nothing answers: stop, this driver never PoE-cycles.)
 #      UART mode reads the rescue's DHCP-leased IP from the serial banner
@@ -224,7 +225,7 @@ if [ -z "$WSIP" ]; then WSIP=$(ip route get "$PANEL" | awk '{for(i=1;i<=NF;i++) 
 HTTP_PID=; stop_http() { [ -n "$HTTP_PID" ] && kill "$HTTP_PID" 2>/dev/null && log "  HTTP server stopped"; HTTP_PID=; }
 trap stop_http EXIT
 if [ "$DRYRUN" = 1 ]; then
-	log "[dry-run] step 2: ssh root@$PANEL: if kiosk (no /etc/tsx/rescue-image): mount p1, cp boot.img tsxboot.img, sha check, umount, reboot; wait for ssh + rescue flag (300 s)"
+	log "[dry-run] step 2: ssh root@$PANEL: if kiosk (no /etc/tsx/rescue-image): mount p1, cp boot.img tsxboot.img, sha check, rm tsxboot.off, tsx_once=1 if the hook is the once guard, umount, reboot; wait for ssh + rescue flag (300 s)"
 	if [ "$UART_ON" = 1 ]; then
 		log "[dry-run] step 2 (UART): rescue IP read from the serial banner 'tsx-rescue: network: eth0 <ip>'"
 	else
@@ -254,7 +255,13 @@ if [ "$FROM_STEP" -le 2 ] && [ "$TO_STEP" -ge 2 ]; then
 			mac=$($SSH 'cat /sys/class/net/eth0/address' 2>/dev/null) || die "could not read the panel's eth0 MAC before reboot (needed for network-only rescue-IP discovery)"
 			log "  panel MAC (for network-only rescue-IP discovery): $mac"
 		fi
-		out=$($SSH 'set -e; mkdir -p /mnt/p1; mount -t vfat /dev/mmcblk0p1 /mnt/p1; g=$(sha256sum < /mnt/p1/boot.img | cut -d" " -f1); free=$(df -k /mnt/p1 | awk "NR==2{print \$4}"); need=$(( $(stat -c %s /mnt/p1/boot.img) / 1024 + 256 )); [ "$free" -gt "$need" ] || { echo "no room on p1: free ${free}K need ${need}K"; umount /mnt/p1; exit 1; }; cp /mnt/p1/boot.img /mnt/p1/tsxboot.new; sync; [ "$(sha256sum < /mnt/p1/tsxboot.new | cut -d" " -f1)" = "$g" ] || { rm -f /mnt/p1/tsxboot.new; umount /mnt/p1; echo copy corrupt; exit 1; }; mv /mnt/p1/tsxboot.new /mnt/p1/tsxboot.img; sync; echo 3 > /proc/sys/vm/drop_caches; echo "p1:tsxboot.img = rescue $g"; ls -l /mnt/p1; umount /mnt/p1; echo REBOOTING; (sleep 2; reboot) >/dev/null 2>&1 &' 2>&1) || die "p1 rescue copy failed: $out"
+		# The hook only boots p1:tsxboot.img when p1:tsxboot.off is absent, and
+		# with the v2 `once` guard only when tsx_once=1 (docs/boot.md "The v2 env
+		# state machine"). An eMMC-layout kiosk installed by tsx-rescue-install
+		# has tsxboot.off, and with the `once` guard tsx_once=0: without clearing
+		# both, the reboot just lands on the kiosk again. tsx_once=1 is one
+		# verified single-variable env write; U-Boot clears it on the next boot.
+		out=$($SSH 'set -e; mkdir -p /mnt/p1; mount -t vfat /dev/mmcblk0p1 /mnt/p1; g=$(sha256sum < /mnt/p1/boot.img | cut -d" " -f1); t=; [ -f /mnt/p1/tsxboot.img ] && t=$(sha256sum < /mnt/p1/tsxboot.img | cut -d" " -f1); if [ "$t" = "$g" ]; then echo "p1:tsxboot.img is already the rescue (no copy needed)"; else free=$(df -k /mnt/p1 | awk "NR==2{print \$4}"); need=$(( $(stat -c %s /mnt/p1/boot.img) / 1024 + 256 )); if [ "$free" -gt "$need" ]; then cp /mnt/p1/boot.img /mnt/p1/tsxboot.new; sync; [ "$(sha256sum < /mnt/p1/tsxboot.new | cut -d" " -f1)" = "$g" ] || { rm -f /mnt/p1/tsxboot.new; umount /mnt/p1; echo copy corrupt; exit 1; }; mv /mnt/p1/tsxboot.new /mnt/p1/tsxboot.img; else tfree=$(( free + $( [ -f /mnt/p1/tsxboot.img ] && stat -c %s /mnt/p1/tsxboot.img || echo 0 ) / 1024 )); [ "$tfree" -gt "$need" ] || { echo "no room on p1: free ${free}K (+ tsxboot.img) need ${need}K"; umount /mnt/p1; exit 1; }; echo "p1: no room for a side copy (free ${free}K): replacing tsxboot.img in place"; rm -f /mnt/p1/tsxboot.img; sync; cp /mnt/p1/boot.img /mnt/p1/tsxboot.img; sync; [ "$(sha256sum < /mnt/p1/tsxboot.img | cut -d" " -f1)" = "$g" ] || { rm -f /mnt/p1/tsxboot.img; umount /mnt/p1; echo copy corrupt; exit 1; }; fi; fi; echo "/dev/mmcblk0 0x100000 0x10000" > /run/tsx-rf-env.cfg; sw=$(fw_printenv -c /run/tsx-rf-env.cfg -n switch_bootmode 2>/dev/null) || { umount /mnt/p1; echo "cannot read the U-Boot env"; exit 1; }; case "$sw" in *tsx_boot*) ;; *) umount /mnt/p1; echo "the U-Boot hook (tsx_boot) is not installed: the reboot would not reach the rescue"; exit 1;; esac; if [ -f /mnt/p1/tsxboot.off ]; then rm -f /mnt/p1/tsxboot.off; echo "p1:tsxboot.off removed (hook re-enabled)"; fi; case "$sw" in *tsx_once*) fw_setenv -c /run/tsx-rf-env.cfg tsx_once 1; [ "$(fw_printenv -c /run/tsx-rf-env.cfg -n tsx_once 2>/dev/null)" = 1 ] || { umount /mnt/p1; echo "tsx_once=1 did not take"; exit 1; }; echo "tsx_once=1 armed (one rescue boot)";; *) echo "hook: boot_retry=$(fw_printenv -c /run/tsx-rf-env.cfg -n boot_retry 2>/dev/null) (runs tsx_boot while < 6)";; esac; sync; echo 3 > /proc/sys/vm/drop_caches; echo "p1:tsxboot.img = rescue $g"; ls -l /mnt/p1; umount /mnt/p1; echo REBOOTING; (sleep 2; reboot) >/dev/null 2>&1 &' 2>&1) || die "p1 rescue copy failed: $out"
 		logblock "p1 rescue copy" "$out"
 		grep -q REBOOTING <<<"$out" || die "no reboot"
 		if [ "$UART_ON" = 1 ]; then

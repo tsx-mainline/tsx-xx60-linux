@@ -129,7 +129,7 @@ push_rootfs() {
 	local p=$REPO/rootfs
 	rsh "mkdir -p $BUILD_DIR/rootfs"
 	for d in overlay src initramfs config voice; do [ -d "$p/$d" ] && "${RS[@]}" --delete "$p/$d/" "$HOST:$BUILD_DIR/rootfs/$d/"; done
-	for f in mkrootfs.sh build-rootfs.sh mkbootimg.sh authorized_keys; do [ -e "$p/$f" ] && "${RS[@]}" "$p/$f" "$HOST:$BUILD_DIR/rootfs/"; done
+	for f in mkrootfs.sh build-rootfs.sh mkbootimg.sh packages.txt vendor-fetch.sh install.sh tsx-disk.sh authorized_keys; do [ -e "$p/$f" ] && "${RS[@]}" "$p/$f" "$HOST:$BUILD_DIR/rootfs/"; done
 	true
 }
 

@@ -11,10 +11,6 @@ musl-utils
 eudev
 eudev-openrc
 e2fsprogs
-# e2fsprogs-extra: resize2fs (installer/steps/tsx-rescue-install grows the
-# compact eMMC root to fill p8 after writing it; e2fsck/mke2fs/mkfs.ext4 are
-# in the main e2fsprogs package above, blkdiscard is in util-linux-misc below)
-e2fsprogs-extra
 dosfstools
 util-linux-misc
 kmod
