@@ -1,0 +1,22 @@
+Boot splash artwork (rootfs/splash/)
+
+tsx-xx60-mark.svg
+    The TSX-XX60 word mark. This project's own artwork, GPL-2.0-or-later
+    like the rest of the repository.
+
+tux-80.png
+    Tux, the Linux penguin, by Larry Ewing <lewing@isc.tamu.edu>, drawn
+    with The GIMP. This is the Linux kernel's own boot logo,
+    drivers/video/logo/logo_linux_clut224.ppm (80x80, 224 colours;
+    "Copyright (C) 1996 Larry Ewing" in drivers/video/logo/logo.c),
+    GPL-2.0 like the kernel, converted losslessly from PPM to PNG. Larry
+    Ewing's permission note: "Permission to use and/or modify this image is
+    granted provided you acknowledge me lewing@isc.tamu.edu and The GIMP if
+    someone asks."
+
+Status line font (not in the repository): Terminus (ter-116n, ter-124n),
+SIL Open Font License 1.1, installed from Alpine's font-terminus package at
+build time by mksplash.sh.
+
+The rescue status screen and /etc/motd use the classic public-domain ASCII
+Tux (seven lines, "|o_o |").

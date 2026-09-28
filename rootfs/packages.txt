@@ -33,6 +33,8 @@ wlroots0.20
 # on-screen keyboard (KIOSK_OSK): sway has the layer-shell / input-method-v2 /
 # text-input-v3 protocols cage lacks; dbus for squeekboard's session API
 sway
+# sway's background = the boot splash until the page has painted (kiosk-session)
+swaybg
 squeekboard
 wvkbd-mobintl
 dbus

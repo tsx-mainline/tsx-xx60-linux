@@ -48,6 +48,8 @@ jobs:
         run: rootfs/tests/test-buttons.sh
       - name: rootfs/tests/test-voice-esphome-run.sh - panel.conf PANEL_NAME override (tsx-voice-run, tsx-esphome-run)
         run: sh rootfs/tests/test-voice-esphome-run.sh
+      - name: rootfs/tests/test-splash.sh - boot splash frames (image, status line, progress bar)
+        run: sh rootfs/tests/test-splash.sh
       - name: rootfs/tests/test-tsx-config.sh
         run: rootfs/tests/test-tsx-config.sh
       - name: rootfs/tests/test-tsx-config-apply.sh

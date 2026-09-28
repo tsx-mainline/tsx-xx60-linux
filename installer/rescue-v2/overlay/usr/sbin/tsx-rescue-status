@@ -26,15 +26,16 @@ VERFILE=/etc/tsx/rescue-version
 # ---- splash: shown once at the top of every frame, tasteful and small enough
 # for an 80x25 console; the LCD (1280x800) just shows it smaller/top-left with
 # the default fbcon font, which is fine here (this is a repair screen, not a
-# logo screen).
+# logo screen). Tux: the classic public-domain ASCII penguin.
 splash() {
 	cat <<'EOF'
- ___________  __    _  ___  ______ ___
-/_  __/ __/ |/_/___| |/_/ |/_/ __// _ \
- / / _\ \_>  </___/>  <_>  </ _ \/ // /
-/_/ /___/_/|_|   /_/|_/_/|_|\___/\___/
-
-        mainline rescue -- TSW-760 / TSW-1060 / TSS-10
+    .--.
+   |o_o |      ___________  __    _  ___  ______ ___
+   |:_/ |     /_  __/ __/ |/_/___| |/_/ |/_/ __// _ \
+  //   \ \     / / _\ \_>  </___/>  <_>  </ _ \/ // /
+ (|     | )   /_/ /___/_/|_|   /_/|_/_/|_|\___/\___/
+/'\_   _/`\
+\___)=(___/   mainline rescue -- TSW-760 / TSW-1060 / TSS-10
 EOF
 }
 

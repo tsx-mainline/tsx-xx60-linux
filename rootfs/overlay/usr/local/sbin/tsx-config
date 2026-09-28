@@ -42,7 +42,10 @@
 # /etc/tsx/apk-url.default; "off" = leave them out), BLANK_TIMEOUT (seconds
 # without input before the screen goes dark, 0 = never; replaces kiosk.conf's
 # BLANK_TIMEOUT through /run/tsx/blank-timeout, which tsx-idled watches -- the
-# Home Assistant "Blank timeout" number), ROOT_PASSWORD_HASH,
+# Home Assistant "Blank timeout" number), BOOT_VERBOSE (1 = kernel and boot
+# text on the LCD instead of the boot splash, from the next boot on; apply
+# keeps the flag file /etc/tsx/boot-verbose on the root file system, which the
+# initramfs reads -- it cannot read /data), ROOT_PASSWORD_HASH,
 # SSH_AUTHORIZED_KEY. See installer/panel.conf.example
 # and docs/rootfs.md "Panel configuration" for what each one does.
 set -eu
@@ -56,7 +59,7 @@ SEED=${TSX_CONF_SEED:-/etc/tsx/panel.conf.seed}
 # fixture tree at it; empty (the panel default) leaves the paths absolute.
 PREFIX=${TSX_APPLY_PREFIX:-}
 
-KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
+KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT BOOT_VERBOSE ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 SECRET_KEYS="HA_TOKEN HA_API_KEY MQTT_PASSWORD ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 
 usage() { sed -n '2,16p' "$0" >&2; exit 2; }
@@ -144,6 +147,7 @@ val_ok() {
 	APK_URL) [ "$v" = off ] && return 0; printf '%s' "$v" | grep -Eq '^(https?://[A-Za-z0-9.:@_~%+-]+(/[^[:space:]]*)?|/[^[:space:]]*)$';;
 	# seconds, 0 = never, at most a day
 	BLANK_TIMEOUT) printf '%s' "$v" | grep -Eq '^[0-9]{1,5}$' && [ "$v" -le 86400 ];;
+	BOOT_VERBOSE) case "$v" in 0|1) return 0;; esac; return 1;;
 	ROOT_PASSWORD_HASH) printf '%s' "$v" | grep -Eq '^\$[0-9A-Za-z$./]{10,}$';;
 	SSH_AUTHORIZED_KEY) printf '%s' "$v" | grep -Eq '^(ssh-[a-z0-9]+|ecdsa-sha2-[a-z0-9-]+) [A-Za-z0-9+/]+=*([[:space:]].*)?$';;
 	*) return 1;;
@@ -414,6 +418,18 @@ apply() {
 	fi
 
 	apk_repos
+
+	# BOOT_VERBOSE=1: boot text on the LCD instead of the splash, from the
+	# next boot on (rootfs/initramfs/overlay/init reads the flag file)
+	bv=$(cfg_get BOOT_VERBOSE) || bv=
+	if [ "$bv" = 1 ]; then
+		if [ ! -e "$PREFIX/etc/tsx/boot-verbose" ]; then
+			mkdir -p "$PREFIX/etc/tsx" && : > "$PREFIX/etc/tsx/boot-verbose" \
+				&& log "BOOT_VERBOSE=1: boot text on the screen from the next boot on"
+		fi
+	elif [ -e "$PREFIX/etc/tsx/boot-verbose" ]; then
+		rm -f "$PREFIX/etc/tsx/boot-verbose" && log "BOOT_VERBOSE off: boot splash from the next boot on"
+	fi
 
 	method=$(cfg_get HA_LOGIN_METHOD) || method=
 	tok=$(cfg_get HA_TOKEN) || tok=

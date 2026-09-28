@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- TSX-XX60 word mark: this project's own artwork (GPL-2.0-or-later, like the
+     rest of the repository). Monoline strokes only, no font needed, so the
+     build renders it the same everywhere (rootfs/splash/mksplash.sh).
+     Cap height 100 units, stroke 12, round caps; letters on an 86-unit pitch
+     (the hyphen on 58). "TSX" in the light tone, "-XX60" in the accent. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-8 -8 654 116" width="654" height="116">
+  <g fill="none" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#e8ecf0">
+      <!-- T -->
+      <path d="M7,7 H57 M32,7 V93"/>
+      <!-- S: two arcs of radius 21.5 meeting at mid height -->
+      <path transform="translate(86,0)" d="M52.2,21.15 A21.5,21.5 0 1 0 32,50 A21.5,21.5 0 1 1 11.8,78.85"/>
+      <!-- X -->
+      <path transform="translate(172,0)" d="M7,7 L57,93 M57,7 L7,93"/>
+    </g>
+    <g stroke="#3fa7e0">
+      <!-- hyphen -->
+      <path transform="translate(258,0)" d="M6,54 H30"/>
+      <!-- X X -->
+      <path transform="translate(316,0)" d="M7,7 L57,93 M57,7 L7,93"/>
+      <path transform="translate(402,0)" d="M7,7 L57,93 M57,7 L7,93"/>
+      <!-- 6: a round bowl (radius 25) and a stem sweeping up to the right -->
+      <path transform="translate(488,0)" d="M7,68 A25,25 0 1 0 57,68 A25,25 0 1 0 7,68 M7,68 C7,30 18,7 38,7 C46,7 51,9 55,13"/>
+      <!-- 0: a stadium, same radius as the 6 -->
+      <path transform="translate(574,0)" d="M7,32 A25,25 0 0 1 57,32 V68 A25,25 0 0 1 7,68 Z"/>
+    </g>
+  </g>
+</svg>

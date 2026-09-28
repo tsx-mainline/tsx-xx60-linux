@@ -30,6 +30,9 @@ CMDLINE=$(cat "${TSX_CMDLINE:-/proc/cmdline}" 2>/dev/null)
 msg() {
 	echo "tsx-autoinstall: $*" >> "$LOG"
 	if [ -n "${TSX_NO_REBOOT:-}" ]; then echo "tsx-autoinstall: $*" >&2; return 0; fi
+	# an install is running: the text console gets the screen (the boot
+	# splash would hide these lines; docs/boot.md "Boot splash")
+	[ -n "${CONSOLE_BOUND:-}" ] || { CONSOLE_BOUND=1; /usr/sbin/tsx-splash console 2>/dev/null; }
 	echo "tsx-autoinstall: $*" > /dev/kmsg 2>/dev/null
 	echo "tsx-autoinstall: $*" > /dev/tty0 2>/dev/null
 	return 0

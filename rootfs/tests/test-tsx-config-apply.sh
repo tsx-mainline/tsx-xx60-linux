@@ -168,6 +168,19 @@ for v in -1 86401 10s 1e3 ''; do
 done
 set_ BLANK_TIMEOUT 86400 >/dev/null 2>&1 && ok "BLANK_TIMEOUT 86400 (a day) accepted" || bad "BLANK_TIMEOUT 86400 rejected"
 
+echo "== BOOT_VERBOSE: /etc/tsx/boot-verbose on the root fs for the initramfs =="
+[ ! -e "$FX/etc/tsx/boot-verbose" ] && ok "unset: no boot-verbose flag" || bad "boot-verbose flag while unset"
+set_ BOOT_VERBOSE 1 >/dev/null; applyb
+[ -e "$FX/etc/tsx/boot-verbose" ] && ok "BOOT_VERBOSE=1 -> flag file" || bad "BOOT_VERBOSE=1: no flag file"
+set_ BOOT_VERBOSE 0 >/dev/null; applyb
+[ ! -e "$FX/etc/tsx/boot-verbose" ] && ok "BOOT_VERBOSE=0 -> flag removed" || bad "BOOT_VERBOSE=0 left the flag"
+set_ BOOT_VERBOSE 1 >/dev/null; applyb
+TSX_CONF="$CFG" busybox sh "$SCRIPT" unset BOOT_VERBOSE >/dev/null; applyb
+[ ! -e "$FX/etc/tsx/boot-verbose" ] && ok "unset again: flag removed" || bad "flag left after unset"
+for v in 2 yes on ''; do
+	set_ BOOT_VERBOSE "$v" >/dev/null 2>&1 && bad "BOOT_VERBOSE '$v' accepted" || ok "BOOT_VERBOSE '$v' rejected"
+done
+
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-tsx-config-apply || echo FAIL test-tsx-config-apply
 exit $F

@@ -15,6 +15,14 @@ apk add --root $R --initdb --no-cache -q \
     # compact eMMC root to fill p8 after writing it; e2fsck/mke2fs/mkfs.ext4
     # are in e2fsprogs above, blkdiscard is in util-linux-misc)
 cp -a "$HERE"/overlay/. $R/
+# boot splash (docs/boot.md "Boot splash"): tsx-splash + the rendered images
+# and fonts. Built here, in the build container, never on the image.
+apk add -q --no-cache build-base linux-headers >/dev/null
+gcc -O2 -Wall -s -o /tmp/tsx-splash "$HERE/../src/tsx-splash.c"
+install -D -m 755 /tmp/tsx-splash $R/usr/sbin/tsx-splash
+sh "$HERE/../splash/mksplash.sh" /tmp/splash-out >/dev/null
+mkdir -p $R/usr/share/tsx/splash
+cp /tmp/splash-out/*.ppm /tmp/splash-out/*.psf $R/usr/share/tsx/splash/
 # installer stage 2: the rootfs installer inside the initramfs (tsx-autoinstall uses it)
 mkdir -p $R/usr/share/tsx
 cp "$HERE"/../install.sh "$HERE"/../tsx-disk.sh $R/usr/share/tsx/

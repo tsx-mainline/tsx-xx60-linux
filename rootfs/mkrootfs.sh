@@ -40,6 +40,10 @@ gcc -O2 -Wall -s -o /build/tsx-buttons "$HERE/src/tsx-buttons.c"   # front-panel
 apk add -q --no-cache libusb-dev >/dev/null                           # LED bar
 gcc -O2 -Wall -s -o /build/tsx-ledbar "$HERE/src/tsx-ledbar.c" -lusb-1.0
 gcc -O2 -Wall -s -o /build/tsx-peak "$HERE/src/tsx-peak.c" -lm       # audio
+# boot splash: the same tool + artwork as the initramfs (status updates from
+# OpenRC, the compositor background; docs/boot.md "Boot splash")
+gcc -O2 -Wall -s -o /build/tsx-splash "$HERE/src/tsx-splash.c"
+sh "$HERE/splash/mksplash.sh" /build/splash-out >/dev/null
 
 CAGE_VER=0.3.1
 CAGE_SHA256=6dc1619665acd367e0174c93b234002549a66f55f1de9197d67f0305415babc8
@@ -111,6 +115,9 @@ install -m 755 /build/tsx-buttons $R/usr/local/sbin/tsx-buttons
 install -m 755 /build/tsx-ledbar $R/usr/local/bin/tsx-ledbar
 install -m 755 /build/cage-build/cage $R/usr/bin/cage
 install -m 755 /build/tsx-overlay $R/usr/local/bin/tsx-overlay
+install -m 755 /build/tsx-splash $R/usr/local/bin/tsx-splash
+mkdir -p $R/usr/share/tsx/splash
+cp /build/splash-out/*.ppm /build/splash-out/*.psf $R/usr/share/tsx/splash/
 # audio: level meter, Sendspin player. sendspin-cli is built from source by
 # rootfs/src/sendspin/build.sh (CI runs it before this script; a local build
 # runs it by hand first) and never committed -- read it from that build's
@@ -215,7 +222,7 @@ echo "chromium-es2-patch: $ES2_RESULT"
 # shows up on the panel otherwise: "Error loading shared library")
 log "shared library check"
 for bin in /usr/local/sbin/tsx-idled /usr/local/sbin/tsx-buttons /usr/local/bin/tsx-ledbar \
-	/usr/local/bin/tsx-peak /usr/local/bin/tsx-overlay /usr/bin/cage $SENDSPIN_BIN; do
+	/usr/local/bin/tsx-peak /usr/local/bin/tsx-overlay /usr/local/bin/tsx-splash /usr/bin/cage $SENDSPIN_BIN; do
 	out=$(chroot $R /lib/ld-musl-armhf.so.1 --list "$bin" 2>&1) || true
 	if printf '%s\n' "$out" | grep -qE 'Error (loading|relocating)|not found'; then
 		printf '%s\n' "$out" | head -n 5
@@ -301,8 +308,8 @@ rm -rf $R/var/cache/apk/* $R/lib/apk/db/scripts.tar
 find $R/usr/lib/python3*/site-packages/numpy -depth -type d -name tests -exec rm -rf {} +
 # sway-wallpapers (~5 MiB, /usr/share/backgrounds/sway): same install_if
 # binding to sway blocks `apk del`. Unused here: the kiosk's generated sway
-# config sets `swaybg_command -` (usr/local/bin/kiosk-session), which
-# disables the background helper entirely, so no wallpaper path is ever read
+# config uses the boot splash as the only background (usr/local/bin/kiosk-session),
+# so no wallpaper path is ever read
 rm -rf $R/usr/share/backgrounds/sway
 # python .pyc bytecode caches (~25 MiB combined): apk's split -pyc
 # subpackages (python3-pycache-pyc0, py3-numpy-pyc) are install_if-bound to

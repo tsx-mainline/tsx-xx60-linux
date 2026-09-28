@@ -10,15 +10,27 @@
 #                  behind on the eMMC by an earlier install falls through to the
 #                  card instead of dropping to rescue)
 #                  tsx.rootwait=SECONDS (default 10)   tsx.rescue   tsx.init=/sbin/init
+#                  tsx.verbose (boot text on the LCD instead of the splash)
 # Rootfs file:     /etc/tsx/force-rescue on the rootfs -> boot the rescue system once
 #                  (the file is removed so the next boot is normal again).
+#                  /etc/tsx/boot-verbose (panel.conf BOOT_VERBOSE=1, tsx-config
+#                  apply) -> like tsx.verbose, from the root mount on.
+# Screen: the kernel keeps the text console off the LCD (fbcon=map:1 on the
+# command line) and tsx-splash draws the boot splash on /dev/fb0. Every way
+# into the rescue system, and BOOT_VERBOSE, first gives the screen back to the
+# text console (tsx-splash console): a failure never hides behind the splash.
 mount -t proc proc /proc
 mount -t sysfs sys /sys
 mount -t devtmpfs dev /dev 2>/dev/null
 mkdir -p /dev/pts /run /tmp /newroot; mount -t devpts devpts /dev/pts
 
 msg() { echo "tsx-initramfs: $*" > /dev/kmsg 2>/dev/null; echo "tsx-initramfs: $*" > /dev/tty0 2>/dev/null; }
+verbose=
+text_console() { verbose=1; /usr/sbin/tsx-splash console 2>/dev/null; }
+# splash TEXT PERCENT [show]: status line + progress bar (no-op when verbose)
+splash() { [ -n "$verbose" ] || /usr/sbin/tsx-splash -s "$1" -p "$2" "${3:-status}" 2>/dev/null; }
 rescue() {
+	text_console
 	msg "RESCUE: $*"
 	echo "$*" > /run/rescue-reason
 	mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
@@ -32,6 +44,7 @@ for c in $(cat /proc/cmdline); do
 	tsx.rootwait=*) wait=${c#tsx.rootwait=};;
 	tsx.init=*) init=${c#tsx.init=};;
 	tsx.rescue|tsx.rescue=1) want_rescue=1;;
+	tsx.verbose|tsx.verbose=1) verbose=1;;
 	esac
 done
 [ -n "$want_rescue" ] && rescue "requested on the kernel command line"
@@ -49,6 +62,7 @@ done
 # in the rescue's own rcS) to report "installer arm" vs "golden fallback" vs
 # "manual" precisely instead of this generic message.
 [ -e /etc/tsx/rescue-image ] && rescue "$(head -n 1 /etc/tsx/rescue-image)"
+if [ -n "$verbose" ]; then text_console; else splash "starting" 5 show; fi
 
 # installer: UART-free install (p1:tsxinst.cfg from stock Android, a stick with
 # tsx-install/GO, or a U-Boot jabil boot from a stick). Exit 0 = nothing to do.
@@ -93,6 +107,7 @@ for cand in $candidates; do
 	d=$(find_dev "$cand" "$t") || { msg "$cand unusable (not found within ${t}s), trying next"; continue; }
 
 	msg "root $cand is $d, checking"
+	splash "checking the root file system" 10
 	e2fsck -p "$d" > /run/fsck.log 2>&1; rc=$?
 	if [ $rc -ge 4 ]; then
 		e2fsck -y "$d" >> /run/fsck.log 2>&1; rc=$?
@@ -107,6 +122,7 @@ for cand in $candidates; do
 		msg "$cand on $d unusable (mount failed), trying next"
 		continue
 	fi
+	[ -e /newroot/etc/tsx/boot-verbose ] && [ -z "$verbose" ] && text_console
 	if [ -e /newroot/etc/tsx/force-rescue ]; then
 		rm -f /newroot/etc/tsx/force-rescue; umount /newroot
 		rescue "/etc/tsx/force-rescue was set on the rootfs ($cand on $d)"
@@ -123,6 +139,7 @@ done
 cp /run/fsck.log /newroot/var/log/initramfs-fsck.log 2>/dev/null
 
 msg "switch_root ($used) to $dev"
+splash "starting the system" 15
 umount /dev/pts 2>/dev/null
 for m in /dev /proc /sys; do mkdir -p /newroot$m; mount --move $m /newroot$m; done
 exec switch_root /newroot "$init"

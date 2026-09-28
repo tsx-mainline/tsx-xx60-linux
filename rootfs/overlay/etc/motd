@@ -1,7 +1,13 @@
 
- xx60 mainline kiosk (Alpine Linux)
-   config:      /etc/kiosk.conf        then: rc-service kiosk restart
+    .--.
+   |o_o |      ___________  __    _  ___  ______ ___
+   |:_/ |     /_  __/ __/ |/_/___| |/_/ |/_/ __// _ \
+  //   \ \     / / _\ \_>  </___/>  <_>  </ _ \/ // /
+ (|     | )   /_/ /___/_/|_|   /_/|_/_/|_|\___/\___/
+/'\_   _/`\
+\___)=(___/   mainline kiosk (Alpine Linux)
+
+   config:      /etc/kiosk.conf, tsx-config show      then: rc-service kiosk restart
    login token: kiosk-set-token <long-lived-token>
    screen:      tsx-blank on|off       logs: /var/log/messages
    env/boot:    /usr/local/sbin/tsx-boot-ok --status
-
