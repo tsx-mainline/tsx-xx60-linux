@@ -10,6 +10,7 @@ depend() { need net; after tsx-idled tsx-buttons tsx-ledbar; }
 start() {
 	# not configured: nothing to run, but do not fail the runlevel
 	BROKER=; [ -r /etc/tsx/mqtt.conf ] && . /etc/tsx/mqtt.conf
+	[ -r /run/tsx/mqtt.conf ] && . /run/tsx/mqtt.conf   # panel.conf MQTT_* (tsx-config apply)
 	if [ -z "$BROKER" ]; then
 		einfo "tsx-mqtt: BROKER not set in /etc/tsx/mqtt.conf, not started"
 		return 0

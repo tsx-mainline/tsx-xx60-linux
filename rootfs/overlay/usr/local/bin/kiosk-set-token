@@ -17,6 +17,7 @@
 set -eu
 CONF=${KIOSK_CONF:-/etc/kiosk.conf}
 . "$CONF"
+[ -r /run/tsx/kiosk.conf ] && . /run/tsx/kiosk.conf   # panel.conf overrides (tsx-config apply)
 : "${KIOSK_PROFILE:=/var/lib/kiosk/chromium}"
 KIOSK_USER=${KIOSK_USER:-kiosk}
 origin=$(printf '%s' "$KIOSK_URL" | sed -E 's#^(https?://[^/?#]+).*#\1#')

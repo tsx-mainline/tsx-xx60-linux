@@ -7,8 +7,15 @@
 # p5..p8 into p4 (tsxdata), and writes the FINAL env (see docs/boot.md "The v2
 # env state machine"). Never touches U-Boot itself; only the env at 1 MiB.
 #
-#   tsx-rescue-install check BUNDLE_DIR
-#   tsx-rescue-install run   BUNDLE_DIR [--yes]
+#   tsx-rescue-install check BUNDLE_DIR [--keep-data]
+#   tsx-rescue-install run   BUNDLE_DIR [--yes] [--keep-data]
+#
+# --keep-data (a mainline -> mainline reinstall, docs/install.md "Reinstalling
+# or updating a mainline panel"): if the card is already folded and p4 is a
+# clean tsxdata ext4 (tsx_tsxdata_keepable), keep it as it is -- no mkfs;
+# the browser profile/login, logs, panel.conf and sendspin state survive.
+# Without it (the Android -> mainline path, or --wipe-data on the host),
+# p4 is always formatted.
 #
 # BUNDLE_DIR layout (built by the host, see installer/emmc/mk-tsxroot-emmc.sh
 # and installer/tsx-install-mainline):
@@ -30,16 +37,25 @@
 #   tsx-usb-recovery       installer/emmc/tsx-usb-recovery (copied verbatim, runs standalone)
 #   tfa/<variant>/stereo.cnt   (optional) TFA9890 DSP tuning files
 #   kiosk-url.txt          (optional) one line: the KIOSK_URL to set
+#   panel.conf             (optional) installer/panel.conf.example built by
+#                          tsx-install-mainline's prompts or --config FILE;
+#                          written straight onto the new tsxdata as
+#                          /data/tsx/panel.conf (docs/rootfs.md "Panel
+#                          configuration"); if kiosk-url.txt is ALSO present,
+#                          panel.conf's KIOSK_URL wins once tsx-config apply
+#                          runs (the direct kiosk.conf edit below runs first,
+#                          at first boot, but a panel.conf override always
+#                          takes precedence after that)
 # Test hooks: TSX_EMMC/TSX_BOOT0 (as tsx-emmc-restore), TSX_RUN, TSX_SYSBLOCK
 # (card disk), TSX_STATUS (status-screen state file, default /run/tsx-install-state).
 set -eu
 RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
 say() { echo "tsx-rescue-install: $(date +%T 2>/dev/null) $*" >&2; }
 die() { say "ERROR: $*"; set_state "failed: $*"; exit 1; }
-CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,34p' "$0"; exit 2; }
-YES=0
-while [ $# -gt 0 ]; do case "$1" in --yes) YES=1;; *) die "unknown option $1";; esac; shift; done
-case "$CMD" in check|run) ;; *) sed -n '2,34p' "$0"; exit 2;; esac
+CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,50p' "$0"; exit 2; }
+YES=0 KEEP_DATA=0
+while [ $# -gt 0 ]; do case "$1" in --yes) YES=1;; --keep-data) KEEP_DATA=1;; *) die "unknown option $1";; esac; shift; done
+case "$CMD" in check|run) ;; *) sed -n '2,50p' "$0"; exit 2;; esac
 [ -f "$B/manifest" ] && grep -q '^format=tsx-rescue-install-1$' "$B/manifest" || die "$B is not a v2 install bundle (no manifest)"
 . "$B/tsx-rescue.sh"
 . /usr/share/tsx/tsx-lib.sh   # tsx_find_disk, TSX_MBR_P4_TYPE_OFFSET, TSX_ENV_OFFSET/SIZE (already on the rescue image)
@@ -105,7 +121,15 @@ fi
 [ "$(sha256sum < "$B/boot.img" | cut -d' ' -f1)" = "$BOOT_SHA" ] || die "boot.img sha256 mismatch (corrupt transfer?)"
 say "bundle OK (flavor: ${FLAVOR:-unknown})"
 
-if [ "$CMD" = check ]; then say "check OK (nothing written)"; set_state "checked OK"; exit 0; fi
+if [ "$CMD" = check ]; then
+	if [ "$KEEP_DATA" = 1 ] && [ "$TSX_DISK_LAYOUT" = card ]; then
+		rc=0; WHY=$(tsx_tsxdata_keepable "$CP4") || rc=$?
+		case $rc in 0) say "tsxdata $CP4: $WHY: it will be kept";; 2) say "tsxdata $CP4: $WHY: run will try e2fsck -fp, and format it if that does not help";; *) say "tsxdata $CP4: $WHY: run will format it";; esac
+	else
+		say "tsxdata: run will fold/format the card's p4"
+	fi
+	say "check OK (nothing written)"; set_state "checked OK"; exit 0
+fi
 if [ $YES != 1 ]; then
 	printf 'Type INSTALL to write the eMMC (boot+root) and fold the card of this unit: ' >&2
 	read -r ans; [ "$ans" = INSTALL ] || die "not confirmed"
@@ -125,7 +149,11 @@ say "eMMC boot verified ($GOT)"
 set_state "writing eMMC root (p8)"
 ROOT_MIB=$((ROOT_BYTES / 1048576))
 say "discarding $EROOT, then writing root.img ($ROOT_MIB MiB; p8 itself is $((GOT_ROOT_BYTES / 1048576)) MiB, grown into below)"
-blkdiscard "$EROOT" 2>&1 || say "blkdiscard $EROOT failed (continuing)"
+# -f: util-linux blkdiscard refuses a device that still carries a file
+# system signature (always the case on a reinstall: the previous tsxroot-emmc)
+# and only prints "contains existing file system"; plain blkdiscard is the
+# fallback for a build whose blkdiscard has no -f
+blkdiscard -f "$EROOT" 2>/dev/null || blkdiscard "$EROOT" 2>&1 || say "blkdiscard $EROOT failed (continuing)"
 if [ -z "$ROOT_URL" ]; then
 	pr_dd "$EROOT" 0 "$ROOT_MIB" "eMMC root" -- if="$B/root.img" bs=1M conv=fsync || die "write to $EROOT failed"
 else
@@ -176,8 +204,13 @@ fi
 sync; umount "$MNT"
 
 # ---- 4. card fold: p5..p8 -> p4 tsxdata (tsx-rescue.sh, TSX_MBR_P4_TYPE_OFFSET from tsx-lib.sh) --
+# A stock card is always folded and formatted. An already folded card keeps
+# its tsxdata with --keep-data if tsx_tsxdata_keepable says so (after one
+# e2fsck -fp repair try); anything else is formatted.
 set_state "folding the card (p5..p8 -> p4 tsxdata)"
+KEEP=0
 if [ "$TSX_DISK_LAYOUT" = stock ]; then
+	[ "$KEEP_DATA" = 0 ] || say "card not folded yet (stock layout): --keep-data does not apply, p4 is formatted"
 	tsx_mbr_fold "$CWHOLE" "$TSX_MBR_P4_TYPE_OFFSET" || die "MBR fold failed"
 	# the kernel keeps the old table (p4 = the 1 KiB extended stub, p5..p8) until
 	# it is re-read; without this, p4 would still be the stub below
@@ -188,13 +221,41 @@ if [ "$TSX_DISK_LAYOUT" = stock ]; then
 	CP4=$P4
 else
 	say "card already folded (layout=card): p4 is $CP4"
+	if [ "$KEEP_DATA" = 1 ]; then
+		grep -q "^$CP4 " /proc/mounts && die "$CP4 (tsxdata) is mounted in the rescue: refusing to check or format it"
+		rc=0; WHY=$(tsx_tsxdata_keepable "$CP4") || rc=$?
+		if [ "$rc" = 2 ]; then
+			say "$CP4: $WHY: repairing with e2fsck -fp"
+			e2fsck -fp "$CP4" >/dev/null 2>&1 || true
+			rc=0; WHY=$(tsx_tsxdata_keepable "$CP4") || rc=$?
+		fi
+		if [ "$rc" = 0 ]; then KEEP=1; say "keeping tsxdata on $CP4 ($WHY): no mkfs, /data survives the reinstall"
+		else say "WARNING: $CP4 cannot be kept ($WHY): formatting it (tsxdata starts empty)"; fi
+	fi
 fi
 P4SECT=$(cat "/sys/class/block/${CP4##*/}/size" 2>/dev/null || echo 0)
 [ "$P4SECT" -gt 131072 ] || die "$CP4 is only $P4SECT sectors: refusing to mkfs it as tsxdata"
 say "card p4 (tsxdata): $CP4, $((P4SECT / 2048)) MiB"
-MKUUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null) || die "cannot generate a UUID for tsxdata"
-say "mkfs.ext4 -L tsxdata -U $MKUUID $CP4"
-tsx_mkfs_tsxdata "$CP4" "$MKUUID" || die "mkfs of $CP4 (tsxdata) failed"
+if [ "$KEEP" = 0 ]; then
+	MKUUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null) || die "cannot generate a UUID for tsxdata"
+	say "mkfs.ext4 -L tsxdata -U $MKUUID $CP4"
+	tsx_mkfs_tsxdata "$CP4" "$MKUUID" || die "mkfs of $CP4 (tsxdata) failed"
+fi
+if [ -f "$B/panel.conf" ] || [ "$KEEP" = 1 ]; then
+	DMNT=$RUN/newdata; mkdir -p "$DMNT"
+	mount -t ext4 "$CP4" "$DMNT" || die "cannot mount $CP4 (tsxdata) to write panel.conf"
+	mkdir -p "$DMNT/tsx"
+	if [ -f "$B/panel.conf" ]; then
+		say "writing panel.conf onto tsxdata (installer/panel.conf.example, docs/rootfs.md)"
+		install -m 600 "$B/panel.conf" "$DMNT/tsx/panel.conf"
+	elif [ -f "$DMNT/tsx/panel.conf" ]; then
+		tsx_conf_set_flavor "$DMNT/tsx/panel.conf" "$FLAVOR"
+		say "kept the panel's own /data/tsx/panel.conf (KERNEL_FLAVOR=${FLAVOR:-unchanged})"
+	else
+		say "the kept tsxdata has no tsx/panel.conf: the panel runs with the rootfs defaults"
+	fi
+	sync; umount "$DMNT"
+fi
 
 # ---- 5. final env: one verified write (docs/boot.md "The v2 env state machine") --
 set_state "finalizing (env + tsx-usb-recovery)"

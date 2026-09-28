@@ -1,0 +1,407 @@
+#!/bin/sh
+# tsx-config: read/write the panel's one configuration file and apply it to
+# the running services. Same script on the panel, in host-side installer
+# tooling (TSX_CONF pointed at a build-time file) and, later, an on-panel
+# setup page (PLAN.md section 16 item 3) can drive it -- busybox ash and
+# plain POSIX sh only (`busybox sh -n`), no bash-only syntax.
+#
+#   tsx-config get KEY            print the value (empty + exit 1 if unset)
+#   tsx-config set KEY VALUE      validate + write (creates the file/dir)
+#   tsx-config unset KEY          remove a key
+#   tsx-config show               print every set key (secrets masked)
+#   tsx-config apply              (panel, root) regenerate the small
+#                                  /run/tsx/*.conf overrides the services
+#                                  read after their own defaults, and act on
+#                                  the settings that are not just a file
+#                                  (hostname, root password, ssh key, voice
+#                                  enable/disable). Run by the tsx-config
+#                                  OpenRC service early at boot.
+#
+# File: $TSX_CONF (default /data/tsx/panel.conf) -- KEY="value" lines, one
+# setting per line, '#' comments, blank lines. It is NEVER `.` sourced by a
+# service (this parser only ever reads literal text after the first '=';
+# nothing in the file is executed) and is mode 600 because several keys are
+# secrets (HA_TOKEN, HA_API_KEY, MQTT_PASSWORD, ROOT_PASSWORD_HASH,
+# SSH_AUTHORIZED_KEY).
+#
+# Keys: PANEL_NAME, KIOSK_URL, HA_LOGIN_METHOD (token|trusted), HA_TOKEN,
+# TZ_NAME, VOICE (on|off), WAKE_WORD, HA_TRANSPORT (esphome|mqtt|both;
+# PLAN.md section 18: esphome = one zero-config Home Assistant device over
+# the ESPHome native API, no broker -- tsx-esphome, or the voice satellite
+# itself when VOICE=on; mqtt = the tsx-mqtt bridge only, needs MQTT_HOST;
+# both = run whichever of the two are configured), HA_API_KEY (the ESPHome
+# API encryption key: 32 random bytes, base64, like ESPHome's `api:
+# encryption: key:`; the same text goes into Home Assistant; empty =
+# plaintext, the zero-config default -- docs/ha.md "Security"),
+# HA_ALLOW_FROM (comma list of IPv4/IPv6 addresses or CIDRs allowed to use
+# the ESPHome API; empty = allow any, the zero-config default), MQTT_HOST,
+# MQTT_PORT, MQTT_USER, MQTT_PASSWORD, KERNEL_FLAVOR (lts|stable),
+# ROOT_PASSWORD_HASH, SSH_AUTHORIZED_KEY. See installer/panel.conf.example
+# and docs/rootfs.md "Panel configuration" for what each one does.
+set -eu
+TSX_CONF=${TSX_CONF:-/data/tsx/panel.conf}
+RUN=${TSX_RUN:-/run}/tsx
+STATE=${TSX_STATE_DIR:-/var/lib/tsx}
+SEED=${TSX_CONF_SEED:-/etc/tsx/panel.conf.seed}
+# PREFIX: host-test hook only (rootfs/tests/, ci/). Every real system path
+# `apply` touches outside $TSX_CONF/$RUN/$STATE/$SEED (already overridable
+# above) is written as "$PREFIX/etc/shadow" etc., so a test can point a whole
+# fixture tree at it; empty (the panel default) leaves the paths absolute.
+PREFIX=${TSX_APPLY_PREFIX:-}
+
+KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
+SECRET_KEYS="HA_TOKEN HA_API_KEY MQTT_PASSWORD ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
+
+usage() { sed -n '2,16p' "$0" >&2; exit 2; }
+die() { echo "tsx-config: ERROR: $*" >&2; exit 2; }
+log() { echo "tsx-config: $*" >&2; }
+
+key_known() {
+	case " $KNOWN_KEYS " in *" $1 "*) return 0;; esac
+	return 1
+}
+is_secret() {
+	case " $SECRET_KEYS " in *" $1 "*) return 0;; esac
+	return 1
+}
+
+# escape a value for our OWN panel.conf storage (reversed by unquote()
+# below): backslash and double quote only. panel.conf is never `.` sourced,
+# so `$`/backtick need no special handling here.
+store_esc() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+# escape a value for embedding in double quotes in a file we generate and
+# WILL later `.` source ourselves (the run/tsx/*.conf overrides, apply()
+# below): backslash, double quote, `$` and backtick are the four characters
+# special inside POSIX double quotes.
+shq() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\$/\\$/g; s/`/\\`/g'
+}
+
+val_ok() {
+	k=$1; v=$2
+	# a literal embedded newline (command substitution would strip a
+	# trailing one, so this is a real newline written into the script,
+	# not $(printf '\n')): reject a value that contains one.
+	nl='
+'
+	case "$v" in *"$nl"*) return 1;; esac
+	case "$k" in
+	PANEL_NAME) printf '%s' "$v" | grep -Eq '^[A-Za-z0-9-]{1,63}$';;
+	KIOSK_URL) printf '%s' "$v" | grep -Eq '^https?://[^[:space:]]+$';;
+	HA_LOGIN_METHOD) case "$v" in token|trusted) return 0;; esac; return 1;;
+	HA_TOKEN) printf '%s' "$v" | grep -Eq '^[A-Za-z0-9._-]{20,}$';;
+	TZ_NAME) printf '%s' "$v" | grep -Eq '^[A-Za-z0-9_+/-]{1,64}$';;
+	VOICE) case "$v" in on|off) return 0;; esac; return 1;;
+	WAKE_WORD) printf '%s' "$v" | grep -Eq '^[a-z0-9_]{1,32}$';;
+	HA_TRANSPORT) case "$v" in esphome|mqtt|both) return 0;; esac; return 1;;
+	# canonical base64 of exactly 32 bytes (44 characters, one '='); the
+	# last data character carries only 2 bits, so only 16 values are valid
+	HA_API_KEY) [ -z "$v" ] && return 0; printf '%s' "$v" | grep -Eq '^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$';;
+	HA_ALLOW_FROM)
+		[ -z "$v" ] && return 0   # empty = allow any (zero-config default)
+		# Peeled apart with parameter expansion, not `set -- $v` / IFS field
+		# splitting: an unquoted `set --` here would also pathname-expand
+		# any glob metacharacter in a comma-separated item.
+		rest=$v
+		while [ -n "$rest" ]; do
+			case "$rest" in *,*) item=${rest%%,*}; rest=${rest#*,};; *) item=$rest; rest=;; esac
+			item=$(trim "$item")
+			[ -n "$item" ] || return 1
+			addr=$item; pfx=
+			case "$item" in
+			*/*) addr=${item%/*}; pfx=${item#*/}
+				printf '%s' "$pfx" | grep -Eq '^[0-9]{1,3}$' || return 1;;
+			esac
+			case "$addr" in
+			*:*)
+				printf '%s' "$addr" | grep -Eq '^[0-9A-Fa-f:]+$' || return 1
+				[ -z "$pfx" ] || [ "$pfx" -le 128 ] || return 1;;
+			*)
+				printf '%s' "$addr" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || return 1
+				for oct in $(printf '%s' "$addr" | tr '.' ' '); do
+					[ "$oct" -le 255 ] || return 1
+				done
+				[ -z "$pfx" ] || [ "$pfx" -le 32 ] || return 1;;
+			esac
+		done
+		return 0;;
+	MQTT_HOST) [ -z "$v" ] && return 0; printf '%s' "$v" | grep -Eq '^[A-Za-z0-9.:_-]+$';;
+	MQTT_PORT) [ -z "$v" ] && return 0; printf '%s' "$v" | grep -Eq '^[0-9]{1,5}$';;
+	MQTT_USER) printf '%s' "$v" | grep -Eq '^[A-Za-z0-9_.@-]*$';;
+	MQTT_PASSWORD) return 0;;
+	KERNEL_FLAVOR) case "$v" in lts|stable) return 0;; esac; return 1;;
+	ROOT_PASSWORD_HASH) printf '%s' "$v" | grep -Eq '^\$[0-9A-Za-z$./]{10,}$';;
+	SSH_AUTHORIZED_KEY) printf '%s' "$v" | grep -Eq '^(ssh-[a-z0-9]+|ecdsa-sha2-[a-z0-9-]+) [A-Za-z0-9+/]+=*([[:space:]].*)?$';;
+	*) return 1;;
+	esac
+}
+
+# strip one layer of surrounding quotes (double: unescape \" and \\; single:
+# literal, no escapes) from an already-trimmed value.
+unquote() {
+	v=$1
+	case "$v" in
+	\"*\") v=${v#\"}; v=${v%\"}; v=$(printf '%s' "$v" | sed 's/\\"/"/g; s/\\\\/\\/g');;
+	\'*\') v=${v#\'}; v=${v%\'};;
+	esac
+	printf '%s' "$v"
+}
+trim() { printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr -d '\r'; }
+
+# cfg_get KEY: print the value on stdout, exit 1 (nothing printed) if the
+# file is missing or the key is not set. Tolerant of stray/unknown lines
+# elsewhere in the file (a newer panel.conf read by an older tsx-config)
+# and of blank lines / comments; only ever reads text after the first '=',
+# never executes anything in the file.
+cfg_get() {
+	k=$1
+	[ -r "$TSX_CONF" ] || return 1
+	found=1
+	while IFS= read -r rawline || [ -n "$rawline" ]; do
+		line=$(trim "$rawline")
+		[ -n "$line" ] || continue
+		case "$line" in \#*) continue;; esac
+		case "$line" in "$k"=*) ;; *) continue;; esac
+		v=$(trim "${line#*=}")
+		v=$(unquote "$v")
+		found=0
+	done < "$TSX_CONF"
+	[ $found = 0 ] || return 1
+	printf '%s' "$v"
+}
+
+cfg_set() {
+	k=$1; v=$2
+	key_known "$k" || die "unknown key: $k"
+	val_ok "$k" "$v" || die "invalid value for $k"
+	d=$(dirname "$TSX_CONF")
+	mkdir -p "$d"; chmod 700 "$d" 2>/dev/null || true
+	if [ ! -f "$TSX_CONF" ]; then
+		{ echo "# /data/tsx/panel.conf: xx60 panel configuration (tsx-config)."
+		  echo "# One KEY=\"value\" setting per line. Never sourced directly by any"
+		  echo "# service -- edit only with tsx-config get/set/show, or a factory"
+		  echo "# reinstall/upgrade may not read a hand-broken line."
+		} > "$TSX_CONF"
+		chmod 600 "$TSX_CONF"
+	fi
+	esc=$(store_esc "$v")
+	tmp="$TSX_CONF.tmp.$$"
+	if grep -Eq "^[[:space:]]*$k=" "$TSX_CONF" 2>/dev/null; then
+		awk -v k="$k" -v line="$k=\"$esc\"" '
+			{ if ($0 ~ "^[[:space:]]*" k "=") { if (!done) { print line; done = 1 } } else print }
+		' "$TSX_CONF" > "$tmp"
+	else
+		cat "$TSX_CONF" > "$tmp" 2>/dev/null || : > "$tmp"
+		printf '%s\n' "$k=\"$esc\"" >> "$tmp"
+	fi
+	mv "$tmp" "$TSX_CONF"; chmod 600 "$TSX_CONF"
+}
+
+cfg_unset() {
+	k=$1
+	[ -f "$TSX_CONF" ] || return 0
+	tmp="$TSX_CONF.tmp.$$"
+	awk -v k="$k" '$0 !~ "^[[:space:]]*" k "="' "$TSX_CONF" > "$tmp" && mv "$tmp" "$TSX_CONF" && chmod 600 "$TSX_CONF"
+}
+
+cfg_show() {
+	# always exits 0: the last known key not being set must not leak through
+	# as this function's (and so `tsx-config show`'s) exit status -- a caller
+	# piping the output (e.g. `tsx-config show | grep ...`) must see grep's
+	# exit status, not an unrelated "last key was unset".
+	for k in $KNOWN_KEYS; do
+		v=$(cfg_get "$k") || continue
+		is_secret "$k" && v="********"
+		printf '%s=%s\n' "$k" "$v"
+	done
+	warn_open_api
+	return 0
+}
+
+# the ESPHome API with neither a key nor an allow-list: anyone on the LAN
+# may use it (docs/ha.md "Security").
+warn_open_api() {
+	key=$(cfg_get HA_API_KEY) || key=
+	allow=$(cfg_get HA_ALLOW_FROM) || allow=
+	[ -z "$key" ] && [ -z "$allow" ] || return 0
+	echo "# WARNING: the ESPHome API (port 6053) is open: no HA_API_KEY and" >&2
+	echo "#   HA_ALLOW_FROM is empty, so any host on the LAN can reboot this panel" >&2
+	echo "#   or change its kiosk URL. Set HA_API_KEY (encryption; generate one with" >&2
+	echo "#   head -c 32 /dev/urandom | base64) and/or HA_ALLOW_FROM (your Home" >&2
+	echo "#   Assistant host's address) -- docs/ha.md \"Security\"." >&2
+}
+
+# ---- apply: boot-time materialisation (panel only) -------------------------
+write_override() {  # write_override PATH [MODE] < lines (empty stdin -> remove PATH); MODE default 600
+	path=$1; mode=${2:-600}; tmp="$path.tmp.$$"
+	cat > "$tmp"
+	if [ -s "$tmp" ]; then chmod "$mode" "$tmp"; mv "$tmp" "$path"
+	else rm -f "$tmp" "$path"; fi
+}
+
+seed_promote() {
+	[ -s "$SEED" ] || return 0
+	[ -s "$TSX_CONF" ] && return 0
+	case "$TSX_CONF" in /data/*) mountpoint -q /data 2>/dev/null || return 0;; esac
+	d=$(dirname "$TSX_CONF"); mkdir -p "$d"; chmod 700 "$d" 2>/dev/null || true
+	cp "$SEED" "$TSX_CONF" && chmod 600 "$TSX_CONF" && rm -f "$SEED" \
+		&& log "promoted $SEED to $TSX_CONF (installer-provided config, first boot with /data available)"
+}
+
+apply() {
+	[ "${TSX_APPLY_ALLOW_NONROOT:-0}" = 1 ] || [ "$(id -u)" = 0 ] || die "apply must run as root"
+	mkdir -p "$RUN"
+	seed_promote
+	if [ ! -r "$TSX_CONF" ]; then log "no $TSX_CONF: nothing to apply"; return 0; fi
+
+	name=$(cfg_get PANEL_NAME) || name=
+	if [ -n "$name" ]; then printf '%s\n' "$name" > "$RUN/panel-name"; else rm -f "$RUN/panel-name"; fi
+
+	{
+		url=$(cfg_get KIOSK_URL) || url=
+		[ -n "$url" ] && printf 'KIOSK_URL="%s"\n' "$(shq "$url")"
+		tz=$(cfg_get TZ_NAME) || tz=
+		[ -n "$tz" ] && printf 'TZ_NAME="%s"\n' "$(shq "$tz")"
+	} | write_override "$RUN/kiosk.conf" 644   # read by kiosk-session as the kiosk user (no secrets in it)
+
+	{ [ -n "$name" ] && printf 'SENDSPIN_NAME="%s"\n' "$(shq "$name")"; } | write_override "$RUN/sendspin.conf"
+
+	{
+		[ -n "$name" ] && printf 'NAME="%s"\n' "$(shq "$name")"
+		ww=$(cfg_get WAKE_WORD) || ww=
+		[ -n "$ww" ] && printf 'WAKE_WORD="%s"\n' "$(shq "$ww")"
+	} | write_override "$RUN/voice.conf"
+
+	{
+		h=$(cfg_get MQTT_HOST) || h=
+		[ -n "$h" ] && printf 'BROKER="%s"\n' "$(shq "$h")"
+		p=$(cfg_get MQTT_PORT) || p=
+		[ -n "$p" ] && printf 'PORT="%s"\n' "$(shq "$p")"
+		u=$(cfg_get MQTT_USER) || u=
+		[ -n "$u" ] && printf 'USER="%s"\n' "$(shq "$u")"
+		pw=$(cfg_get MQTT_PASSWORD) || pw=
+		[ -n "$pw" ] && printf 'PASSWORD="%s"\n' "$(shq "$pw")"
+	} | write_override "$RUN/mqtt.conf"
+
+	voice=$(cfg_get VOICE) || voice=
+	if command -v tsx-audio >/dev/null 2>&1; then
+		case "$voice" in
+		on) tsx-audio enable voice >/dev/null 2>&1 || true;;
+		off) tsx-audio disable voice >/dev/null 2>&1 || true;;
+		esac
+	fi
+
+	# HA_API_KEY: /run/tsx/esphome.key, mode 640 group kiosk -- tsx-esphome
+	# (root) and the voice satellite (user kiosk) read it at start; if the
+	# file exists but cannot be read, both refuse to start rather than
+	# serve plaintext (rootfs/voice/shim/tsx_panel/security.py). Written
+	# under umask 077 first: never world-readable, not even briefly.
+	key=$(cfg_get HA_API_KEY) || key=
+	keysum=
+	if [ -n "$key" ]; then
+		tmp="$RUN/esphome.key.tmp.$$"
+		(umask 077; printf '%s\n' "$key" > "$tmp")
+		if ! chgrp kiosk "$tmp" 2>/dev/null && [ "$(id -u)" = 0 ]; then
+			log "WARNING: could not give group kiosk read access to $RUN/esphome.key: the voice satellite (VOICE=on) will refuse to start"
+		fi
+		chmod 640 "$tmp" && mv "$tmp" "$RUN/esphome.key"
+		keysum=$(printf '%s' "$key" | sha256sum | cut -d' ' -f1)
+	else
+		rm -f "$RUN/esphome.key"
+	fi
+
+	# HA_TRANSPORT/HA_ALLOW_FROM: world-readable (no secret in either,
+	# unlike the other overrides above) because the voice satellite's own
+	# ESPHome plugin (rootfs/voice/shim/tsx_lva) reads this file directly --
+	# it runs as kiosk:audio and cannot read $TSX_CONF (mode 600).
+	# tsx-esphome (root) reads the same file too, for one code path instead
+	# of two (see rootfs/voice/shim/tsx_panel/security.py).
+	transport=$(cfg_get HA_TRANSPORT) || transport=esphome
+	allow=$(cfg_get HA_ALLOW_FROM) || allow=
+	tmp="$RUN/esphome.conf.tmp.$$"
+	{
+		printf 'TRANSPORT="%s"\n' "$(shq "$transport")"
+		printf 'ALLOW_FROM="%s"\n' "$(shq "$allow")"
+	} > "$tmp" && mv "$tmp" "$RUN/esphome.conf" && chmod 644 "$RUN/esphome.conf"
+	# same warning as `show` (docs/ha.md "Security"); not with HA_TRANSPORT=mqtt
+	[ "$transport" = mqtt ] || warn_open_api
+
+	# HA_TRANSPORT/VOICE together decide whether tsx-esphome (the standalone
+	# ESPHome device, PLAN.md section 18) should be running -- see its own
+	# start() for the same check. It is always in the default runlevel (like
+	# tsx-mqtt), so only restart it if it is already up; at boot time this
+	# apply() runs before tsx-esphome's own runlevel entry starts it, so
+	# there is nothing to restart yet and this is a no-op.
+	# Restart it only when something it reads changed (esphome.conf, the
+	# panel name, VOICE, the API key): tsx-esphome itself runs `tsx-config apply` for its
+	# Kiosk URL entity, and an unconditional restart killed it in the middle
+	# of that command (and dropped Home Assistant's connection each time).
+	sig="$(cat "$RUN/esphome.conf" 2>/dev/null)|$name|$voice|$keysum"
+	oldsig=; [ -r "$RUN/.esphome-sig" ] && oldsig=$(cat "$RUN/.esphome-sig")
+	printf '%s\n' "$sig" > "$RUN/.esphome-sig"
+	if [ "$sig" != "$oldsig" ] && command -v rc-service >/dev/null 2>&1 && rc-service tsx-esphome status >/dev/null 2>&1; then
+		rc-service tsx-esphome restart >/dev/null 2>&1 || true
+	fi
+	# The voice satellite reads the panel name (device name) and the API key
+	# at start too: restart it when either changed and it is running. Not on
+	# the first apply after boot (no signature yet): that runs before
+	# tsx-voice starts. Its kiosk URL entity runs `apply` through
+	# tsx-panelctl, which changes neither, so that never restarts it.
+	vsig="$name|$keysum"
+	oldvsig=; [ -r "$RUN/.voice-sig" ] && oldvsig=$(cat "$RUN/.voice-sig")
+	printf '%s\n' "$vsig" > "$RUN/.voice-sig"
+	if [ -n "$oldvsig" ] && [ "$vsig" != "$oldvsig" ] && command -v rc-service >/dev/null 2>&1 \
+		&& rc-service tsx-voice status >/dev/null 2>&1; then
+		rc-service tsx-voice restart >/dev/null 2>&1 || true
+	fi
+
+	method=$(cfg_get HA_LOGIN_METHOD) || method=
+	tok=$(cfg_get HA_TOKEN) || tok=
+	if [ "$method" = token ] && [ -n "$tok" ]; then
+		mkdir -p "$STATE"
+		newsum=$(printf '%s' "$tok" | sha256sum | cut -d' ' -f1)
+		oldsum=; [ -r "$STATE/.ha-token-applied" ] && oldsum=$(cat "$STATE/.ha-token-applied")
+		if [ "$newsum" != "$oldsum" ]; then
+			mkdir -p "$PREFIX/var/lib/kiosk"
+			umask 077; printf '%s' "$tok" > "$PREFIX/var/lib/kiosk/pending-token"
+			printf '%s' "$newsum" > "$STATE/.ha-token-applied"
+			log "HA_TOKEN changed: staged as $PREFIX/var/lib/kiosk/pending-token (seeded at the next kiosk start)"
+		fi
+	fi
+
+	hash=$(cfg_get ROOT_PASSWORD_HASH) || hash=
+	if [ -n "$hash" ] && [ -r "$PREFIX/etc/shadow" ]; then
+		cur=$(awk -F: '$1=="root"{print $2}' "$PREFIX/etc/shadow")
+		if [ "$cur" != "$hash" ]; then
+			tmp="$PREFIX/etc/shadow.tmp.$$"
+			(umask 077; awk -F: -v h="$hash" 'BEGIN{OFS=":"} { if ($1=="root") $2=h; print }' "$PREFIX/etc/shadow" > "$tmp") \
+				&& cat "$tmp" > "$PREFIX/etc/shadow" && rm -f "$tmp" \
+				&& log "root password hash updated from panel.conf"
+		fi
+	fi
+
+	key=$(cfg_get SSH_AUTHORIZED_KEY) || key=
+	if [ -n "$key" ]; then
+		mkdir -p "$PREFIX/root/.ssh"; chmod 700 "$PREFIX/root/.ssh"
+		if ! grep -qxF "$key" "$PREFIX/root/.ssh/authorized_keys" 2>/dev/null; then
+			printf '%s\n' "$key" >> "$PREFIX/root/.ssh/authorized_keys"
+			chmod 600 "$PREFIX/root/.ssh/authorized_keys"
+			log "SSH_AUTHORIZED_KEY added to $PREFIX/root/.ssh/authorized_keys (existing keys are kept; panel.conf never removes a key)"
+		fi
+	fi
+	log "apply done"
+}
+
+CMD=${1:-}
+[ $# -ge 1 ] && shift || true
+case "$CMD" in
+get) [ $# = 1 ] || usage; key_known "$1" || die "unknown key: $1"; cfg_get "$1" || exit 1;;
+set) [ $# = 2 ] || usage; cfg_set "$1" "$2";;
+unset) [ $# = 1 ] || usage; key_known "$1" || die "unknown key: $1"; cfg_unset "$1";;
+show) [ $# = 0 ] || usage; cfg_show;;
+apply) [ $# = 0 ] || usage; apply;;
+*) usage;;
+esac

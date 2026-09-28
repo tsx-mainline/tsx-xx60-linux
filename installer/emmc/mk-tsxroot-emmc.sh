@@ -3,11 +3,13 @@
 # installer/steps/tsx-rescue-install writes straight into the partition (v2:
 # rescue-first install, docs/install.md). Unlike the old
 # steps/mkp2rootfs.sh (which repacks an EXISTING rootfs.ext4 build for the SD
-# card's p2), this builds directly from the rootfs TARBALL and keeps only ONE
-# kernel's /lib/modules tree (the tarball built by rootfs/build-rootfs.sh
-# carries both flavors' modules so a single build serves either -- see
-# docs/kernel.md), because the eMMC root never needs the other flavor's modules
-# and every MiB here is a MiB streamed to the panel at install time.
+# card's p2), this builds directly from the rootfs TARBALL. It keeps BOTH
+# kernels' /lib/modules trees (the tarball built by rootfs/build-rootfs.sh
+# carries both flavors' modules -- see docs/kernel.md): `tsx-update-boot --emmc`
+# switches an installed panel between lts and stable by writing only the boot
+# image, so the other flavor's modules must already be on the root. They cost
+# a few tens of MiB of install streaming. --modules-ver names the flavor that
+# is booted first and must be present.
 #
 # The image is sized to its CONTENT, not to the partition: p8 is ~2.9 GiB
 # (see docs/boot.md eMMC region table) but the rootfs is under 1 GiB, so
@@ -65,6 +67,9 @@ grep -q "^\./lib/modules/$MVER/" <<< "$TARLIST" || { echo "mk-tsxroot-emmc.sh: $
 # heredoc below (\$-escaped); only plain values (already-known strings/numbers)
 # cross the boundary unescaped.
 TARNAME=$(basename "$TAR")
+# docker -v needs an absolute host path: a relative one ("rootfs/out", as
+# release.yml passes it) is taken as a named-volume name and refused
+TARDIR=$(cd "$(dirname "$TAR")" && pwd)
 TARSHA=$(sha256sum < "$TAR" | cut -d' ' -f1)
 BUILDTS=$(date -Iseconds 2>/dev/null || date)
 
@@ -74,13 +79,12 @@ W=$(mktemp -d "${TMPDIR:-/var/tmp}/mktsxroot.XXXX"); trap 'rm -rf "$W"' EXIT
 # shell quoting is exactly the kind of thing that silently mismangles a
 # character, and $TSX_KIOSK_URL here is read by the CONTAINER's sh, unescaped
 # by this host bash at all.
-docker run --rm --platform linux/amd64 -e TSX_KIOSK_URL="$URL" -v "$(dirname "$TAR"):/src:ro" -v "$W:/w" alpine:3.24 sh -euc "
+docker run --rm --platform linux/amd64 -e TSX_KIOSK_URL="$URL" -v "$TARDIR:/src:ro" -v "$W:/w" alpine:3.24 sh -euc "
 	apk add -q --no-cache e2fsprogs e2fsprogs-extra >/dev/null
 	mkdir -p /tmp/root; cd /tmp/root   # container-local, never bind-mounted: /w/root.img is the
 	tar xzf /src/$TARNAME              # only thing that needs to reach the host, so nothing here
 	                                    # is left root-owned in a host-visible directory afterward
-	# keep only this flavor's modules
-	for d in lib/modules/*/; do v=\$(basename \"\$d\"); [ \"\$v\" = '$MVER' ] || rm -rf \"\$d\"; done
+	# both flavors' module trees stay (tsx-update-boot --emmc switches kernels)
 	# fstab: LABEL=tsxroot-emmc, + the boot FAT partition + tsxdata (same recipe
 	# as installer/emmc/migrate-to-emmc.sh applies to a migrated card install)
 	sed -i 's#^LABEL=tsxroot  *#LABEL=tsxroot-emmc   #' etc/fstab
@@ -129,12 +133,16 @@ docker run --rm --platform linux/amd64 -e TSX_KIOSK_URL="$URL" -v "$(dirname "$T
 	resize2fs /w/root.img >/dev/null
 	e2fsck -fy /w/root.img >/dev/null
 	echo \$MINBYTES > /w/minbytes.txt
-	chown $(id -u):$(id -g) /w/root.img /w/minbytes.txt
+	# Block size + Free blocks of the final image, read HERE (the container has
+	# e2fsprogs; the host may not, or may have dumpe2fs only in an sbin dir
+	# that is not on a non-root PATH -- the free-space check below then saw 0)
+	dumpe2fs -h /w/root.img 2>/dev/null | awk -F: '
+		/^Block size/{gsub(/ /,\"\",\$2); bs=\$2} /^Free blocks/{gsub(/ /,\"\",\$2); fb=\$2} END{print bs, fb}' > /w/fsinfo.txt
+	chown $(id -u):$(id -g) /w/root.img /w/minbytes.txt /w/fsinfo.txt
 "
 MINBYTES=$(cat "$W/minbytes.txt")
-# one dumpe2fs -h pass, both fields (Block size, Free blocks) at once
-read -r BS FREEBLOCKS <<< "$(dumpe2fs -h "$W/root.img" 2>/dev/null | awk -F: '
-	/^Block size/{gsub(/ /,"",$2); bs=$2} /^Free blocks/{gsub(/ /,"",$2); fb=$2} END{print bs, fb}')"
+read -r BS FREEBLOCKS < "$W/fsinfo.txt"
+[ -n "$BS" ] && [ -n "$FREEBLOCKS" ] || { echo "mk-tsxroot-emmc.sh: ERROR: could not read the image's block size / free blocks" >&2; exit 1; }
 FREE_MIB=$((BS * FREEBLOCKS / 1048576))
 TARGETBYTES=$(stat -c %s "$W/root.img")
 MARGIN_MIB=$(( (TARGETBYTES - MINBYTES) / 1048576 ))

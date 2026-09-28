@@ -11,6 +11,11 @@
 #      --p5-backup-sha256 HEX sha256 of the first MiB of p5 as backed up   (required)
 #      --url URL              HA dashboard URL (default: rootfs kiosk.conf)
 #      --token-file FILE      HA long-lived token, seeded at first kiosk start
+#      --config-file FILE     panel.conf (installer/panel.conf.example): seeded
+#                             as /etc/tsx/panel.conf.seed; tsx-config apply
+#                             promotes it to /data/tsx/panel.conf on the first
+#                             boot that has /data mounted (this card stage has
+#                             no /data yet -- see docs/rootfs.md)
 #      --bootimg FILE         also copy the mainline boot image to FAT p1 as
 #                             tsxboot.img (golden boot.img is not touched)
 #      --bootimg-sha256 HEX   expected sha256 of --bootimg
@@ -48,7 +53,7 @@ install) ;;
 *) sed -n '2,22p' "$0"; exit 2;;
 esac
 
-ROOTFS= SHA= P5SHA= URL= TOKF= BOOTIMG= BOOTSHA= FORCE_FS=0
+ROOTFS= SHA= P5SHA= URL= TOKF= CONFF= BOOTIMG= BOOTSHA= FORCE_FS=0
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--rootfs) ROOTFS=$2; shift;;
@@ -56,6 +61,7 @@ while [ $# -gt 0 ]; do
 	--p5-backup-sha256) P5SHA=$2; shift;;
 	--url) URL=$2; shift;;
 	--token-file) TOKF=$2; shift;;
+	--config-file) CONFF=$2; shift;;
 	--bootimg) BOOTIMG=$2; shift;;
 	--bootimg-sha256) BOOTSHA=$2; shift;;
 	--force-fs) FORCE_FS=1;;
@@ -118,6 +124,11 @@ kver=$(uname -r)
 [ -d "$R/lib/modules/$kver" ] || say "WARNING: rootfs has no modules for the running kernel $kver ($(ls $R/lib/modules 2>/dev/null | tr '\n' ' ')); touch/backlight/lima modules will not load"
 [ -n "$URL" ] && sed -i "s|^KIOSK_URL=.*|KIOSK_URL=\"$URL\"|" $R/etc/kiosk.conf
 if [ -n "$TOKF" ]; then install -m 600 "$TOKF" $R/var/lib/kiosk/pending-token; chown 0:0 $R/var/lib/kiosk/pending-token; fi
+if [ -n "$CONFF" ]; then
+	mkdir -p $R/etc/tsx
+	install -m 600 "$CONFF" $R/etc/tsx/panel.conf.seed
+	say "panel.conf seeded as /etc/tsx/panel.conf.seed (promoted to /data/tsx/panel.conf by tsx-config apply once /data exists)"
+fi
 p1uuid=$(blkid -s UUID -o value "$P1")
 [ -n "$p1uuid" ] && echo "UUID=$p1uuid  /media/bootfat  vfat  noauto,rw,noatime,umask=022  0 0" >> $R/etc/fstab && mkdir -p $R/media/bootfat
 if [ -s /root/.ssh/authorized_keys ]; then mkdir -p $R/root/.ssh; cat /root/.ssh/authorized_keys >> $R/root/.ssh/authorized_keys; chmod 700 $R/root/.ssh; chmod 600 $R/root/.ssh/authorized_keys; fi

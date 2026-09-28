@@ -11,6 +11,12 @@
 #     --rescue-tsw1060 IMG   golden-slot rescue image (rescue/mkrescue.sh)
 #     --url URL              kiosk URL (KIOSK_URL)
 #     --token-file F         HA long-lived token, seeded at the first kiosk start
+#     --config FILE          panel.conf (installer/panel.conf.example), copied onto
+#                            the stick for the record; --rootfs-p2 (--usb) must
+#                            already have been built WITH the same file via
+#                            steps/mkp2rootfs.sh --config-file, since p2 has no
+#                            /data yet for this stick to write into directly
+#                            (docs/rootfs.md "Panel configuration")
 #     --go                   create tsx-install/GO: units that already boot mainline
 #                            reinstall from this stick at the next power cycle
 #     --usb                  ALSO copy tsx-install-usb and tsx-usb-recovery onto the
@@ -34,13 +40,14 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 INSTALLER_DIR=$(cd "$HERE/.." && pwd)
 ROOTFS_DIR=$(cd "$INSTALLER_DIR/../rootfs" && pwd)
-OUT= ROOTFS= P2IMG= B1060= B760= RESC1060= RESC760= URL= TOKEN= GO=0 USB=0 RECOVERY=0 GUARD=fallback DEFUSE=1 STALE=0 NOAUTO=0
+OUT= ROOTFS= P2IMG= B1060= B760= RESC1060= RESC760= URL= TOKEN= CONFIG= GO=0 USB=0 RECOVERY=0 GUARD=fallback DEFUSE=1 STALE=0 NOAUTO=0
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--out) OUT=$2; shift;; --rootfs) ROOTFS=$2; shift;; --rootfs-p2) P2IMG=$2; shift;;
 	--bootimg-tsw1060) B1060=$2; shift;; --bootimg-tsw760) B760=$2; shift;;
 	--rescue-tsw1060) RESC1060=$2; shift;; --rescue-tsw760) RESC760=$2; shift;;
 	--rootfs-ext4) echo "mkpayload: --rootfs-ext4 was removed with --direct-p5" >&2; exit 2;; --url) URL=$2; shift;; --token-file) TOKEN=$2; shift;;
+	--config) CONFIG=$2; shift;;
 	--go) GO=1;; --usb) USB=1;; --recovery) RECOVERY=1;;
 	--guard) GUARD=$2; shift;; --defuse-golden) DEFUSE=1;; --no-defuse-golden) DEFUSE=0;;
 	--allow-stale) STALE=1;; --allow-no-autoinstall) NOAUTO=1;;
@@ -133,6 +140,11 @@ fi
 cp "$INSTALLER_DIR/android/tsx-android-install.sh" "$INSTALLER_DIR/android/tsx-android-uninstall.sh" "$INSTALLER_DIR/android/tsx-lib.sh" "$T/android/"
 cp "$ROOTFS_DIR/install.sh" "$ROOTFS_DIR/uninstall.sh" "$ROOTFS_DIR/tsx-disk.sh" "$T/linux/"
 [ -n "$TOKEN" ] && { cp "$TOKEN" "$T/token.txt"; chmod 600 "$T/token.txt" 2>/dev/null || true; }
+if [ -n "$CONFIG" ]; then
+	[ -f "$CONFIG" ] || die "$CONFIG missing"
+	cp "$CONFIG" "$T/panel.conf"; chmod 600 "$T/panel.conf" 2>/dev/null || true
+	say "panel.conf copied onto the stick for the record; make sure --rootfs-p2 was built with steps/mkp2rootfs.sh --config-file $CONFIG (p2 has no /data partition to write it into at stick-mount time)"
+fi
 if [ $USB = 1 ]; then
 	cpv "$INSTALLER_DIR/android/tsx-install-usb" "$OUT/tsx-install-usb"
 	cpv "$INSTALLER_DIR/emmc/tsx-usb-recovery" "$OUT/tsx-usb-recovery"
@@ -153,6 +165,7 @@ printf '%s\n' none-5inch.img "$([ -n "$B760" ] && echo tsxboot-tsw760.img || ech
 	[ -n "$RESC1060" ] && echo "RESCUE_tsw1060=tsx-install/rescue-tsw1060.img"
 	[ -n "$URL" ] && echo "KIOSK_URL=$URL"
 	[ -n "$TOKEN" ] && echo "TOKEN_FILE=token.txt"
+	[ -n "$CONFIG" ] && echo "CONFIG_FILE=panel.conf"
 	echo "GUARD=$GUARD"
 	echo "DEFUSE_GOLDEN=$DEFUSE"
 } > "$T/tsx-install.conf"

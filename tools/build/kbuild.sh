@@ -91,7 +91,15 @@ FRAG=$LINUX_DIR/arch/arm/configs/tsx-xx60.config
 [ -f "$FRAG" ] || { echo "no $FRAG (is $LINUX_DIR a tsx-xx60 kernel checkout?)"; exit 1; }
 MK="make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- CC='$CC' O=$B KBUILD_BUILD_USER=build KBUILD_BUILD_HOST=tsx-build"
 DTB=$B/arch/arm/boot/dts/amlogic/meson8m2-crestron-tsw1060.dtb
-run() { docker run --rm -u "$(id -u):$(id -g)" -v "$TOP:$TOP" "${RUN_ENV[@]}" -w "$LINUX_DIR" "$IMG" bash -c "$*"; }
+# The kernel's version suffix (-NNNNN-g<sha>, CONFIG_LOCALVERSION_AUTO) comes
+# from git inside the container. A worktree's .git file points into the main
+# checkout's git dir, which may live outside $TOP: mount it too, or git fails
+# silently and the release is a bare "7.2.8" that no longer names its commit.
+GIT_MNT=()
+GIT_COMMON=$(git -C "$LINUX_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || GIT_COMMON=
+case "$GIT_COMMON" in ""|"$TOP"/*) ;; *) GIT_MNT=(-v "$GIT_COMMON:$GIT_COMMON");; esac
+run() { docker run --rm -u "$(id -u):$(id -g)" -v "$TOP:$TOP" "${GIT_MNT[@]}" -e GIT_CONFIG_COUNT=1 \
+	-e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' "${RUN_ENV[@]}" -w "$LINUX_DIR" "$IMG" bash -c "$*"; }
 config() {
 	run "set -e; $MK multi_v7_defconfig
 	scripts/kconfig/merge_config.sh -m -O $B $B/.config $FRAG
@@ -111,6 +119,8 @@ while [ $# -gt 0 ]; do
 		run "set -e; $MK -j$J zImage dtbs modules";;
 	image)	cp "$B/arch/arm/boot/zImage" "$OUT/zImage"; cp "$DTB" "$OUT/"
 		cp "$B/include/config/kernel.release" "$OUT/kernel.release"
+		case "$(cat "$OUT/kernel.release")" in *-g[0-9a-f]*) ;; *)
+			echo "kbuild: WARNING: kernel release '$(cat "$OUT/kernel.release")' has no -g<commit> suffix (git not usable in the build container?)";; esac
 		git -C "$LINUX_DIR" rev-parse HEAD > "$OUT/kernel.commit"
 		INITRD=$REPO/rootfs/out/initramfs-switchroot.cpio.gz
 		INITRD_ARG=; [ -f "$INITRD" ] && INITRD_ARG="--initrd $INITRD"

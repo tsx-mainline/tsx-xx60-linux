@@ -1,0 +1,18 @@
+#!/sbin/openrc-run
+# Applies /data/tsx/panel.conf (tsx-config, docs/rootfs.md "Panel
+# configuration"): writes the small /run/tsx/*.conf overrides that
+# kiosk-session/kiosk/tsx-setup/tsx-hostname/tsx-sendspin/tsx-voice/tsx-mqtt
+# read after their own /etc defaults, and applies the settings that are not
+# just a file (root password hash, an authorized_keys entry, voice
+# enable/disable). Must run before anything that reads those defaults.
+description="TSX panel configuration (panel.conf -> /run/tsx overrides)"
+depend() {
+	need localmount
+	after tsx-data
+	before tsx-setup tsx-hostname networking kiosk tsx-sendspin tsx-mqtt tsx-voice
+}
+start() {
+	ebegin "Applying panel configuration"
+	/usr/local/sbin/tsx-config apply || ewarn "tsx-config apply failed (see above); continuing with defaults"
+	eend 0   # never fails boot
+}

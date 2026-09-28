@@ -1,0 +1,25 @@
+#!/bin/sh
+# tsx-esphome-run: start tsx_panel.esphome_server with /etc/tsx/esphome.conf .
+# Used by /etc/init.d/tsx-esphome (as root, like tsx-mqtt: reboot, tsx-config
+# apply and the LED/backlight/screen CLIs all need it -- see
+# rootfs/voice/shim/tsx_panel/backend.py). --print: show the command.
+CONF=${TSX_ESPHOME_CONF:-/etc/tsx/esphome.conf}
+LVA_ROOT=${TSX_LVA_ROOT:-/opt/lva}
+NAME= PORT=6053 IFACE= HOST= ARGS=
+PRINT=${TSX_ESPHOME_PRINT:-0}; [ "${1-}" = --print ] && PRINT=1
+[ -r "$CONF" ] && . "$CONF"
+# tsx_panel is vendored alongside the voice satellite's own shim (both come
+# from rootfs/voice/shim/ at build time; see rootfs/voice/install-lva.sh) --
+# reusing that PYTHONPATH is what lets tsx-esphome reuse LEDLightEntity and
+# the aioesphomeapi/zeroconf/getmac packages without installing anything of
+# its own (rootfs/packages.txt "voice" section already covers all of it).
+export PYTHONPATH="$LVA_ROOT/shim:$LVA_ROOT/app:$LVA_ROOT/lib${PYTHONPATH:+:$PYTHONPATH}"
+set -- --name "${NAME:-$(hostname)}" --port "$PORT"
+[ -n "$IFACE" ] && set -- "$@" --network-interface "$IFACE"
+[ -n "$HOST" ] && set -- "$@" --host "$HOST"
+if [ "$PRINT" = 1 ]; then
+	echo "PYTHONPATH=$PYTHONPATH python3 -m tsx_panel.esphome_server $* $ARGS"
+	exit 0
+fi
+# shellcheck disable=SC2086
+exec python3 -m tsx_panel.esphome_server "$@" $ARGS

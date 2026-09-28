@@ -9,12 +9,16 @@
 #   /var/lib/tsx/install.info   the card-stage source image hashes
 # Output: out/rootfs-p2.ext4 (+ .sha256). Android never mounts p2, so the ext4
 # features of the rootfs build are kept.
-#   mkp2rootfs.sh [--rootfs-ext4 IMG] [--out IMG] [--url URL] [--token-file F]
+#   mkp2rootfs.sh [--rootfs-ext4 IMG] [--out IMG] [--url URL] [--token-file F] [--config-file F]
+#     --config-file: installer/panel.conf.example, injected as
+#     /etc/tsx/panel.conf.seed (p2/the card stage has no /data yet; tsx-config
+#     apply promotes it to /data/tsx/panel.conf on the first boot that has
+#     /data mounted -- docs/rootfs.md "Panel configuration")
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INSTALLER_DIR=$(cd "$HERE/.." && pwd); ROOTFS_DIR=$(cd "$INSTALLER_DIR/../rootfs" && pwd)
-SRC=$ROOTFS_DIR/out/rootfs.ext4 OUT=$INSTALLER_DIR/out/rootfs-p2.ext4 URL= TOKEN=
+SRC=$ROOTFS_DIR/out/rootfs.ext4 OUT=$INSTALLER_DIR/out/rootfs-p2.ext4 URL= TOKEN= CONF=
 while [ $# -gt 0 ]; do case $1 in --rootfs-ext4) SRC=$2; shift;; --out) OUT=$2; shift;; --url) URL=$2; shift;;
-	--token-file) TOKEN=$2; shift;; *) sed -n '2,15p' "$0"; exit 2;; esac; shift; done
+	--token-file) TOKEN=$2; shift;; --config-file) CONF=$2; shift;; *) sed -n '2,17p' "$0"; exit 2;; esac; shift; done
 P2BYTES=$((1638400 * 512))
 W=$(mktemp -d "${TMPDIR:-/var/tmp}/mkp2.XXXX"); trap 'rm -rf "$W"' EXIT
 # resize2fs cannot shrink the 1492 MiB build below ~1240 MiB (inode tables), so
@@ -41,6 +45,7 @@ if [ -n "$URL" ]; then
 	debugfs -R "cat /etc/kiosk.conf" "$W/p2.ext4" 2>/dev/null | sed "s|^KIOSK_URL=.*|KIOSK_URL=\"$URL\"|" > "$W/kiosk.conf"; put "$W/kiosk.conf" /etc/kiosk.conf 0100644
 fi
 [ -n "$TOKEN" ] && put "$TOKEN" /var/lib/kiosk/pending-token 0100600
+if [ -n "$CONF" ]; then dbg "mkdir /etc/tsx" || true; put "$CONF" /etc/tsx/panel.conf.seed 0100600; fi
 { echo "installed=(card-stage image, mkp2rootfs.sh $(date -Iseconds))"; echo "disk=/dev/mmcblk0"
   echo "rootfs_ext4_sha256=$(sha256sum < "$SRC" | cut -d' ' -f1)"; } > "$W/install.info"
 dbg "mkdir /var/lib/tsx" || true; put "$W/install.info" /var/lib/tsx/install.info 0100644

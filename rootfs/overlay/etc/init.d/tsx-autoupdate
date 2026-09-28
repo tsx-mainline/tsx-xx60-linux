@@ -5,8 +5,14 @@
 # effect on the next restart) and, in the background, runs the post-update
 # health check after a boot that followed an automatic-update reboot
 # (tsx-boot-ok's "background, delayed, never delays boot" pattern).
+# The same background job first runs "tsx-autoupdate check" once (when
+# enabled): /run/tsx is empty after a boot, and the status there (the HA
+# update entity via tsx-esphome/tsx-mqtt) would otherwise read "unknown"
+# until the first cron tick, and "status" would still show the state from
+# before a reinstall.
 description="Schedule automatic Alpine package updates (tsx-autoupdate)"
 HEALTH_DELAY=${HEALTH_DELAY:-90}
+CHECK_DELAY=${CHECK_DELAY:-30}
 CONF=/etc/tsx/autoupdate.conf
 
 depend() {
@@ -27,7 +33,9 @@ start() {
 	if [ "$ENABLED" = 1 ]; then
 		echo "*/15 * * * * /usr/local/sbin/tsx-autoupdate >/dev/null 2>&1 # tsx-autoupdate" >> /etc/crontabs/root
 	fi
-	( sleep "$HEALTH_DELAY"
+	( sleep "$CHECK_DELAY"
+	  [ "$ENABLED" = 1 ] && /usr/local/sbin/tsx-autoupdate check
+	  [ "$HEALTH_DELAY" -gt "$CHECK_DELAY" ] && sleep $((HEALTH_DELAY - CHECK_DELAY))
 	  /usr/local/sbin/tsx-autoupdate healthcheck 2>&1 | logger -t tsx-autoupdate
 	) >/dev/null 2>&1 &
 	eend 0

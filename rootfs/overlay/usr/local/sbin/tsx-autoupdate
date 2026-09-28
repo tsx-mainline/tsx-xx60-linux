@@ -278,7 +278,10 @@ do_check() {
 
 	oldver=$(pinned_chromium_ver)
 	candver=$(candidate_chromium_ver)
-	since=$(chromium_hold_since "$candver")
+	# a hold only exists while the candidate differs from the pinned build
+	since=
+	if [ -n "$candver" ] && [ "$candver" != "$oldver" ]; then since=$(chromium_hold_since "$candver")
+	else rm -f "$STATE/chromium-hold"; fi
 	sig=0; [ -n "$candver" ] && sig_known_for "$candver" && sig=1
 	decision=$(chromium_decision "$candver" "$oldver" "$sig" "$since" "${HOLD_DAYS:-7}" "$(today)")
 	word=${decision%% *}

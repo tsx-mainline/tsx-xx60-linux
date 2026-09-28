@@ -23,6 +23,7 @@ start_pre() {
 	checkpath -d -m 0755 -o kiosk:kiosk /var/lib/kiosk
 	checkpath -f -m 0644 -o kiosk:kiosk /var/log/kiosk.log
 	. /etc/kiosk.conf
+	[ -r /run/tsx/kiosk.conf ] && . /run/tsx/kiosk.conf   # panel.conf overrides (tsx-config apply)
 	[ -n "${KIOSK_CACHE_DIR:-}" ] && checkpath -d -m 0700 -o kiosk:kiosk "$KIOSK_CACHE_DIR"
 	# TLS needs a correct clock: wait for NTP, but start anyway after the limit
 	/usr/local/sbin/tsx-wait-time "${KIOSK_TIME_WAIT:-20}" || ewarn "starting without NTP sync"

@@ -130,6 +130,19 @@ if [ "$CHROMIUM_ES2_PATCH" = 1 ]; then
 fi
 echo "chromium-es2-patch: $ES2_RESULT"
 
+# every binary built above must find its shared libraries in the image
+# (a package missing from packages.txt, e.g. libusb for tsx-ledbar, only
+# shows up on the panel otherwise: "Error loading shared library")
+log "shared library check"
+for bin in /usr/local/sbin/tsx-idled /usr/local/sbin/tsx-buttons /usr/local/bin/tsx-ledbar \
+	/usr/local/bin/tsx-peak /usr/bin/cage /usr/local/bin/sendspin-cli; do
+	out=$(chroot $R /lib/ld-musl-armhf.so.1 --list "$bin" 2>&1) || true
+	if printf '%s\n' "$out" | grep -qE 'Error (loading|relocating)|not found'; then
+		printf '%s\n' "$out" | head -n 5
+		echo "ERROR: $bin: missing shared libraries (add the package to packages.txt)"; exit 1
+	fi
+done
+
 log "users, services"
 chroot $R /bin/sh -e <<'CH'
 addgroup -S seat 2>/dev/null || true
@@ -138,10 +151,10 @@ adduser -D -H -h /var/lib/kiosk -s /sbin/nologin -g "kiosk browser" kiosk
 for g in video input seat render audio; do addgroup kiosk $g 2>/dev/null || true; done
 mkdir -p /var/lib/kiosk && chown kiosk:kiosk /var/lib/kiosk
 for s in devfs dmesg udev udev-trigger udev-settle; do rc-update add $s sysinit; done
-for s in root localmount tsx-data modules sysctl hostname bootmisc syslog swclock seedrng tsx-setup tsx-hostname udev-postmount machine-id; do
+for s in root localmount tsx-data tsx-config modules sysctl hostname bootmisc syslog swclock seedrng tsx-setup tsx-hostname udev-postmount machine-id; do
 	[ -e /etc/init.d/$s ] && rc-update add $s boot || echo "no service $s"
 done
-for s in networking chronyd sshd seatd crond watchdog tsx-idled tsx-cpufreq tsx-buttons tsx-als tsx-ledbar tsx-audio tsx-tfa-dsp dbus avahi-daemon tsx-sendspin tsx-mqtt tsx-autoupdate kiosk tsx-boot-ok local; do
+for s in networking chronyd sshd seatd crond watchdog tsx-idled tsx-cpufreq tsx-buttons tsx-als tsx-ledbar tsx-audio tsx-tfa-dsp dbus avahi-daemon tsx-sendspin tsx-panelctl tsx-esphome tsx-mqtt tsx-autoupdate kiosk tsx-boot-ok local; do
 	[ -e /etc/init.d/$s ] && rc-update add $s default || { echo "MISSING service $s"; exit 1; }
 done
 for s in mount-ro killprocs savecache; do rc-update add $s shutdown; done

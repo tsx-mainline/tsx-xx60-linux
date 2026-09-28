@@ -5,17 +5,25 @@
 description="Assist voice satellite (linux-voice-assistant, ESPHome API)"
 supervisor=supervise-daemon
 command=/usr/local/bin/tsx-voice-run
-command_user="kiosk:audio"
+# primary group kiosk (the /run/tsx/panelctl FIFO is root:kiosk 0660, see
+# tsx-panelctl); audio etc. come from kiosk's /etc/group memberships. With
+# "kiosk:audio" the process had no kiosk group and every panel entity write
+# failed ("tsx-panelctl not listening").
+command_user="kiosk:kiosk"
 output_log=/var/log/tsx-voice.log
 error_log=/var/log/tsx-voice.log
 respawn_delay=10
 respawn_max=0
-depend() { need net; after tsx-audio tsx-setup; }
+# after tsx-config: its apply writes /run/tsx/esphome.key (HA_API_KEY) and
+# esphome.conf (HA_ALLOW_FROM), read once at start -- starting earlier would
+# serve the ESPHome API without them
+depend() { need net; after tsx-audio tsx-setup tsx-config; }
 start_pre() {
 	# supervise-daemon opens the log after switching to command_user: it must exist and be writable by kiosk
 	checkpath -f -m 0644 -o kiosk:audio /var/log/tsx-voice.log
 	STATE_DIR=/var/lib/tsx-voice
 	[ -r /etc/tsx/voice.conf ] && . /etc/tsx/voice.conf
+	[ -r /run/tsx/voice.conf ] && . /run/tsx/voice.conf   # panel.conf NAME/WAKE_WORD (tsx-config apply)
 	[ -x /usr/local/bin/linux-voice-assistant ] || { eerror "linux-voice-assistant not installed"; return 1; }
 	[ -e /proc/asound/TSW1060 ] || ewarn "no TSW1060 sound card"
 	checkpath -d -m 0755 -o kiosk:audio "$STATE_DIR"

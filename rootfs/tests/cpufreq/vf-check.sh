@@ -1,9 +1,15 @@
 #!/bin/sh
 # cpufreq (ON THE PANEL): step the CPU through OPPs, check that VCCK follows AND
 # that the real CPU clock (clk-msr a9_clk_div16 x 16) matches the requested rate.
-# performance governor + scaling_max_freq pins each step. 1800 MHz is a boost
+# performance governor + scaling_max_freq pins each step. The tsx DT has no
+# 1800 MHz OPP any more (removed, not stable); pass the kHz list without it.
+# With a test DT that enables it: 1800 MHz is a boost
 # OPP: enable with BOOST=1 (echo 1 > .../cpufreq/boost), always reset to 0 at the end.
 # Usage: [BOOST=1] vf-check.sh [kHz ...]   Ends at 1608 MHz max, previous governor.
+# WARNING: boost is not stable under real load (docs/hardware.md); on 7.2 a
+# boost 1 -> 0 leaves cpuinfo_max_freq at 1800000, only scaling_max_freq
+# (1608000, written first below) caps it: reboot after a BOOST=1 run.
+# The PMIC setpoint itself: i2cget -f -y 0 0x32 0x36 (DCDC1, 600 mV + n x 12.5 mV).
 CF=/sys/devices/system/cpu/cpufreq/policy0 B=/sys/devices/system/cpu/cpufreq/boost
 M=/sys/kernel/debug/meson-clk-msr/measure_summary
 mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug

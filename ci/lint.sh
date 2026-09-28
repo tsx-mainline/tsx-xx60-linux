@@ -52,5 +52,19 @@ for f in installer/steps/legacy/tsx-android-to-card installer/tsx-restore-factor
 	"$f" --help >/dev/null 2>&1 || { echo "FAIL: $f --help"; fail=1; }
 done
 
+echo "== docs: relative links + anchors resolve =="
+python3 ci/check-doc-links.py || { echo "FAIL: doc links"; fail=1; }
+
+echo "== on-panel tools shipped by the rootfs overlay =="
+# one source file, copied into the image by rootfs/mkrootfs.sh (cp -a overlay)
+[ -x rootfs/overlay/usr/local/sbin/tsx-update-boot ] || { echo "FAIL: rootfs/overlay/usr/local/sbin/tsx-update-boot missing or not executable"; fail=1; }
+[ "$(readlink -f installer/emmc/tsx-update-boot)" = "$(readlink -f rootfs/overlay/usr/local/sbin/tsx-update-boot)" ] \
+	|| { echo "FAIL: installer/emmc/tsx-update-boot is not a link to the rootfs overlay copy"; fail=1; }
+# OpenRC refuses a service script without the x bit (rc-update add fails
+# and mkrootfs.sh stops with "MISSING service")
+for f in rootfs/overlay/etc/init.d/*; do
+	[ -x "$f" ] || { echo "FAIL: $f is not executable"; fail=1; }
+done
+
 [ $fail -eq 0 ] && echo "lint OK" || echo "lint FAILED"
 exit $fail

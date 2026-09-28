@@ -8,9 +8,12 @@
 # Does, over ssh (root/tsx), with every secret sent on stdin (never in argv):
 #   1. /etc/tsx/ha-token      <- secrets/ha-token (0600)            tsx-buttons
 #   2. /etc/tsx/buttons.conf  HA_URL=$HA, light.CHANGE_ME -> $LIGHT
-#   3. /etc/tsx/mqtt.conf     BROKER/USER/PASSWORD (0600)           tsx-mqtt
+#   3. tsx-config set MQTT_HOST/MQTT_USER/MQTT_PASSWORD + apply (panel.conf,
+#      docs/rootfs.md "Panel configuration"; materialises /run/tsx/mqtt.conf,
+#      which tsx-mqtt reads after /etc/tsx/mqtt.conf's own defaults)
 #   4. rc-service tsx-buttons restart; rc-service tsx-mqtt restart
-#   5. /etc/kiosk.conf        KIOSK_URL=$HA/tsw-1060/home
+#   5. tsx-config set KIOSK_URL $HA/tsw-1060/home + apply (same file; kiosk-session
+#      reads /run/tsx/kiosk.conf after /etc/kiosk.conf)
 #   6. kiosk-set-token --file <secrets/kiosk-token>  (restarts the kiosk)
 # and verifies:
 #   a. tsx-keypad press lights toggles $LIGHT in HA (then toggles it back)
@@ -63,20 +66,24 @@ p "set -e; f=/etc/tsx/buttons.conf; [ -e \$f.pre-provision ] || cp -p \$f \$f.pr
 sed -i -e 's#^HA_URL=.*#HA_URL=$HA#' -e 's#light\\.CHANGE_ME#$LIGHT#' \$f
 grep -n '^HA_URL=\\|^HA_TOKEN_FILE=\\|^HA_EVENT=\\|^on lights' \$f"
 
-say "3. /etc/tsx/mqtt.conf: BROKER=$BROKER USER=$MQTT_USER PASSWORD=(from stdin)"
-p "set -e; f=/etc/tsx/mqtt.conf; [ -e \$f.pre-provision ] || cp -p \$f \$f.pre-provision
+say "3. panel.conf: MQTT_HOST=$BROKER MQTT_USER=$MQTT_USER MQTT_PASSWORD=(from stdin)"
+p "set -e
 IFS= read -r pw; case \$pw in *[!A-Za-z0-9]*|'') echo 'password must be alphanumeric'; exit 1;; esac
-sed -i -e 's#^BROKER=.*#BROKER=$BROKER#' -e 's#^USER=.*#USER=$MQTT_USER#' -e \"s#^PASSWORD=.*#PASSWORD=\$pw#\" \$f
-chmod 600 \$f; ls -l \$f | cut -c1-10; grep -n '^BROKER=\\|^PORT=\\|^USER=' \$f; grep -c '^PASSWORD=.\\+' \$f | sed 's/^/PASSWORD lines set: /'" < "$S/tsw1060.password"
+tsx-config set MQTT_HOST '$BROKER'
+tsx-config set MQTT_USER '$MQTT_USER'
+tsx-config set MQTT_PASSWORD \"\$pw\"
+tsx-config apply
+tsx-config show | grep '^MQTT_'" < "$S/tsw1060.password"
 
 say "4. restart tsx-buttons and tsx-mqtt"
 p 'rc-service tsx-buttons restart >/dev/null 2>&1; rc-service tsx-mqtt restart >/dev/null 2>&1; sleep 3; rc-service tsx-buttons status; rc-service tsx-mqtt status; tail -3 /var/log/tsx-buttons.log; tail -5 /var/log/tsx-mqtt.log'
 
-say "5. /etc/kiosk.conf: KIOSK_URL=$HA/$DASH (and KIOSK_DEVTOOLS=1 for the checks)"
+say "5. panel.conf: KIOSK_URL=$HA/$DASH (KIOSK_DEVTOOLS=1 for the checks stays a plain /etc/kiosk.conf edit: it is not a panel.conf key)"
 p "set -e; f=/etc/kiosk.conf; [ -e \$f.pre-provision ] || cp -p \$f \$f.pre-provision
-sed -i -e 's#^KIOSK_URL=.*#KIOSK_URL=\"$HA/$DASH\"#' \$f
+tsx-config set KIOSK_URL '$HA/$DASH'
+tsx-config apply
 grep -q '^KIOSK_DEVTOOLS=1' \$f || sed -i 's#^KIOSK_DEVTOOLS=.*#KIOSK_DEVTOOLS=1#' \$f
-grep -n '^KIOSK_URL=\\|^KIOSK_DEVTOOLS=' \$f"
+tsx-config get KIOSK_URL; grep -n '^KIOSK_DEVTOOLS=' \$f"
 
 say "6. kiosk-set-token --file (kiosk logs in as the panel user; restarts the kiosk)"
 p 'umask 077; t=$(mktemp); cat > "$t"; kiosk-set-token --file "$t"; rc=$?; rm -f "$t"; kiosk-set-token --show; exit $rc' < "$S/kiosk-token"

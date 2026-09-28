@@ -4,6 +4,7 @@ depend() { need localmount; before networking kiosk; }
 start() {
 	ebegin "TSX setup"
 	. /etc/kiosk.conf
+	[ -r /run/tsx/kiosk.conf ] && . /run/tsx/kiosk.conf   # panel.conf overrides (tsx-config apply)
 	if [ -n "${TZ_NAME:-}" ] && [ -f "/usr/share/zoneinfo/$TZ_NAME" ]; then
 		ln -sf "/usr/share/zoneinfo/$TZ_NAME" /etc/localtime
 		echo "$TZ_NAME" > /etc/timezone

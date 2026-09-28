@@ -62,10 +62,14 @@ chk() { [ "$1" = "$2" ] || { echo "FAIL: $3: got '$1', want '$2'"; fail=1; }; }
 reset_calls() { : > "$T/calls"; : > "$T/apk.calls"; }
 
 # ---- 1: nothing pending, chromium candidate == pinned: no-op --------------
+printf 'chromium-1.0.0-r0 armv7 {chromium} (BSD-3-Clause)\n' > "$T/chromlist.txt"
 NOWDATE=2026-01-01 NOWHHMM=04:00 run >/dev/null
 chk "$(jf "$T/run/update.json" .pending_count)" 0 "1: nothing pending"
 chk "$(jf "$T/run/update.json" .reboot_pending)" false "1: no reboot pending"
 chk "$(jf "$T/run/update.json" .chromium_decision)" none "1: chromium candidate == pinned"
+chk "$(jf "$T/run/update.json" .chromium_held_since)" "" "1: no hold date while candidate == pinned"
+[ -e "$T/state/chromium-hold" ] && { echo "FAIL: 1: hold file written with no newer candidate"; fail=1; }
+: > "$T/chromlist.txt"
 grep -q '^APK upgrade$' "$T/apk.calls" && { echo "FAIL: 1: installed with nothing pending"; fail=1; }
 
 # ---- 2: a reboot-needing package pending, in window + idle: installs and reboots

@@ -18,6 +18,7 @@ start_pre() {
 	SENDSPIN_NAME= SENDSPIN_ID= SENDSPIN_OUTPUT=alsa:media SENDSPIN_FORMATS= SENDSPIN_BUFFER_MS=300
 	SENDSPIN_STATIC_DELAY=0 SENDSPIN_SERVER= SENDSPIN_ARGS=
 	[ -r /etc/tsx/sendspin.conf ] && . /etc/tsx/sendspin.conf
+	[ -r /run/tsx/sendspin.conf ] && . /run/tsx/sendspin.conf   # panel.conf PANEL_NAME (tsx-config apply)
 	checkpath -d -m 0755 -o kiosk:audio /run/sendspin-cli
 	checkpath -d -m 0755 -o kiosk:audio /var/lib/sendspin
 	command_args="-n \"${SENDSPIN_NAME:-$(hostname)}\" -o $SENDSPIN_OUTPUT --buffer-ms $SENDSPIN_BUFFER_MS --static-delay $SENDSPIN_STATIC_DELAY --control-socket /run/sendspin-cli/control.sock --state-dir /var/lib/sendspin --manufacturer Crestron --product-name xx60"

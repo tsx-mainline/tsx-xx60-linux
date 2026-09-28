@@ -67,7 +67,8 @@ brightnessctl
 evtest
 # tsx-buttons: Home Assistant REST calls (b)
 curl
-# tsx-ledbar (libusb fallback) and the tsx-mqtt Home Assistant bridge libusb
+# tsx-ledbar (libusb fallback) and the tsx-mqtt Home Assistant bridge
+libusb
 mosquitto-clients
 # audio : ALSA tools (asound.conf, tsx-audio), Sendspin player
 # (sendspin-cli: alsa-lib + avahi dns_sd over dbus)
@@ -77,7 +78,8 @@ avahi
 avahi-compat-libdns_sd
 # voice : Assist satellite linux-voice-assistant (ESPHome API,
 # installed by voice/install-lva.sh): python3 +
-# zeroconf, numpy, protobuf, cryptography (aioesphomeapi imports), tzlocal,
+# zeroconf, numpy, protobuf, cryptography (aioesphomeapi imports; also the
+# ESPHome API encryption, rootfs/voice/shim/tsx_panel/noise.py), tzlocal,
 # aiohappyeyeballs, libmpv via python-mpv (TTS / media playback on ALSA)
 python3
 py3-zeroconf
@@ -88,6 +90,14 @@ py3-tzlocal
 py3-aiohappyeyeballs
 py3-mpv
 mpv-libs
+# ha-esphome : the panel as one Home Assistant device over the ESPHome
+# native API (PLAN.md section 18, docs/ha.md "One Home Assistant device").
+# No new packages: tsx-esphome (rootfs/voice/shim/tsx_panel/, standalone,
+# used when VOICE=off) and the voice satellite's own plugin (VOICE=on) both
+# run with the "voice" packages above (installed unconditionally by
+# rootfs/voice/install-lva.sh regardless of VOICE) plus getmac and
+# aioesphomeapi, which install-lva.sh already vendors into /opt/lva/lib as
+# pinned wheels -- there is nothing here to add.
 # more tools
 u-boot-tools
 i2c-tools

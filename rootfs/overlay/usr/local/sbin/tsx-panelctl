@@ -1,0 +1,140 @@
+#!/bin/sh
+# tsx-panelctl: the panel's ONLY privileged surface for the unprivileged
+# Home Assistant ESPHome plugin (PLAN.md section 18). Runs as root, reads
+# fixed, whitelisted commands from a FIFO group-writable by "kiosk" and runs
+# them with the existing root-only CLIs (tsx-ledbar, tsx-keypad, tsx-blank,
+# tsx-config, reboot) or writes the runtime override files they use.
+#
+# WHY THIS EXISTS: the voice satellite (tsx-voice / linux-voice-assistant)
+# runs as user kiosk (group kiosk, + audio), not root -- an always-on process that both talks to
+# the network (the ESPHome API port, 6053) and to audio hardware should not
+# also run as root. But every one of these actions already needs root on
+# this panel: tsx-blank signals tsx-idled with pkill (only root or the same
+# UID may signal another user's process), /run/tsx/brightness and
+# /run/tsx/buttons.ctl are root:root 0600/0755 (see rootfs/src/tsx-idled.c,
+# tsx-buttons.c), and tsx-config apply refuses to run non-root. So when the
+# voice satellite's own plugin (rootfs/voice/shim/tsx_lva) needs to act on
+# one of the panel's Home Assistant entities, it writes one line here
+# instead of running the command itself; tsx-esphome (the standalone
+# ESPHome server used when VOICE=off) runs as root already, like tsx-mqtt,
+# and never needs this -- see rootfs/voice/shim/tsx_panel/backend.py's
+# module docstring for the euid check that picks one path or the other.
+#
+# THREAT MODEL: the FIFO's writer is the "kiosk" group, and "kiosk" is also
+# the user Chromium (unsandboxed on this hardware) runs as -- so treat every
+# line as hostile, not just malformed. Every command below is matched
+# against the EXACT form tsx_panel/backend.py sends (fixed argument count,
+# numeric args range-checked, enum args compared with `=`, never a glob or a
+# caller-chosen string handed to a root CLI as a positional/option
+# argument); anything else is logged (truncated, control characters
+# stripped) and dropped, never run. `read` splits the line into fixed
+# fields itself (no unquoted `$line`/`$*` re-split of caller input), and
+# `set -f` additionally disables pathname expansion as a second layer.
+#
+# Env overrides for tests: TSX_RUN_DIR, TSX_PANELCTL, TSX_LEDBAR, TSX_KEYPAD,
+# TSX_BLANK, TSX_ALS_BIN, TSX_CONFIG_BIN, TSX_REBOOT_BIN, TSX_AMIXER,
+# TSX_SOUND_CARD, TSX_UPDATE_BIN, TSX_PANELCTL_ONESHOT=1 (handle exactly one
+# line then exit; tests only).
+set -u -f
+R=${TSX_RUN_DIR:-/run/tsx}
+FIFO=${TSX_PANELCTL:-$R/panelctl}
+LEDBAR=${TSX_LEDBAR:-tsx-ledbar}
+KEYPAD=${TSX_KEYPAD:-tsx-keypad}
+BLANK=${TSX_BLANK:-tsx-blank}
+ALS=${TSX_ALS_BIN:-tsx-als}
+CONFIG=${TSX_CONFIG_BIN:-tsx-config}
+REBOOT_BIN=${TSX_REBOOT_BIN:-reboot}
+AMIXER=${TSX_AMIXER:-amixer}
+CARD=${TSX_SOUND_CARD:-TSW1060}
+UPDATE_BIN=${TSX_UPDATE_BIN:-tsx-autoupdate}
+ONESHOT=${TSX_PANELCTL_ONESHOT:-0}
+
+log() { echo "$(date '+%F %T') tsx-panelctl: $*"; }
+
+# strip control characters and cap length before a hostile/malformed line
+# ever reaches a log line (it is otherwise never run, only printed).
+safe() { printf '%s' "$1" | tr -d '\000-\010\013-\037\177' | cut -c1-120; }
+
+# digits only (no sign, no leading '-'), length-capped BEFORE the numeric
+# compare below so an absurdly long digit string can't upset `[ -ge/-le ]`.
+is_uint() {
+	case "$1" in ''|*[!0-9]*) return 1;; esac
+	[ "${#1}" -le 6 ]
+}
+in_range() { is_uint "$1" && [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]; }
+
+reject() { log "rejected: $(safe "$*")"; }
+
+mkdir -p "$R"
+if [ ! -p "$FIFO" ]; then rm -f "$FIFO"; mkfifo "$FIFO" || { log "mkfifo $FIFO failed"; exit 1; }; fi
+chown root:kiosk "$FIFO" 2>/dev/null || true
+chmod 660 "$FIFO"
+
+# handle CMD A1 A2 A3 A4 REST -- always called with exactly six fields (some
+# empty); REST is anything past the 5th field (extra tokens on the line),
+# and every branch below that does not itself consume REST requires it to be
+# empty, so a caller cannot smuggle extra arguments onto a valid-looking
+# command.
+handle() {
+	cmd=$1 a1=$2 a2=$3 a3=$4 a4=$5 rest=$6
+	case "$cmd" in
+	ledbar)
+		if [ "$a1" = off ] && [ -z "$a2$a3$a4$rest" ]; then
+			log "ledbar off"; "$LEDBAR" off
+		elif [ "$a1" = set ] && in_range "$a2" 0 100 && in_range "$a3" 0 100 && in_range "$a4" 0 100 && [ -z "$rest" ]; then
+			log "ledbar set $a2 $a3 $a4"; "$LEDBAR" set "$a2" "$a3" "$a4"
+		else reject "ledbar $a1 $a2 $a3 $a4 $rest"; fi;;
+	keypad)
+		if [ "$a1" = led ] && [ "$a2" = off ] && [ -z "$a3$a4$rest" ]; then
+			log "keypad led off"; "$KEYPAD" led off
+		elif [ "$a1" = led ] && in_range "$a2" 1 255 && [ -z "$a3$a4$rest" ]; then
+			log "keypad led $a2"; "$KEYPAD" led "$a2"
+		else reject "keypad $a1 $a2 $a3 $a4 $rest"; fi;;
+	blank)
+		if { [ "$a1" = on ] || [ "$a1" = off ]; } && [ -z "$a2$a3$a4$rest" ]; then
+			log "blank $a1"; "$BLANK" "$a1"
+		else reject "blank $a1 $a2 $a3 $a4 $rest"; fi;;
+	als)
+		if [ "$a1" = auto ] && { [ "$a2" = on ] || [ "$a2" = off ]; } && [ -z "$a3$a4$rest" ]; then
+			log "als auto $a2"; "$ALS" auto "$a2"
+		else reject "als $a1 $a2 $a3 $a4 $rest"; fi;;
+	brightness)
+		if in_range "$a1" 1 31 && [ -z "$a2$a3$a4$rest" ]; then
+			log "brightness $a1"; echo "$a1" > "$R/brightness"
+		else reject "brightness $a1 $a2 $a3 $a4 $rest"; fi;;
+	volume)
+		if in_range "$a1" 0 100 && [ -z "$a2$a3$a4$rest" ]; then
+			log "volume $a1"; "$AMIXER" -q -c "$CARD" sset Master "$a1%"
+		else reject "volume $a1 $a2 $a3 $a4 $rest"; fi;;
+	config-url)
+		case "$a1" in
+		http://*|https://*)
+			if [ -z "$a2$a3$a4$rest" ]; then
+				log "config-url $a1"; "$CONFIG" set KIOSK_URL "$a1" && "$CONFIG" apply
+			else reject "config-url $a1 (extra args)"; fi;;
+		*) reject "config-url $a1 $a2 $a3 $a4 $rest";;
+		esac;;
+	reboot)
+		if [ -z "$a1$a2$a3$a4$rest" ]; then
+			log "reboot requested"; "$REBOOT_BIN"
+		else reject "reboot $a1 $a2 $a3 $a4 $rest"; fi;;
+	update-install)
+		if [ -z "$a1$a2$a3$a4$rest" ]; then
+			log "update-install requested"; "$UPDATE_BIN" now &
+		else reject "update-install $a1 $a2 $a3 $a4 $rest"; fi;;
+	'') ;;
+	*) reject "$cmd $a1 $a2 $a3 $a4 $rest";;
+	esac
+}
+
+# <> (read+write) keeps a permanent reference on the FIFO so a transient
+# writer (each caller opens, writes one line, closes) never makes our read
+# see EOF -- see docs/ha.md "One Home Assistant device" for why a plain
+# read-only open would make this loop exit after the very first command.
+exec 3<>"$FIFO"
+log "listening on $FIFO"
+while IFS=' ' read -r cmd a1 a2 a3 a4 rest <&3; do
+	handle "$cmd" "$a1" "$a2" "$a3" "$a4" "$rest"
+	[ "$ONESHOT" = 1 ] && break
+done
+log "FIFO closed, exiting"

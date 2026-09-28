@@ -22,7 +22,10 @@
 # it only with --mic-auto-gain/--mic-noise-suppression), types-protobuf.
 # aioesphomeapi asks for cryptography>=48 and zeroconf>=0.149.16; Alpine has
 # 47.0 and 0.147: LVA only uses the plaintext frame helper, the protobuf
-# messages and AsyncZeroconf (checked by the voice qemu test).
+# messages and AsyncZeroconf (checked by the voice qemu test). The ESPHome
+# API encryption (HA_API_KEY) is the shim's own server side,
+# shim/tsx_panel/noise.py, on py3-cryptography's X25519/ChaCha20Poly1305
+# directly -- not aioesphomeapi's client-side noise helper.
 set -eu
 DEST=${1:?usage: install-lva.sh DESTROOT}
 HERE=$(cd "$(dirname "$0")" && pwd)

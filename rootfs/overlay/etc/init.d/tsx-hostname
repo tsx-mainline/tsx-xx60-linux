@@ -9,6 +9,12 @@
 #      (set by tsx-setup, which must run first: the kernel's own MAC is
 #      random on this board).
 #   3. tsx-kiosk.
+# PANEL_NAME in the panel config (tsx-config, docs/rootfs.md "Panel
+# configuration") overrides all of the above: if set, tsx-config apply
+# writes it (already validated against the same charset) to
+# /run/tsx/panel-name before this service runs, and it wins outright -- it
+# is also what names the sendspin player and the voice satellite, so a
+# panel has one name everywhere once it is set.
 # Every candidate is checked against ^[A-Za-z0-9-]{1,63}$ before use. This
 # script only ever READS the U-Boot env (fw_printenv); it never calls
 # fw_setenv.
@@ -16,13 +22,22 @@
 # Must run before "networking": ifupdown-ng's dhcp executor defaults to
 # use_hostname_for_dhcp=1 (queries the live hostname itself, no interfaces
 # file change needed), so udhcpc sends whatever hostname is set here as soon
-# as it starts.
-description="TSX hostname: lan_hostname from the U-Boot env, else <model>-<MAC>, else tsx-kiosk"
-depend() { need localmount; after tsx-setup; before networking; }
+# as it starts. And before "syslog": busybox syslogd stamps every line with
+# the hostname it saw when it started, so a syslogd started first would log
+# the image's default (tsx-kiosk, from /etc/hostname) for the whole first
+# boot.
+description="TSX hostname: PANEL_NAME from panel.conf, else lan_hostname from the U-Boot env, else <model>-<MAC>, else tsx-kiosk"
+depend() { need localmount; after tsx-setup tsx-config; before networking syslog; }
 
 start() {
 	ebegin "TSX hostname"
 	valid() { printf '%s' "$1" | grep -qE '^[A-Za-z0-9-]{1,63}$'; }
+
+	name=
+	if [ -r /run/tsx/panel-name ]; then
+		pname=$(head -n1 /run/tsx/panel-name)
+		valid "$pname" && name=$pname
+	fi
 
 	lh= pn=
 	CONF=${TSX_ENV_CONF:-/etc/tsx/uboot-env.conf}
@@ -52,8 +67,9 @@ start() {
 		fi
 	fi
 
-	name=
-	valid "$lh" && name=$lh
+	if [ -z "$name" ]; then
+		valid "$lh" && name=$lh
+	fi
 
 	if [ -z "$name" ]; then
 		model=${pn%%_\[*}
@@ -68,6 +84,6 @@ start() {
 	echo "$name" > /etc/hostname
 	hostname "$name" 2>/dev/null
 	sed -i "s/^127\.0\.0\.1.*/127.0.0.1\tlocalhost $name/" /etc/hosts 2>/dev/null || true
-	einfo "hostname: $name (lan_hostname='$lh' product_name='$pn')"
+	einfo "hostname: $name (panel_name='${pname:-}' lan_hostname='$lh' product_name='$pn')"
 	eend 0
 }

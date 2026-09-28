@@ -9,8 +9,8 @@
 # tsx_env / TSX_BOOT_CMD / TSX_SWITCH_FALLBACK -- on the rescue it is already present
 # at /usr/share/tsx/tsx-lib.sh, part of the base initramfs; nothing here duplicates it).
 #
-# Nothing in this file writes anything by itself except the two functions whose
-# names say so (tsx_env_apply, tsx_mbr_fold, tsx_mkfs_tsxdata); every write is
+# Nothing in this file writes anything by itself except the functions whose
+# names say so (tsx_env_apply, tsx_mbr_fold, tsx_mkfs_tsxdata, tsx_conf_set_flavor); every write is
 # read back and verified before returning success, the same discipline as
 # tsx-boot-ok and installer/emmc/tsx-usb-recovery.
 
@@ -132,6 +132,47 @@ tsx_mbr_fold() {
 tsx_mkfs_tsxdata() {
 	local dev=$1 uuid=$2
 	mkfs.ext4 -F -q -O ^metadata_csum_seed,^orphan_file -L tsxdata -m 1 -U "$uuid" "$dev"
+}
+
+# tsx_tsxdata_keepable DEV: can a reinstall keep DEV as it is (docs/install.md
+# "Reinstalling or updating a mainline panel")? Read-only (e2fsck -n never
+# writes; -f: a full check, not just the superblock's "clean" flag -- a few
+# seconds to a minute on a used 2.9 GiB tsxdata). Prints one line with the
+# reason and returns
+#   0  ext4, LABEL=tsxdata, e2fsck -fn clean: keep it
+#   1  not a tsxdata ext4 at all (never formatted, Android data, a stale fold)
+#   2  a tsxdata ext4, but e2fsck -fn reports problems (or it was not
+#      unmounted cleanly: -n does not replay the journal) (the caller may repair
+#      it with e2fsck -fp and ask again)
+# The label and type come from the plain blkid output, which busybox and
+# util-linux both print as `DEV: LABEL="x" UUID="y" TYPE="z"` (busybox ignores
+# -s/-o, see rootfs/overlay/etc/init.d/tsx-data).
+tsx_tsxdata_keepable() {
+	local dev=$1 id label type rc
+	id=$(blkid "$dev" 2>/dev/null) || id=
+	label=$(printf '%s\n' "$id" | sed -n 's/.* LABEL="\([^"]*\)".*/\1/p')
+	type=$(printf '%s\n' "$id" | sed -n 's/.* TYPE="\([^"]*\)".*/\1/p')
+	if [ "$type" != ext4 ] || [ "$label" != tsxdata ]; then
+		echo "not a tsxdata ext4 (TYPE=${type:-none} LABEL=${label:-none})"; return 1
+	fi
+	e2fsck -fn "$dev" >/dev/null 2>&1; rc=$?
+	[ "$rc" = 0 ] || { echo "ext4 LABEL=tsxdata, but e2fsck -fn reports problems (exit $rc)"; return 2; }
+	echo "ext4 LABEL=tsxdata, e2fsck -fn clean"
+	return 0
+}
+
+# tsx_conf_set_flavor FILE FLAVOR: set KERNEL_FLAVOR in a kept panel.conf
+# (the KEY="value" format tsx-config writes) without tsx-config itself, which
+# the rescue does not have. Any other line is left as it is.
+tsx_conf_set_flavor() {
+	local f=$1 v=$2
+	case "$v" in lts|stable) ;; *) return 0;; esac
+	[ -f "$f" ] || return 0
+	if grep -q '^KERNEL_FLAVOR=' "$f"; then
+		sed -i "s/^KERNEL_FLAVOR=.*/KERNEL_FLAVOR=\"$v\"/" "$f"
+	else
+		printf 'KERNEL_FLAVOR="%s"\n' "$v" >> "$f"
+	fi
 }
 
 # ------------------------------------------------------- rescue discovery ---

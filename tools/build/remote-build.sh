@@ -19,9 +19,12 @@
 #                    kernel.commit to <worktree>/../out-<flavor> or --dest DIR.
 #   rootfs           push rootfs/ sources, run build-rootfs.sh rootfs, pull back
 #                    rootfs.{ext4,tar.gz,manifest,sizes,sha256} to rootfs/out or --dest.
-#                    --with-modules: first run "build-rootfs.sh modules" from the HOST's
-#                    kernel build dir (so run "kernel" first); default: no modules,
-#                    like the local build.
+#                    --with-modules: first stage the modules of every flavor built on
+#                    the HOST (build-lts, build-stable next to the fork checkout; run
+#                    "kernel" for each flavor first), so the rootfs carries both
+#                    trees; default: no modules, like the local build.
+#                    Prebuilt inputs that exist only on the host (rootfs/src/sendspin/out/,
+#                    rootfs/voice/tflite/libtensorflowlite_c.so) survive the push.
 #   initramfs        build-rootfs.sh initramfs -> initramfs-switchroot.cpio.gz
 #   image [--flavor lts|stable | BRANCH]   rootfs/mkbootimg.sh with KDIR = the host's
 #                    out-<flavor>/ of the resolved branch's worktree (same default/
@@ -123,12 +126,27 @@ push_git() {  # shared object store + worktree metadata (refs, per-worktree inde
 push_tree() {  # $1 = local worktree dir, $2 = remote worktree dir; mirror the checkout
 	rsh "mkdir -p $2"
 	"${RS[@]}" --delete --exclude '*.o' --exclude '*.ko' --exclude '.*.cmd' "$1/" "$HOST:$2/"
+	# A linked worktree's .git file (and the fork's worktrees/<name>/gitdir)
+	# hold LOCAL absolute paths. Point both at the remote copy, or git on the
+	# host reads a different (or stale) repository at the local path and the
+	# build gets the wrong HEAD, a "-dirty" release and a KERNEL_REV warning.
+	if [ -f "$1/.git" ]; then
+		local name
+		name=$(basename "$(sed -n 's/^gitdir: //p' "$1/.git")")
+		[ -n "$name" ] || { echo "cannot read the worktree name from $1/.git"; exit 1; }
+		rsh "d=$RHOST_LINUX/.git/worktrees/$name; [ -d \$d ] || { echo \"no \$d on the host\"; exit 1; }; printf 'gitdir: %s\n' \$d > $2/.git; printf '%s\n' $2/.git > \$d/gitdir"
+	fi
 }
 
+# Build inputs that are built once on the host and never committed
+# (rootfs/src/sendspin/build.sh, rootfs/voice/build-tflite.sh): rsync "protect"
+# rules keep --delete from removing them when the local tree does not have
+# them. A local copy, if there is one, is still sent.
+PROTECT=(--filter='P /sendspin/out/' --filter='P /tflite/libtensorflowlite_c.so')
 push_rootfs() {
 	local p=$REPO/rootfs
 	rsh "mkdir -p $BUILD_DIR/rootfs"
-	for d in overlay src initramfs config voice; do [ -d "$p/$d" ] && "${RS[@]}" --delete "$p/$d/" "$HOST:$BUILD_DIR/rootfs/$d/"; done
+	for d in overlay src initramfs config voice; do [ -d "$p/$d" ] && "${RS[@]}" --delete "${PROTECT[@]}" "$p/$d/" "$HOST:$BUILD_DIR/rootfs/$d/"; done
 	for f in mkrootfs.sh build-rootfs.sh mkbootimg.sh packages.txt vendor-fetch.sh install.sh tsx-disk.sh authorized_keys; do [ -e "$p/$f" ] && "${RS[@]}" "$p/$f" "$HOST:$BUILD_DIR/rootfs/"; done
 	true
 }
@@ -192,7 +210,12 @@ kernel)
 	pull "$to" "$rout/zImage" "$rout/meson8m2-crestron-tsw1060.dtb" "$rout/test.img" "$rout/kernel.release" "$rout/kernel.commit";;
 rootfs)
 	push_common; push_rootfs
-	if [ $MODS = 1 ]; then m="./build-rootfs.sh modules"; else m="rm -rf modules"; fi
+	if [ $MODS = 1 ]; then
+		# every flavor built on the host: kbuild.sh -w <worktree> builds into
+		# <worktree>/../build-<flavor>, i.e. next to the fork checkout
+		kb=$(dirname "$RHOST_LINUX")
+		m="rm -rf modules; n=0; for f in lts stable; do [ -d $kb/build-\$f ] || continue; KBUILD=$kb/build-\$f ./build-rootfs.sh modules; n=\$((n+1)); done; [ \$n -gt 0 ] || { echo \"no kernel build dir ($kb/build-lts or build-stable) on the host: run kernel first\"; exit 1; }"
+	else m="rm -rf modules"; fi
 	rjob rootfs "cd $BUILD_DIR/rootfs && flock $BUILD_DIR/rootfs/.rootfs.lock bash -c 'set -e; $m; ./build-rootfs.sh rootfs'"
 	to=${DEST:-$REPO/rootfs/out}; o=$BUILD_DIR/rootfs/out
 	say "artifacts:"

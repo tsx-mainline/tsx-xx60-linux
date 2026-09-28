@@ -69,7 +69,7 @@ KIOSK=$(debugfs -R "cat /etc/kiosk.conf" "$OUT" 2>/dev/null)
 echo "$KIOSK" | grep -q '^KIOSK_URL="https://ha.example.org/"$' && ok "KIOSK_URL set from --url" || fail "KIOSK_URL not set: $KIOSK"
 MODLIST=$(debugfs -R "ls -l /lib/modules" "$OUT" 2>/dev/null | awk 'NF>=8{print $NF}' | grep -v '^\.\.\?$')
 echo "$MODLIST" | grep -q '6.1.0-test' && ok "kept the requested module tree" || fail "6.1.0-test module tree missing"
-echo "$MODLIST" | grep -q '6.1.0-other' && fail "the OTHER flavor's module tree was not dropped" || ok "dropped the other flavor's module tree"
+echo "$MODLIST" | grep -q '6.1.0-other' && ok "kept the other flavor's module tree (flavor switch)" || fail "the other flavor's module tree was dropped"
 
 echo "== manifest-fragment"
 FRAG="$OUT.manifest-fragment"
