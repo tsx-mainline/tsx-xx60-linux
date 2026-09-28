@@ -10,6 +10,7 @@
 - /rootfs/build/
 - /rootfs/build-*/
 - /rootfs/modules/
+- /rootfs/aports-local/
 - /work/*/logs
 - /work/*/backups
 - /work/*/results

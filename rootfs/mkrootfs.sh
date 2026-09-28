@@ -3,7 +3,11 @@
 # Env: ALPINE (branch, e.g. v3.24), KVER (module dir name(s) under
 #      /modules/lib/modules, space-separated for more than one kernel, or
 #      empty), OUT (output dir), UIDGID (owner for outputs), IMG_MB (ext4
-#      size in MiB)
+#      size in MiB), TSX_APK_URL (base URL of this project's apk repository,
+#      written into the panel's /etc/apk/repositories; never fetched here),
+#      TSX_APK_LOCAL (optional: a local copy of that repository's published
+#      tree, <ALPINE>/common + <ALPINE>/xx60; packages-tsx.txt is installed
+#      from it)
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 R=/build/rootfs; mkdir -p /build
@@ -12,6 +16,22 @@ log() { echo "== $*"; }
 
 printf '%s/%s/main\n%s/%s/community\n' "$MIRROR" "$ALPINE" "$MIRROR" "$ALPINE" > /etc/apk/repositories
 apk update -q
+
+# This project's apk repository (tsx-aports). The panel lists it first in
+# /etc/apk/repositories at TSX_APK_URL (panel.conf APK_URL overrides that on
+# the panel, tsx-config apply). Its packages (packages-tsx.txt) go into the
+# image only from a LOCAL copy of the published tree (TSX_APK_LOCAL): the
+# build never depends on TSX_APK_URL being reachable. Without a local copy
+# the image carries what those packages replace (see packages-tsx.txt).
+TSX_APK_URL=${TSX_APK_URL:-https://tsx-aports.unexceptional.net}; TSX_APK_URL=${TSX_APK_URL%/}
+TSX_APK_LOCAL=${TSX_APK_LOCAL:-}
+TSXREPO=0
+if [ -n "$TSX_APK_LOCAL" ]; then
+	for c in common xx60; do
+		[ -r "$TSX_APK_LOCAL/$ALPINE/$c/armv7/APKINDEX.tar.gz" ] || { echo "TSX_APK_LOCAL: no $ALPINE/$c/armv7/APKINDEX.tar.gz under $TSX_APK_LOCAL"; exit 1; }
+	done
+	TSXREPO=1
+fi
 apk add -q --no-cache build-base linux-headers e2fsprogs tar gzip mkpasswd >/dev/null
 
 log "compile tsx-idled"
@@ -35,12 +55,32 @@ ninja -C /build/cage-build >/dev/null
 strip /build/cage-build/cage
 
 log "install packages ($ALPINE, armv7)"
-rm -rf $R; mkdir -p $R/etc/apk
-cp /etc/apk/repositories $R/etc/apk/repositories
+rm -rf $R; mkdir -p $R/etc/apk/keys
+# trust this project's signing key (the same .pub the tsx-keys package ships)
+cp "$HERE"/overlay/etc/apk/keys/*.rsa.pub /etc/apk/keys/
+cp -a /etc/apk/keys/. $R/etc/apk/keys/
 PKGS=$(grep -v '^#' "$HERE/packages.txt" | tr '\n' ' ')
+: > /build/repositories
+if [ $TSXREPO = 1 ]; then
+	TSXPKGS=$(grep -v '^#' "$HERE/packages-tsx.txt" | tr '\n' ' ')
+	log "tsx-aports packages from $TSX_APK_LOCAL: $TSXPKGS"
+	# tsx-xx60-chromium provides chromium: no Alpine chromium pin next to it
+	PKGS="$(grep -v '^#' "$HERE/packages.txt" | grep -v '^chromium=' | tr '\n' ' ') $TSXPKGS"
+	printf '%s/%s/common\n%s/%s/xx60\n' "$TSX_APK_LOCAL" "$ALPINE" "$TSX_APK_LOCAL" "$ALPINE" > /build/repositories
+fi
+cat /etc/apk/repositories >> /build/repositories
 apk add --root $R --initdb --no-cache -q --keys-dir /etc/apk/keys \
-	--repositories-file $R/etc/apk/repositories $PKGS
+	--repositories-file /build/repositories $PKGS
 cp -a /etc/apk/keys $R/etc/apk/
+# the panel's list: this project's two repositories FIRST (tsx-xx60-chromium
+# must win the tie with Alpine's chromium; tsx-aports README "Which chromium
+# wins"). The block, marker line included, is what tsx-config apply writes.
+{
+	echo "# tsx-aports (tsx-config apply; panel.conf APK_URL)"
+	echo "$TSX_APK_URL/$ALPINE/common"
+	echo "$TSX_APK_URL/$ALPINE/xx60"
+	cat /etc/apk/repositories
+} > $R/etc/apk/repositories
 
 log "overlay"
 cp -a "$HERE"/overlay/. $R/
@@ -48,6 +88,9 @@ cp -a "$HERE"/overlay/. $R/
 # ship the patch tool + signature list from their single source in src/.
 install -D -m 644 "$HERE/src/chromium-es2/patch-chromium.py" $R/usr/local/share/tsx/chromium-es2/patch-chromium.py
 install -D -m 644 "$HERE/src/chromium-es2/sigs.json" $R/usr/local/share/tsx/chromium-es2/sigs.json
+# the build's repository URL: tsx-config apply falls back to it when
+# panel.conf has no APK_URL
+printf '%s\n' "$TSX_APK_URL" > $R/etc/tsx/apk-url.default
 # build id for tsx-autoupdate / the HA update entity (installed_version)
 printf '%s\n' "${TSX_BUILD_ID:-$(date -u +%Y%m%d%H%M)}" > $R/etc/tsx/build-id
 install -m 755 /build/tsx-idled $R/usr/local/sbin/tsx-idled
@@ -61,15 +104,27 @@ install -m 755 /build/cage-build/cage $R/usr/bin/cage
 # voice: the Assist voice satellite linux-voice-assistant (pinned; see
 # voice/install-lva.sh below)
 install -m 755 /build/tsx-peak $R/usr/local/bin/tsx-peak
-SENDSPIN_CLI=${SENDSPIN_CLI:-"$HERE/src/sendspin/out/sendspin-cli"}
-[ -x "$SENDSPIN_CLI" ] || { echo "no sendspin-cli at $SENDSPIN_CLI (run rootfs/src/sendspin/build.sh first)"; exit 1; }
-install -m 755 "$SENDSPIN_CLI" $R/usr/local/bin/sendspin-cli
+if [ $TSXREPO = 1 ]; then
+	# the sendspin-cli package: /usr/bin/sendspin-cli (tsx-sendspin prefers it)
+	[ -x $R/usr/bin/sendspin-cli ] || { echo "sendspin-cli package did not install /usr/bin/sendspin-cli"; exit 1; }
+	SENDSPIN_BIN=/usr/bin/sendspin-cli
+else
+	SENDSPIN_CLI=${SENDSPIN_CLI:-"$HERE/src/sendspin/out/sendspin-cli"}
+	[ -x "$SENDSPIN_CLI" ] || { echo "no sendspin-cli at $SENDSPIN_CLI (run rootfs/src/sendspin/build.sh first)"; exit 1; }
+	install -m 755 "$SENDSPIN_CLI" $R/usr/local/bin/sendspin-cli
+	SENDSPIN_BIN=/usr/local/bin/sendspin-cli
+fi
 log "linux-voice-assistant"
-# TensorFlow Lite C for the wakeword models is built from source by
-# rootfs/voice/build-tflite.sh (never committed) and read from voice/tflite/
-# here, the same as sendspin-cli above: a local build runs it by hand first.
-[ -s "$HERE/voice/tflite/libtensorflowlite_c.so" ] || echo "WARNING: no voice/tflite/libtensorflowlite_c.so (run rootfs/voice/build-tflite.sh first); install-lva.sh will fail its checksum check"
-sh "$HERE/voice/install-lva.sh" $R
+# TensorFlow Lite C for the wakeword models: the tensorflow-lite-c package
+# (tsx-aports), else built from source by rootfs/voice/build-tflite.sh (never
+# committed) and read from voice/tflite/ here, the same as sendspin-cli above:
+# a local build runs it by hand first.
+if [ $TSXREPO = 1 ]; then
+	TFLITE_SO=/usr/lib/libtensorflowlite_c.so sh "$HERE/voice/install-lva.sh" $R
+else
+	[ -s "$HERE/voice/tflite/libtensorflowlite_c.so" ] || echo "WARNING: no voice/tflite/libtensorflowlite_c.so (run rootfs/voice/build-tflite.sh first); install-lva.sh will fail its checksum check"
+	sh "$HERE/voice/install-lva.sh" $R
+fi
 echo "cage $CAGE_VER + argb8888-fallback.patch (built from source, sha256 $CAGE_SHA256)" > $R/usr/share/tsx-cage.version
 chown -R 0:0 $R/etc $R/usr/local
 
@@ -114,7 +169,18 @@ done
 # binary is not kept (192 MB); tsx-chromium-es2 revert or apk fix chromium.
 CHROMIUM_ES2_PATCH=${CHROMIUM_ES2_PATCH:-1}
 ES2_RESULT="not requested (CHROMIUM_ES2_PATCH=$CHROMIUM_ES2_PATCH)"
-if [ "$CHROMIUM_ES2_PATCH" = 1 ]; then
+if [ $TSXREPO = 1 ]; then
+	# tsx-xx60-chromium: patched when the package was built; only verify
+	log "chromium: tsx-xx60-chromium (ES2 patch built into the package)"
+	apk add -q --no-cache python3 >/dev/null || echo "WARNING: python3 for the patch tool not installed"
+	if [ -r $R/etc/tsx/chromium-es2-patched ] && python3 "$HERE/src/chromium-es2/patch-chromium.py" --check $R/usr/lib/chromium/chromium >/dev/null; then
+		. $R/etc/tsx/chromium-es2-patched
+		ES2_RESULT="tsx-xx60-chromium: $BUILD, patched (verified), sha256 $SHA256_PATCHED"
+	else
+		ES2_RESULT="tsx-xx60-chromium: patch NOT verified (software rendering?)"
+		echo "WARNING: $ES2_RESULT"
+	fi
+elif [ "$CHROMIUM_ES2_PATCH" = 1 ]; then
 	log "chromium ES2 fallback patch"
 	rm -f $R/etc/tsx/chromium-es2-patched
 	apk add -q --no-cache python3 >/dev/null || echo "WARNING: python3 for the patch tool not installed"
@@ -135,7 +201,7 @@ echo "chromium-es2-patch: $ES2_RESULT"
 # shows up on the panel otherwise: "Error loading shared library")
 log "shared library check"
 for bin in /usr/local/sbin/tsx-idled /usr/local/sbin/tsx-buttons /usr/local/bin/tsx-ledbar \
-	/usr/local/bin/tsx-peak /usr/bin/cage /usr/local/bin/sendspin-cli; do
+	/usr/local/bin/tsx-peak /usr/bin/cage $SENDSPIN_BIN; do
 	out=$(chroot $R /lib/ld-musl-armhf.so.1 --list "$bin" 2>&1) || true
 	if printf '%s\n' "$out" | grep -qE 'Error (loading|relocating)|not found'; then
 		printf '%s\n' "$out" | head -n 5
@@ -233,7 +299,12 @@ find $R/usr/lib/python3* -depth \( -type d -name '__pycache__' -o -type f -name 
 
 copied=0
 for kv in ${KVER:-}; do
-	if [ -d "/modules/lib/modules/$kv" ]; then
+	if [ $TSXREPO = 1 ] && [ -d "$R/lib/modules/$kv" ]; then
+		# installed (and owned) by tsx-xx60-kernel-<flavor>: keep the package's tree
+		log "kernel modules $kv: from its tsx-xx60-kernel package"
+		copied=$((copied + 1))
+	elif [ -d "/modules/lib/modules/$kv" ]; then
+		[ $TSXREPO = 1 ] && echo "WARNING: kernel modules $kv: no tsx-xx60-kernel package in $TSX_APK_LOCAL has them; copied as unowned files"
 		log "kernel modules $kv"
 		mkdir -p $R/lib/modules
 		cp -a "/modules/lib/modules/$kv" $R/lib/modules/
@@ -262,6 +333,10 @@ apk info --root $R -v 2>/dev/null | sort > "$OUT/rootfs.manifest"
 	echo "largest directories:"
 	du -xm -d 3 $R/usr $R/lib 2>/dev/null | sort -rn | head -15 | sed "s|$R||"
 	echo "chromium-es2-patch: $ES2_RESULT"
+	if [ $TSXREPO = 1 ]; then echo "tsx-aports: installed from a local tree: $TSXPKGS"
+	else echo "tsx-aports: no local tree (TSX_APK_LOCAL unset): local builds of sendspin-cli/TFLite, Alpine chromium + in-place patch, unowned module trees"; fi
+	echo "tsx-aports: panel repository URL $TSX_APK_URL/$ALPINE/{common,xx60}"
+	ls $R/lib/modules 2>/dev/null | sed 's/^/kernel modules: /'
 } > "$OUT/rootfs.sizes"
 cat "$OUT/rootfs.sizes"
 

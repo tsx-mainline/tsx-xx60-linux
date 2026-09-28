@@ -15,8 +15,12 @@
 # 0.3.1, chacha20poly1305-reuseable 0.13.2, async-interrupt 1.2.2,
 # pymicro-features 2.0.2 (sdist, C++ extension compiled here),
 # pymicro-wakeword 2.5.0 and pyopen-wakeword 1.1.0 (sdists; their bundled
-# x86-64 libtensorflowlite_c.so is replaced by voice/tflite/, TensorFlow Lite
-# C 2.17.1 built for Alpine armv7 by rootfs/voice/build-tflite.sh).
+# x86-64 libtensorflowlite_c.so is replaced by TensorFlow Lite C 2.17.1 for
+# Alpine armv7: the tensorflow-lite-c package from this project's apk
+# repository (tsx-aports) when mkrootfs.sh installed it -- TFLITE_SO names it
+# inside DESTROOT, the wakeword modules then link to it, so an apk upgrade of
+# that package reaches them -- else voice/tflite/, built by
+# rootfs/voice/build-tflite.sh).
 # Not installed: soundcard (PulseAudio only; voice/shim/soundcard is an ALSA
 # stand-in on arecord), webrtc-noise-gain (ZL38051 does AEC/NR; LVA imports
 # it only with --mic-auto-gain/--mic-noise-suppression), types-protobuf.
@@ -67,8 +71,16 @@ fetch $PYPI/3b/93/9e8a000f8f8bda01ec53534bdf07c3413ffd659352a0117ac106f9beff7e/p
 	pymicro_wakeword-2.5.0.tar.gz 2355c1cb3fbfe4a59f4eccd6f17bd3eca260f7c6fb701fe3c44ccc98d49dd19e
 fetch $PYPI/52/3e/37c8601f87173acfed77a3133c69eb350d2563f41174d70129ff51e6b297/pyopen_wakeword-1.1.0.tar.gz \
 	pyopen_wakeword-1.1.0.tar.gz 080c0bda64d9aa4dd254413ba6fa417bd090c566c0610ebbb571d81f27851602
-# TensorFlow Lite C for Alpine armv7 (rootfs/voice/build-tflite.sh)
-(cd "$HERE/tflite" && sha256sum -c SHA256SUMS >/dev/null) || { echo "voice/tflite: checksum mismatch or missing"; exit 1; }
+# TensorFlow Lite C for Alpine armv7: the packaged one (TFLITE_SO, a path on
+# the target), else voice/tflite/ (rootfs/voice/build-tflite.sh)
+TFLITE_SO=${TFLITE_SO:-}
+if [ -n "$TFLITE_SO" ]; then
+	[ -s "$DEST$TFLITE_SO" ] || { echo "install-lva.sh: TFLITE_SO=$TFLITE_SO not in $DEST"; exit 1; }
+	TFLITE_INFO="tensorflow-lite-c package ($TFLITE_SO)"
+else
+	(cd "$HERE/tflite" && sha256sum -c SHA256SUMS >/dev/null) || { echo "voice/tflite: checksum mismatch or missing"; exit 1; }
+	TFLITE_INFO=$(head -1 "$HERE/tflite/BUILDINFO")
+fi
 
 O=$DEST/opt/lva; L=$O/lib; A=$O/app
 rm -rf "$O" && mkdir -p "$L" "$A"
@@ -82,7 +94,11 @@ pip install -q --no-deps --no-compile --no-build-isolation --disable-pip-version
 	"$W/pymicro_features-2.0.2.tar.gz" "$W/pymicro_wakeword-2.5.0.tar.gz" "$W/pyopen_wakeword-1.1.0.tar.gz"
 # the sdists carry an x86-64 libtensorflowlite_c.so: replace it (one copy, one link)
 for m in pymicro_wakeword pyopen_wakeword; do rm -rf "$L/$m/lib"; mkdir -p "$L/$m/lib"; done
-install -m 755 "$HERE/tflite/libtensorflowlite_c.so" "$L/pymicro_wakeword/lib/libtensorflowlite_c.so"
+if [ -n "$TFLITE_SO" ]; then
+	ln -s "$TFLITE_SO" "$L/pymicro_wakeword/lib/libtensorflowlite_c.so"
+else
+	install -m 755 "$HERE/tflite/libtensorflowlite_c.so" "$L/pymicro_wakeword/lib/libtensorflowlite_c.so"
+fi
 ln -s ../../pymicro_wakeword/lib/libtensorflowlite_c.so "$L/pyopen_wakeword/lib/libtensorflowlite_c.so"
 find "$L" -name '*.so' -newer "$W/pymicro_features-2.0.2.tar.gz" -path '*pymicro_features*' -exec strip {} + 2>/dev/null || true
 rm -rf "$L/bin" "$L"/*.dist-info/RECORD
@@ -98,7 +114,7 @@ find "$O" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 cat > "$O/VERSION" <<V
 linux-voice-assistant $LVA; aioesphomeapi 45.3.1, netifaces2 0.0.22, getmac 0.9.5, websockets 12.0,
 noiseprotocol 0.3.1, chacha20poly1305-reuseable 0.13.2, async-interrupt 1.2.2, pymicro-features 2.0.2,
-pymicro-wakeword 2.5.0, pyopen-wakeword 1.1.0; $(head -1 "$HERE/tflite/BUILDINFO"); (install-lva.sh)
+pymicro-wakeword 2.5.0, pyopen-wakeword 1.1.0; $TFLITE_INFO; (install-lva.sh)
 V
 mkdir -p "$DEST/usr/local/bin"
 cat > "$DEST/usr/local/bin/linux-voice-assistant" <<'EOT'

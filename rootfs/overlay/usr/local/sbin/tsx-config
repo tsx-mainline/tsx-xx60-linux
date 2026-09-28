@@ -36,7 +36,11 @@
 # HA_ALLOW_FROM (comma list of IPv4/IPv6 addresses or CIDRs allowed to use
 # the ESPHome API; empty = allow any, the zero-config default), MQTT_HOST,
 # MQTT_PORT, MQTT_USER, MQTT_PASSWORD, KERNEL_FLAVOR (lts|stable),
-# ROOT_PASSWORD_HASH, SSH_AUTHORIZED_KEY. See installer/panel.conf.example
+# APK_URL (base URL of this project's apk repositories, tsx-aports: apply
+# rewrites the two lines <APK_URL>/<alpine-branch>/common and .../xx60 at the
+# top of /etc/apk/repositories; unset = the build default in
+# /etc/tsx/apk-url.default; "off" = leave them out), ROOT_PASSWORD_HASH,
+# SSH_AUTHORIZED_KEY. See installer/panel.conf.example
 # and docs/rootfs.md "Panel configuration" for what each one does.
 set -eu
 TSX_CONF=${TSX_CONF:-/data/tsx/panel.conf}
@@ -49,7 +53,7 @@ SEED=${TSX_CONF_SEED:-/etc/tsx/panel.conf.seed}
 # fixture tree at it; empty (the panel default) leaves the paths absolute.
 PREFIX=${TSX_APPLY_PREFIX:-}
 
-KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
+KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 SECRET_KEYS="HA_TOKEN HA_API_KEY MQTT_PASSWORD ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 
 usage() { sed -n '2,16p' "$0" >&2; exit 2; }
@@ -133,6 +137,8 @@ val_ok() {
 	MQTT_USER) printf '%s' "$v" | grep -Eq '^[A-Za-z0-9_.@-]*$';;
 	MQTT_PASSWORD) return 0;;
 	KERNEL_FLAVOR) case "$v" in lts|stable) return 0;; esac; return 1;;
+	# an http(s) mirror, a local directory (a LAN copy on a USB stick), or off
+	APK_URL) [ "$v" = off ] && return 0; printf '%s' "$v" | grep -Eq '^(https?://[A-Za-z0-9.:@_~%+-]+(/[^[:space:]]*)?|/[^[:space:]]*)$';;
 	ROOT_PASSWORD_HASH) printf '%s' "$v" | grep -Eq '^\$[0-9A-Za-z$./]{10,}$';;
 	SSH_AUTHORIZED_KEY) printf '%s' "$v" | grep -Eq '^(ssh-[a-z0-9]+|ecdsa-sha2-[a-z0-9-]+) [A-Za-z0-9+/]+=*([[:space:]].*)?$';;
 	*) return 1;;
@@ -251,6 +257,40 @@ seed_promote() {
 		&& log "promoted $SEED to $TSX_CONF (installer-provided config, first boot with /data available)"
 }
 
+# APK_URL: this project's two apk repositories (tsx-aports common + xx60),
+# always listed FIRST in /etc/apk/repositories (tsx-xx60-chromium must win
+# the tie with Alpine's own chromium, tsx-aports README "Which chromium
+# wins"). Only the marked block is rewritten, and only when it changes; the
+# Alpine lines and anything else a user added stay as they are.
+APK_MARK="# tsx-aports (tsx-config apply; panel.conf APK_URL)"
+apk_repos() {
+	repos=$PREFIX/etc/apk/repositories
+	[ -f "$repos" ] || return 0
+	url=$(cfg_get APK_URL) || url=
+	[ -n "$url" ] || url=$(head -n 1 "$PREFIX/etc/tsx/apk-url.default" 2>/dev/null) || url=
+	[ -n "$url" ] || url=https://tsx-aports.unexceptional.net
+	url=${url%/}
+	# Alpine branch from the Alpine main line (v3.24, edge), else alpine-release
+	br=$(sed -nE 's#^[[:space:]]*[^#].*/(v[0-9][0-9.]*|edge)/main/*[[:space:]]*$#\1#p' "$repos" | head -n 1)
+	[ -n "$br" ] || br=v$(cut -d. -f1-2 "$PREFIX/etc/alpine-release" 2>/dev/null)
+	[ "$br" != v ] || { log "WARNING: APK_URL: cannot tell the Alpine branch; $repos left as it is"; return 0; }
+	tmp="$repos.tmp.$$"
+	{
+		echo "$APK_MARK"
+		if [ "$url" = off ]; then
+			echo "#   APK_URL=off: this project's repositories are not used"
+		else
+			echo "$url/$br/common"
+			echo "$url/$br/xx60"
+		fi
+		# everything else, minus an earlier block and any other copy of our
+		# two repositories (/<branch>/common, /<branch>/xx60)
+		grep -vE '^# tsx-aports |^#   APK_URL=off|/(v[0-9][0-9.]*|edge)/(common|xx60)/*[[:space:]]*$' "$repos"
+	} > "$tmp"
+	if cmp -s "$tmp" "$repos"; then rm -f "$tmp"; return 0; fi
+	chmod 644 "$tmp" && mv "$tmp" "$repos" && log "apk repositories: tsx-aports at $url ($br); the next apk update / tsx-autoupdate check uses it"
+}
+
 apply() {
 	[ "${TSX_APPLY_ALLOW_NONROOT:-0}" = 1 ] || [ "$(id -u)" = 0 ] || die "apply must run as root"
 	mkdir -p "$RUN"
@@ -357,6 +397,8 @@ apply() {
 		&& rc-service tsx-voice status >/dev/null 2>&1; then
 		rc-service tsx-voice restart >/dev/null 2>&1 || true
 	fi
+
+	apk_repos
 
 	method=$(cfg_get HA_LOGIN_METHOD) || method=
 	tok=$(cfg_get HA_TOKEN) || tok=

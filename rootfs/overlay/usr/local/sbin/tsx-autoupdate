@@ -7,13 +7,26 @@
 # (tsx-idled's state file); reboots only if the upgrade touched the kernel,
 # musl, openrc or busybox/the init system, and only inside the window.
 #
-# Chromium (rootfs/packages.txt pins it "chromium=<ver>" in /etc/apk/world
-# for the ES2 GPU patch, rootfs/src/chromium-es2/): a newer build with no
-# known patch signature is held (logged "held since ..."); after HOLD_DAYS
-# it is taken anyway, unpatched (software rendering, logged clearly). A
-# build WITH a known signature is upgraded and re-patched right away, using
-# the same patch-chromium.py + sigs.json shipped alongside this script
-# (/usr/local/share/tsx/chromium-es2/) that mkrootfs.sh uses at build time.
+# Chromium: with tsx-xx60-chromium installed (the project's apk repository,
+# tsx-aports: Alpine's build with the ES2 GPU patch already applied) it is
+# an ordinary package and upgrades with everything else. A rootfs built
+# without that repository pins Alpine's own "chromium=<ver>" in
+# /etc/apk/world instead and patches it in place (rootfs/src/chromium-es2/);
+# there, once tsx-xx60-chromium is offered by a configured repository, the
+# next install moves to it ("migrate": apk add tsx-xx60-chromium, drop the
+# pin). Until then: a newer build with no known patch signature is held
+# (logged "held since ..."); after HOLD_DAYS it is taken anyway, unpatched
+# (software rendering, logged clearly). A build WITH a known signature is
+# upgraded and re-patched right away, using the same patch-chromium.py +
+# sigs.json shipped alongside this script (/usr/local/share/tsx/chromium-es2/)
+# that mkrootfs.sh uses at build time.
+#
+# Repositories: apk refuses to upgrade anything while a listed repository is
+# unavailable. When only this project's own repositories (the tsx-aports
+# lines, <APK_URL>/<branch>/common and .../xx60) cannot be fetched -- the
+# host is down, or not public yet -- that is a WARNING in the status and the
+# HA entity, and Alpine's updates still install (--force-missing-repositories).
+# An unreachable Alpine repository blocks the install (check only).
 #
 # Usage:
 #   tsx-autoupdate            the scheduled tick (cron): check, install if
@@ -54,7 +67,7 @@ ES2_MARKER=${TSX_ES2_MARKER:-/etc/tsx/chromium-es2-patched}
 CHROMIUM_BIN=${TSX_CHROMIUM_BIN:-/usr/lib/chromium/chromium}
 BUILD_ID_FILE=${TSX_BUILD_ID_FILE:-/etc/tsx/build-id}
 
-STATUS_FIELDS="installed_hash pending_count pending_list reboot_pending chromium_decision chromium_candidate chromium_pinned chromium_held_since in_progress last_check last_install last_result health"
+STATUS_FIELDS="installed_hash pending_count pending_list reboot_pending chromium_decision chromium_candidate chromium_pinned chromium_held_since in_progress last_check last_install last_result health repo_warning repo_blocked"
 
 log() { mkdir -p "$(dirname "$LOG")" 2>/dev/null; printf '%s tsx-autoupdate: %s\n' "$(now_iso)" "$*" >>"$LOG"; }
 now_iso() { date '+%Y-%m-%dT%H:%M:%S'; }
@@ -89,7 +102,7 @@ in_window() {  # in_window HH:MM start-end  (window may cross midnight)
 needs_reboot() {  # needs_reboot "pkg1 pkg2 ..." -> exit 0 if any needs a reboot
 	for n in $1; do
 		case $n in
-		linux*|musl*|openrc*|busybox*) return 0;;
+		linux*|musl*|openrc*|busybox*|tsx-xx60-kernel*) return 0;;
 		esac
 	done
 	return 1
@@ -163,7 +176,8 @@ write_update_json() {
 		printf '"last_check":"%s",' "$(jesc "$(get_field "$f" last_check)")"
 		printf '"last_install":"%s",' "$(jesc "$(get_field "$f" last_install)")"
 		printf '"last_result":"%s",' "$(jesc "$(get_field "$f" last_result)")"
-		printf '"health":"%s"' "$(jesc "$(get_field "$f" health)")"
+		printf '"health":"%s",' "$(jesc "$(get_field "$f" health)")"
+		printf '"repo_warning":"%s"' "$(jesc "$(get_field "$f" repo_warning)")"
 		printf '}\n'
 	} > "$out"
 	cp -f "$out" "$STATE/update.json" 2>/dev/null
@@ -185,7 +199,10 @@ write_ha_json() {
 	hold) d=${cd#* }; summary="${summary:+$summary; }chromium $cc held since $ch (day $d)";;
 	unpatched) summary="${summary:+$summary; }chromium $cc installed unpatched (software rendering) since $ch";;
 	patch) summary="${summary:+$summary; }chromium $cc: ES2 patch re-applied";;
+	migrate) summary="${summary:+$summary; }chromium: switch to tsx-xx60-chromium (ES2 patch built in)";;
 	esac
+	rw=$(get_field "$f" repo_warning)
+	[ -n "$rw" ] && summary="${summary:+$summary; }WARNING: $rw"
 	[ -n "$summary" ] || summary="up to date"
 	host=$(hostname 2>/dev/null); [ -n "$host" ] || host=tsx
 	mkdir -p "$RUN" 2>/dev/null
@@ -203,6 +220,34 @@ write_ha_json() {
 # ---- apk / chromium helpers -------------------------------------------------
 
 pinned_chromium_ver() { sed -n 's/^chromium=//p' "$WORLD" 2>/dev/null | head -1; }
+# tsx-xx60-chromium (tsx-aports) installed / offered by a configured repository
+tsx_chromium_installed() { apk info -e tsx-xx60-chromium >/dev/null 2>&1; }
+tsx_chromium_offered() { [ -n "$(apk list -a tsx-xx60-chromium 2>/dev/null | head -1)" ]; }
+
+# classify_repos APK_UPDATE_OUTPUT: every repository apk could not fetch
+# ("WARNING: updating and opening <repo>/<arch>/APKINDEX.tar.gz: <why>").
+# Sets REPO_WARNING (text for the status/HA, empty = all fine), REPO_BLOCKED
+# (1 = an Alpine/other repository is unavailable: do not install) and
+# APK_FORCE (--force-missing-repositories when any is unavailable, so a
+# check still sees what the others offer).
+classify_repos() {
+	REPO_WARNING= REPO_BLOCKED=0 APK_FORCE= ours= others=
+	for u in $(printf '%s\n' "$1" | sed -nE 's#^(WARNING|ERROR): .* ([a-z]+://[^ ]*|/[^ ]*)/[^/ ]+/APKINDEX\.tar\.gz: .*#\2#p' | sort -u); do
+		case $u in
+		*/common|*/xx60) ours="${ours:+$ours, }$u";;
+		*) others="${others:+$others, }$u";;
+		esac
+	done
+	if [ -n "$ours" ]; then
+		REPO_WARNING="tsx-aports repository unreachable ($ours); Alpine updates still install"
+		APK_FORCE=--force-missing-repositories
+	fi
+	if [ -n "$others" ]; then
+		REPO_WARNING="${REPO_WARNING:+$REPO_WARNING; }repository unreachable ($others); not installing until it is back"
+		REPO_BLOCKED=1 APK_FORCE=--force-missing-repositories
+	fi
+	return 0
+}
 candidate_chromium_ver() { apk list -a chromium 2>/dev/null | sed -n '1s/^chromium-\([0-9][^ ]*\).*/\1/p'; }
 sig_known_for() { [ -r "$SIGS" ] && grep -qF "chromium-$1" "$SIGS" 2>/dev/null; }
 
@@ -233,12 +278,27 @@ is_idle() {
 	[ "$s" = blank ]
 }
 
+chromium_migrate() {  # Alpine chromium (pinned, patched in place) -> tsx-xx60-chromium
+	command -v rc-service >/dev/null 2>&1 && rc-service kiosk stop >>"$LOG" 2>&1
+	if apk add ${APK_FORCE:-} tsx-xx60-chromium >>"$LOG" 2>&1; then
+		# drops only the "chromium=<ver>" world pin: tsx-xx60-chromium provides chromium
+		apk del ${APK_FORCE:-} chromium >>"$LOG" 2>&1
+		# the in-place patch's sidecar was not package-owned: take the package's copy
+		[ -e "$ES2_MARKER.apk-new" ] && mv -f "$ES2_MARKER.apk-new" "$ES2_MARKER"
+		rm -f "$STATE/chromium-hold"
+		log "chromium: now tsx-xx60-chromium (ES2 patch built in; upgrades with the other packages)"
+	else
+		log "chromium: switching to tsx-xx60-chromium FAILED; keeping the pinned Alpine chromium"
+	fi
+	command -v rc-service >/dev/null 2>&1 && rc-service kiosk start >>"$LOG" 2>&1
+}
+
 chromium_upgrade() {  # chromium_upgrade CANDVER patch|unpatched
 	cand=$1 mode=$2
 	old=$(pinned_chromium_ver)
 	command -v rc-service >/dev/null 2>&1 && rc-service kiosk stop >>"$LOG" 2>&1
 	sed -i 's/^chromium=.*/chromium/' "$WORLD" 2>/dev/null
-	apk upgrade chromium >>"$LOG" 2>&1; rc=$?
+	apk upgrade ${APK_FORCE:-} chromium >>"$LOG" 2>&1; rc=$?
 	rm -f "$ES2_MARKER"
 	if [ $rc -eq 0 ]; then
 		sed -i "s/^chromium\$/chromium=$cand/" "$WORLD" 2>/dev/null
@@ -269,24 +329,38 @@ chromium_upgrade() {  # chromium_upgrade CANDVER patch|unpatched
 do_check() {
 	mkdir -p "$RUN" "$STATE" 2>/dev/null
 	log "apk update"
-	apk update >>"$LOG" 2>&1 || log "WARNING: apk update failed"
-	sim=$(apk upgrade --simulate 2>>"$LOG")
+	upd=$(apk update 2>&1) || log "WARNING: apk update reported errors"
+	printf '%s\n' "$upd" >>"$LOG"
+	classify_repos "$upd"
+	[ -n "$REPO_WARNING" ] && log "WARNING: $REPO_WARNING"
+	sim=$(apk upgrade --simulate $APK_FORCE 2>>"$LOG")
 	pkglist=$(printf '%s\n' "$sim" | sed -n 's/.*Upgrading \([^ ]*\) (\([^ ]*\) -> \([^)]*\)).*/\1 \2 \3/p')
 	names=$(printf '%s\n' "$pkglist" | sed -n 's/^\([^ ]*\).*/\1/p')
 	pcount=0; [ -n "$pkglist" ] && pcount=$(printf '%s\n' "$pkglist" | grep -c .)
 	rb=0; needs_reboot "$names" && rb=1
 
 	oldver=$(pinned_chromium_ver)
-	candver=$(candidate_chromium_ver)
-	# a hold only exists while the candidate differs from the pinned build
 	since=
-	if [ -n "$candver" ] && [ "$candver" != "$oldver" ]; then since=$(chromium_hold_since "$candver")
-	else rm -f "$STATE/chromium-hold"; fi
-	sig=0; [ -n "$candver" ] && sig_known_for "$candver" && sig=1
-	decision=$(chromium_decision "$candver" "$oldver" "$sig" "$since" "${HOLD_DAYS:-7}" "$(today)")
+	if tsx_chromium_installed || [ -z "$oldver" ]; then
+		# tsx-xx60-chromium (or no pin at all): an ordinary package, its
+		# upgrades are in the list above already
+		tsx_chromium_installed && oldver=tsx-xx60-chromium
+		candver= decision=none
+		rm -f "$STATE/chromium-hold"
+	elif tsx_chromium_offered; then
+		candver=tsx-xx60-chromium decision=migrate
+		rm -f "$STATE/chromium-hold"
+	else
+		candver=$(candidate_chromium_ver)
+		# a hold only exists while the candidate differs from the pinned build
+		if [ -n "$candver" ] && [ "$candver" != "$oldver" ]; then since=$(chromium_hold_since "$candver")
+		else rm -f "$STATE/chromium-hold"; fi
+		sig=0; [ -n "$candver" ] && sig_known_for "$candver" && sig=1
+		decision=$(chromium_decision "$candver" "$oldver" "$sig" "$since" "${HOLD_DAYS:-7}" "$(today)")
+	fi
 	word=${decision%% *}
 	case $word in
-	patch|unpatched) pcount=$((pcount + 1));;
+	patch|unpatched|migrate) pcount=$((pcount + 1));;
 	esac
 
 	plist=$(printf '%s\n' "$pkglist" | sed -n 's/^\([^ ]*\) \([^ ]*\) \([^ ]*\)$/\1 (\2 -> \3)/p' | tr '\n' ';' | sed 's/;$//; s/;/; /g')
@@ -299,9 +373,11 @@ do_check() {
 		chromium_candidate="$candver" \
 		chromium_decision="$decision" \
 		chromium_held_since="$since" \
+		repo_warning="$REPO_WARNING" \
+		repo_blocked="$REPO_BLOCKED" \
 		last_check="$(now_iso)"
 	write_update_json; write_ha_json
-	log "check: $pcount pending, reboot_pending=$rb, chromium=$decision"
+	log "check: $pcount pending, reboot_pending=$rb, chromium=$decision${REPO_WARNING:+, repositories: $REPO_WARNING}"
 }
 
 do_install() {
@@ -310,16 +386,23 @@ do_install() {
 	rb=$(get_field "$f" reboot_pending)
 	decision=$(get_field "$f" chromium_decision)
 	word=${decision%% *}
-	case $word in patch|unpatched) chromium_pending=1;; *) chromium_pending=0;; esac
+	case $word in patch|unpatched|migrate) chromium_pending=1;; *) chromium_pending=0;; esac
 	if [ "$pcount" = 0 ] && [ "$chromium_pending" = 0 ]; then
 		log "install: nothing pending"
 		return 0
 	fi
+	if [ "$(get_field "$f" repo_blocked)" = 1 ]; then
+		log "install: not installing: $(get_field "$f" repo_warning)"
+		return 0
+	fi
+	# only this project's repositories unavailable: install what the others offer
+	[ -n "$(get_field "$f" repo_warning)" ] && APK_FORCE=--force-missing-repositories
 	set_fields "$f" in_progress=1; write_update_json; write_ha_json
 	log "installing (pending=$pcount reboot_needed=$rb chromium=$decision)"
-	apk upgrade >>"$LOG" 2>&1; rc=$?
+	apk upgrade ${APK_FORCE:-} >>"$LOG" 2>&1; rc=$?
 	[ $rc -eq 0 ] || log "apk upgrade FAILED rc=$rc"
 	case $word in
+	migrate) chromium_migrate;;
 	patch) chromium_upgrade "$(get_field "$f" chromium_candidate)" patch;;
 	unpatched) chromium_upgrade "$(get_field "$f" chromium_candidate)" unpatched;;
 	esac
@@ -356,11 +439,17 @@ cmd_status() {
 	echo "pending:        $(get_field "$f" pending_count) package(s)"
 	pl=$(get_field "$f" pending_list); [ -n "$pl" ] && echo "  $pl"
 	rb=$(get_field "$f" reboot_pending); echo "reboot pending: $([ "$rb" = 1 ] && echo yes || echo no)"
-	echo "chromium:       pinned $(get_field "$f" chromium_pinned), candidate $(get_field "$f" chromium_candidate), decision $(get_field "$f" chromium_decision)"
+	if [ "$(get_field "$f" chromium_pinned)" = tsx-xx60-chromium ]; then
+		echo "chromium:       tsx-xx60-chromium (ES2 patch built in; upgrades with the other packages)"
+	else
+		echo "chromium:       pinned $(get_field "$f" chromium_pinned), candidate $(get_field "$f" chromium_candidate), decision $(get_field "$f" chromium_decision)"
+	fi
 	ch=$(get_field "$f" chromium_held_since); [ -n "$ch" ] && echo "  held since $ch"
 	echo "last check:     $(get_field "$f" last_check)"
 	echo "last install:   $(get_field "$f" last_install) ($(get_field "$f" last_result))"
 	echo "health:         $(get_field "$f" health)"
+	rw=$(get_field "$f" repo_warning)
+	echo "repositories:   ${rw:-ok}"
 	return 0
 }
 

@@ -25,6 +25,9 @@
 #                    trees; default: no modules, like the local build.
 #                    Prebuilt inputs that exist only on the host (rootfs/src/sendspin/out/,
 #                    rootfs/voice/tflite/libtensorflowlite_c.so) survive the push.
+#                    TSX_APK_LOCAL=<local tsx-aports published tree>: mirrored to
+#                    rootfs/aports-local/ on the host and installed from there
+#                    (build-rootfs.sh); TSX_APK_URL is passed through.
 #   initramfs        build-rootfs.sh initramfs -> initramfs-switchroot.cpio.gz
 #   image [--flavor lts|stable | BRANCH]   rootfs/mkbootimg.sh with KDIR = the host's
 #                    out-<flavor>/ of the resolved branch's worktree (same default/
@@ -147,7 +150,7 @@ push_rootfs() {
 	local p=$REPO/rootfs
 	rsh "mkdir -p $BUILD_DIR/rootfs"
 	for d in overlay src initramfs config voice; do [ -d "$p/$d" ] && "${RS[@]}" --delete "${PROTECT[@]}" "$p/$d/" "$HOST:$BUILD_DIR/rootfs/$d/"; done
-	for f in mkrootfs.sh build-rootfs.sh mkbootimg.sh packages.txt vendor-fetch.sh install.sh tsx-disk.sh authorized_keys; do [ -e "$p/$f" ] && "${RS[@]}" "$p/$f" "$HOST:$BUILD_DIR/rootfs/"; done
+	for f in mkrootfs.sh build-rootfs.sh mkbootimg.sh packages.txt packages-tsx.txt vendor-fetch.sh install.sh tsx-disk.sh authorized_keys; do [ -e "$p/$f" ] && "${RS[@]}" "$p/$f" "$HOST:$BUILD_DIR/rootfs/"; done
 	true
 }
 
@@ -216,7 +219,16 @@ rootfs)
 		kb=$(dirname "$RHOST_LINUX")
 		m="rm -rf modules; n=0; for f in lts stable; do [ -d $kb/build-\$f ] || continue; KBUILD=$kb/build-\$f ./build-rootfs.sh modules; n=\$((n+1)); done; [ \$n -gt 0 ] || { echo \"no kernel build dir ($kb/build-lts or build-stable) on the host: run kernel first\"; exit 1; }"
 	else m="rm -rf modules"; fi
-	rjob rootfs "cd $BUILD_DIR/rootfs && flock $BUILD_DIR/rootfs/.rootfs.lock bash -c 'set -e; $m; ./build-rootfs.sh rootfs'"
+	# TSX_APK_LOCAL (a local tsx-aports published tree): mirrored next to the
+	# rootfs sources on the host and used from there
+	apkenv="TSX_APK_URL=${TSX_APK_URL:-https://tsx-aports.unexceptional.net}"
+	if [ -n "${TSX_APK_LOCAL:-}" ]; then
+		say "tsx-aports tree $TSX_APK_LOCAL -> $BUILD_DIR/rootfs/aports-local"
+		rsh "mkdir -p $BUILD_DIR/rootfs/aports-local"
+		"${RS[@]}" --delete "$TSX_APK_LOCAL/" "$HOST:$BUILD_DIR/rootfs/aports-local/"
+		apkenv="$apkenv TSX_APK_LOCAL=$BUILD_DIR/rootfs/aports-local"
+	fi
+	rjob rootfs "cd $BUILD_DIR/rootfs && flock $BUILD_DIR/rootfs/.rootfs.lock env $apkenv bash -c 'set -e; $m; ./build-rootfs.sh rootfs'"
 	to=${DEST:-$REPO/rootfs/out}; o=$BUILD_DIR/rootfs/out
 	say "artifacts:"
 	pull "$to" "$o/rootfs.ext4" "$o/rootfs.tar.gz" "$o/rootfs.manifest" "$o/rootfs.sizes" "$o/rootfs.sha256";;

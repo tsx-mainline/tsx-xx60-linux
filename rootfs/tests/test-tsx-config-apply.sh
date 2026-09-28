@@ -120,6 +120,38 @@ set_ HA_API_KEY "$KEY" >/dev/null
 OUT=$(apply_ 2>&1)
 case "$OUT" in *"WARNING"*) bad "apply warns with HA_API_KEY set";; *) ok "no warning with HA_API_KEY set (HA_ALLOW_FROM optional)";; esac
 
+echo "== APK_URL: this project's two repositories first in /etc/apk/repositories =="
+# busybox applets for what apply runs, as on the panel (musl regex, no GNU extensions)
+BB="$W/bb"; mkdir -p "$BB"
+for a in sed grep cmp head cut mv chmod cat rm; do ln -sf "$(command -v busybox)" "$BB/$a"; done
+applyb() { PATH="$BB:$PATH" apply_ >/dev/null 2>&1; }
+REPOS="$FX/etc/apk/repositories"; mkdir -p "$FX/etc/apk" "$FX/etc/tsx"
+ALP='https://dl-cdn.alpinelinux.org/alpine/v3.24/main
+https://dl-cdn.alpinelinux.org/alpine/v3.24/community'
+printf '%s\n' "$ALP" > "$REPOS"
+applyb
+[ "$(sed -n 2,3p "$REPOS")" = "https://tsx-aports.unexceptional.net/v3.24/common
+https://tsx-aports.unexceptional.net/v3.24/xx60" ] && ok "no APK_URL, no build default: the public URL, listed first" || bad "default block wrong: $(cat "$REPOS")"
+[ "$(tail -n 2 "$REPOS")" = "$ALP" ] && ok "Alpine lines kept, after ours" || bad "Alpine lines changed"
+echo https://mirror.example.org/tsx/ > "$FX/etc/tsx/apk-url.default"
+applyb
+grep -qx 'https://mirror.example.org/tsx/v3.24/xx60' "$REPOS" && ok "build default (/etc/tsx/apk-url.default) used, trailing / dropped" || bad "build default not used: $(cat "$REPOS")"
+set_ APK_URL http://192.0.2.7:8080 >/dev/null; applyb
+[ "$(grep -c '/v3.24/common$' "$REPOS")/$(grep -c '/v3.24/xx60$' "$REPOS")/$(grep -c '^# tsx-aports ' "$REPOS")" = 1/1/1 ] && ok "one block, one common + one xx60 line" || bad "duplicate lines: $(cat "$REPOS")"
+[ "$(sed -n 2p "$REPOS")" = http://192.0.2.7:8080/v3.24/common ] && ok "APK_URL (a LAN mirror) replaces the block" || bad "APK_URL not applied: $(cat "$REPOS")"
+echo /media/usb/alpine/v3.24/testing >> "$REPOS"
+cp "$REPOS" "$W/repos.before"; applyb
+cmp -s "$REPOS" "$W/repos.before" && ok "re-apply leaves the file (and a user's own line) alone" || bad "re-apply changed the file"
+set_ APK_URL off >/dev/null; applyb
+grep -qE '/(common|xx60)$' "$REPOS" && bad "APK_URL=off still lists our repositories" || ok "APK_URL=off drops our repositories"
+[ "$(grep -c alpinelinux.org "$REPOS")" = 2 ] && ok "APK_URL=off keeps Alpine" || bad "APK_URL=off lost Alpine lines"
+TSX_CONF="$CFG" busybox sh "$SCRIPT" unset APK_URL >/dev/null; applyb
+[ "$(sed -n 2p "$REPOS")" = https://mirror.example.org/tsx/v3.24/common ] && ok "unset APK_URL: back to the build default" || bad "unset: $(cat "$REPOS")"
+for v in ftp://x.example.org 'https://a b' 'http://' relative/path; do
+	set_ APK_URL "$v" >/dev/null 2>&1 && bad "APK_URL '$v' accepted" || ok "APK_URL '$v' rejected"
+done
+set_ APK_URL /media/usb/tsx-aports >/dev/null 2>&1 && ok "APK_URL local directory accepted" || bad "APK_URL local directory rejected"
+
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-tsx-config-apply || echo FAIL test-tsx-config-apply
 exit $F

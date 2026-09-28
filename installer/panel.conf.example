@@ -73,6 +73,13 @@ VOICE=off
 # or stable (docs/kernel.md).
 KERNEL_FLAVOR=lts
 
+# Base URL of the project apk repository (tsx-aports): the panel lists
+# <APK_URL>/<alpine-branch>/common and .../xx60 first in
+# /etc/apk/repositories. Unset = the URL the rootfs was built with
+# (https://tsx-aports.unexceptional.net). A LAN mirror or a local directory
+# works too; "off" leaves the two repositories out (Alpine only).
+#APK_URL=
+
 # Root login. ROOT_PASSWORD_HASH is a crypt(3) hash (e.g. `openssl passwd
 # -6`, or `mkpasswd -m sha-512`), never a plain password. SSH_AUTHORIZED_KEY
 # is one "ssh-ed25519 AAAA... comment" line; setting it only ADDS a key

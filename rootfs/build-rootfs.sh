@@ -26,7 +26,16 @@
 # Downloads: only Alpine packages from dl-cdn.alpinelinux.org (branch $ALPINE)
 # and the alpine:3.24 docker image; versions are recorded in out/rootfs.manifest.
 # CHROMIUM_ES2_PATCH (default 1): patch Chromium's ES3->ES2 fallback gate
-# (src/chromium-es2/); 0 = stock binary.
+# (src/chromium-es2/); 0 = stock binary. Not used with TSX_APK_LOCAL.
+# This project's apk repository (tsx-aports, docs/updates.md):
+# TSX_APK_URL (default https://tsx-aports.unexceptional.net) is the base URL
+# the panel's /etc/apk/repositories lists first (<url>/<ALPINE>/common and
+# /xx60); it is never fetched during the build. TSX_APK_LOCAL (optional) is a
+# local copy of the published tree (the directory holding <ALPINE>/common and
+# <ALPINE>/xx60, e.g. tsx-aports' scripts/index.sh --out DIR): the packages in
+# packages-tsx.txt (tsx-xx60-chromium, both kernel flavors, sendspin-cli,
+# tensorflow-lite-c, tsx-keys) are installed from it instead of Alpine's
+# chromium + the in-place patch and the local sendspin/TFLite builds.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 TOP=$(cd "$HERE/../.." && pwd)
@@ -86,10 +95,15 @@ modules() {
 
 rootfs() {
 	need_binfmt
-	local mnt=()
+	local mnt=() apk=()
 	[ -d "$MODULES" ] && mnt=(-v "$MODULES:/modules:ro")
-	docker run --rm --platform linux/arm/v7 -v "$HERE:/w" "${mnt[@]}" \
+	if [ -n "${TSX_APK_LOCAL:-}" ]; then
+		[ -d "$TSX_APK_LOCAL/$ALPINE" ] || { echo "TSX_APK_LOCAL=$TSX_APK_LOCAL has no $ALPINE/ (a tsx-aports published tree)"; exit 1; }
+		mnt+=(-v "$(cd "$TSX_APK_LOCAL" && pwd):/aports:ro"); apk=(-e TSX_APK_LOCAL=/aports)
+	fi
+	docker run --rm --platform linux/arm/v7 -v "$HERE:/w" "${mnt[@]}" "${apk[@]}" \
 		-e ALPINE="$ALPINE" -e KVER="$KVER" -e OUT=/w/out -e UIDGID="$UIDGID" -e IMG_MB="$IMG_MB" -e CHROMIUM_ES2_PATCH="${CHROMIUM_ES2_PATCH:-1}" \
+		-e TSX_APK_URL="${TSX_APK_URL:-https://tsx-aports.unexceptional.net}" \
 		"$IMAGE" /w/mkrootfs.sh
 }
 

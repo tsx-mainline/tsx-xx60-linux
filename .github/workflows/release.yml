@@ -242,6 +242,67 @@ jobs:
           path: payload-out/${{ matrix.flavor }}
           if-no-files-found: error
 
+  # A second, much smaller per-flavor asset for a DIFFERENT consumer than
+  # "bundle"/"publish" below: tsx-aports' xx60/tsx-xx60-kernel-<flavor>
+  # package, which needs the kernel's binary outputs (not the installed-system
+  # payload) so its own CI (which has no build host to stage from) can build
+  # the package by just downloading and verifying this one release asset.
+  # Reuses artifacts the kernel/payload jobs already produced -- no rebuild:
+  # zImage/dtb/kernel.release/kernel.commit from "kernel", this flavor's
+  # modules tree from "kernel" (rootfs/build-rootfs.sh's separate "modules"
+  # upload), and the already-packed boot image from "payload" (its boot.img
+  # *is* this flavor's rootfs/out/tsxboot.img, packed by rootfs/mkbootimg.sh --
+  # same file the tsx-aports package installs as /boot/tsxboot-emmc-<flavor>.img,
+  # just renamed here to match what stage-kernel.sh has always called it).
+  kbundle:
+    needs: [kernel, payload]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [lts, stable]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: kernel-${{ matrix.flavor }}
+          path: ../out-${{ matrix.flavor }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: modules-${{ matrix.flavor }}
+          path: rootfs/modules
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: payload-${{ matrix.flavor }}
+          path: payload-${{ matrix.flavor }}
+
+      - name: assemble the bundle (same 6 files stage-kernel.sh stages from a build host)
+        run: |
+          set -eu
+          KREL=$(cat ../out-${{ matrix.flavor }}/kernel.release)
+          OUT=kbundle-out
+          mkdir -p "$OUT"
+          cp ../out-${{ matrix.flavor }}/zImage "$OUT"/
+          cp ../out-${{ matrix.flavor }}/meson8m2-crestron-tsw1060.dtb "$OUT"/
+          cp ../out-${{ matrix.flavor }}/kernel.release "$OUT"/
+          cp ../out-${{ matrix.flavor }}/kernel.commit "$OUT"/
+          cp payload-${{ matrix.flavor }}/boot.img "$OUT"/tsxboot-emmc.img
+          # rootfs/modules is exactly lib/modules/<KREL>/... (this flavor only,
+          # per-flavor artifact) -- tar it up the same way modules_install +
+          # `tar czf ... lib/modules` would on a build host.
+          tar czf "$OUT/modules-$KREL.tar.gz" -C rootfs/modules lib
+          (cd "$OUT" && sha256sum zImage meson8m2-crestron-tsw1060.dtb tsxboot-emmc.img "modules-$KREL.tar.gz" > CHECKSUMS.sha256)
+          cat "$OUT/CHECKSUMS.sha256"
+          tar --zstd -cf tsx-xx60-kernel-${{ matrix.flavor }}-bundle.tar.zst -C "$OUT" .
+          ls -l tsx-xx60-kernel-${{ matrix.flavor }}-bundle.tar.zst
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kbundle-${{ matrix.flavor }}
+          path: tsx-xx60-kernel-${{ matrix.flavor }}-bundle.tar.zst
+          if-no-files-found: error
+
   # Assembles installer/tsx-install-mainline's exact --payload DIR layout
   # (DIR/rescue.img, DIR/<flavor>/{root.img,boot.img,manifest,SHA256SUMS}) and
   # packs it as one archive per flavor (each self-sufficient: unpacking either
@@ -296,7 +357,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [kernel, bundle]
+    needs: [kernel, bundle, kbundle]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -317,6 +378,19 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: release-payload
+          path: release/out
+
+      # tsx-aports' xx60/tsx-xx60-kernel-<flavor> package (source= a URL to
+      # exactly this asset, pinned by tag + sha512sums) is the only consumer;
+      # see the kbundle job above and tools/build/README.md.
+      - uses: actions/download-artifact@v4
+        with:
+          name: kbundle-lts
+          path: release/out
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kbundle-stable
           path: release/out
 
       - name: rename the per-flavor kernel dev files into release/out

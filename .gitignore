@@ -38,3 +38,5 @@ tools/regs/i2crd/i2crd
 # built from source by voice/build-tflite.sh, never committed (SHA256SUMS/
 # BUILDINFO next to it are tracked and pin what a local build must produce)
 /rootfs/voice/tflite/libtensorflowlite_c.so
+# a tsx-aports published tree mirrored to the build host (remote-build.sh rootfs, TSX_APK_LOCAL)
+/rootfs/aports-local/

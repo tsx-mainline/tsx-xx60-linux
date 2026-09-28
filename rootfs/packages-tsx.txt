@@ -1,0 +1,22 @@
+# Packages from this project's own apk repository (tsx-aports: common + xx60),
+# installed by mkrootfs.sh when the build is given a local copy of the
+# published tree (TSX_APK_LOCAL, see build-rootfs.sh). Without one the rootfs
+# falls back to what these replace (in brackets); either way the panel lists
+# the repository (TSX_APK_URL, panel.conf APK_URL) so `apk upgrade` sees it.
+#
+# the repository's signing key (also shipped in overlay/etc/apk/keys)
+tsx-keys
+# Alpine's chromium with the Mali-450 ES2 patch applied at package build time;
+# provides chromium, so packages.txt's chromium=<ver> pin is dropped
+# [chromium=<ver> + the in-place patch, src/chromium-es2/]
+tsx-xx60-chromium
+# both kernel flavors, side by side: /lib/modules/<release>/ of each is owned
+# by its package, and /boot/tsxboot-emmc-<flavor>.img lets tsx-kernel-flavor
+# switch without the network; only the selected flavor's package writes the
+# eMMC boot partition on an upgrade [unowned trees from build-rootfs.sh modules]
+tsx-xx60-kernel-lts
+tsx-xx60-kernel-stable
+# [/usr/local/bin/sendspin-cli from src/sendspin/build.sh]
+sendspin-cli
+# [voice/tflite/libtensorflowlite_c.so from voice/build-tflite.sh]
+tensorflow-lite-c

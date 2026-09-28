@@ -1,6 +1,6 @@
 #!/bin/sh
-# End-to-end host test of tsx-autoupdate: a fake apk (canned "upgrade
-# --simulate" / "list -a chromium" / "info -v" output, every call logged)
+# End-to-end host test of tsx-autoupdate: a fake apk (canned "update" /
+# "upgrade --simulate" / "list -a chromium" / "info -v" output, every call logged)
 # and a fake date (fixed "now", real day-math via -d passthrough) drive the
 # real check/install/status/healthcheck code against temp dirs. Nothing on
 # the host is touched: /etc/apk/world, the chromium binary, rc-service,
@@ -16,11 +16,13 @@ cat > "$T/bin/apk" <<EOF
 #!/bin/sh
 echo "APK \$*" >> "$T/apk.calls"
 case "\$1 \${2:-}" in
-"update ") exit 0;;
+"update ") cat "$T/update.txt" 2>/dev/null; exit "\${APK_UPDATE_RC:-0}";;
 "upgrade --simulate") cat "$T/sim.txt" 2>/dev/null; exit 0;;
 "upgrade chromium") exit "\${APK_UPGRADE_RC:-0}";;
 "upgrade ") exit "\${APK_UPGRADE_RC:-0}";;
-"list -a") cat "$T/chromlist.txt" 2>/dev/null; exit 0;;
+"upgrade --force-missing-repositories") exit "\${APK_UPGRADE_RC:-0}";;
+"info -e") [ "\${3:-}" = tsx-xx60-chromium ] && exit "\${TSXCHROM_INSTALLED:-1}"; exit 0;;
+"list -a") if [ "\${3:-}" = tsx-xx60-chromium ]; then cat "$T/tsxchrom.txt" 2>/dev/null; else cat "$T/chromlist.txt" 2>/dev/null; fi; exit 0;;
 "info -v") printf 'chromium-%s-r0\nmusl-1.2.5-r0\n' "\${CHROMIUM_INSTALLED:-1.0.0-r0}"; exit 0;;
 esac
 exit 0
@@ -150,5 +152,62 @@ NOWDATE=2026-01-09 NOWHHMM=04:00 CURL_CODE=000 RC_SERVICE_RC=1 run healthcheck >
 h=$(jf "$T/run/update.json" .health)
 case $h in FAILED*) : ;; *) echo "FAIL: 9: expected a FAILED health after a bad reboot, got '$h'"; fail=1;; esac
 
-[ $fail = 0 ] && echo "PASS tsx-autoupdate flow (check/install/window/idle/chromium/status/healthcheck)"
+# ---- 10: this project's repository unreachable: warning, Alpine still installs
+rm -f "$T/state/reboot-marker"
+printf 'chromium=3.0.0-r0\nsome-other-pkg\n' > "$T/world"
+printf 'chromium-3.0.0-r0 armv7 {chromium} (BSD-3-Clause)\n' > "$T/chromlist.txt"
+cat > "$T/update.txt" <<'U'
+WARNING: updating and opening https://tsx-aports.example.org/v3.24/common/armv7/APKINDEX.tar.gz: DNS: name does not exist
+WARNING: updating and opening https://tsx-aports.example.org/v3.24/xx60/armv7/APKINDEX.tar.gz: DNS: name does not exist
+v3.24.2-50-g2d91fef52d8 [https://dl-cdn.alpinelinux.org/alpine/v3.24/main]
+2 unavailable, 0 stale; 6093 distinct packages available
+U
+printf '(1/1) Upgrading libfoo (1.1-r0 -> 1.2-r0)\n' > "$T/sim.txt"
+reset_calls
+NOWDATE=2026-01-10 NOWHHMM=04:00 APK_UPDATE_RC=2 run >/dev/null
+rw=$(jf "$T/run/update.json" .repo_warning)
+case $rw in "tsx-aports repository unreachable (https://tsx-aports.example.org/v3.24/common, https://tsx-aports.example.org/v3.24/xx60)"*) :;; *) echo "FAIL: 10: repo_warning '$rw'"; fail=1;; esac
+grep -q '^APK upgrade --simulate --force-missing-repositories$' "$T/apk.calls" || { echo "FAIL: 10: check did not force past our missing repositories"; fail=1; }
+grep -q '^APK upgrade --force-missing-repositories$' "$T/apk.calls" || { echo "FAIL: 10: Alpine updates not installed while our repository is unreachable"; fail=1; }
+chk "$(jf "$T/run/update.json" .pending_count)" 1 "10: Alpine update still counted"
+jf "$T/run/update-ha-state.json" .release_summary | grep -q 'WARNING: tsx-aports repository unreachable' || { echo "FAIL: 10: HA summary lacks the repository warning"; fail=1; }
+run status | grep -q '^repositories:   tsx-aports repository unreachable' || { echo "FAIL: 10: status lacks the repository warning"; fail=1; }
+
+# ---- 11: an Alpine repository unreachable: check only, no install -------------
+printf 'WARNING: updating and opening https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/APKINDEX.tar.gz: Connection refused\n' > "$T/update.txt"
+reset_calls
+NOWDATE=2026-01-10 NOWHHMM=04:00 APK_UPDATE_RC=1 run >/dev/null
+grep -E '^APK upgrade( --force-missing-repositories)?$' "$T/apk.calls" && { echo "FAIL: 11: installed while an Alpine repository is unreachable"; fail=1; }
+chk "$(jf "$T/run/update.json" .repo_warning | grep -c 'not installing until it is back')" 1 "11: Alpine repository warning"
+
+# ---- 12: all repositories fine again: warning cleared ---------------------------
+: > "$T/update.txt"; : > "$T/sim.txt"
+NOWDATE=2026-01-10 NOWHHMM=12:00 run check >/dev/null
+chk "$(jf "$T/run/update.json" .repo_warning)" "" "12: warning cleared once reachable"
+run status | grep -q '^repositories:   ok$' || { echo "FAIL: 12: status does not say repositories ok"; fail=1; }
+
+# ---- 13: pinned Alpine chromium + tsx-xx60-chromium offered: migrate ------------
+printf 'tsx-xx60-chromium-3.0.0-r0 armv7 {tsx-xx60-chromium} (BSD-3-Clause)\n' > "$T/tsxchrom.txt"
+echo "old sidecar" > "$T/es2marker"; echo "package sidecar" > "$T/es2marker.apk-new"
+reset_calls
+NOWDATE=2026-01-10 NOWHHMM=04:00 run >/dev/null
+grep -q '^APK add tsx-xx60-chromium$' "$T/apk.calls" || { echo "FAIL: 13: tsx-xx60-chromium not added"; fail=1; }
+grep -q '^APK del chromium$' "$T/apk.calls" || { echo "FAIL: 13: chromium= pin not dropped"; fail=1; }
+chk "$(cat "$T/es2marker")" "package sidecar" "13: the package's ES2 sidecar took over"
+grep -q '^CALL rc-service kiosk stop' "$T/calls" || { echo "FAIL: 13: kiosk not stopped for the switch"; fail=1; }
+grep -q 'now tsx-xx60-chromium' "$T/tsx-autoupdate.log" || { echo "FAIL: 13: switch not logged"; fail=1; }
+
+# ---- 14: tsx-xx60-chromium installed: an ordinary package, no hold/patch logic ---
+printf 'chromium=3.0.0-r0\nsome-other-pkg\n' > "$T/world"   # (a leftover pin must not matter)
+printf 'chromium-4.0.0-r0 armv7 {chromium} (BSD-3-Clause)\n' > "$T/chromlist.txt"
+printf '(1/1) Upgrading tsx-xx60-kernel-lts (6.18.54_git20260928-r1 -> 6.18.55_git20261005-r0)\n' > "$T/sim.txt"
+reset_calls
+NOWDATE=2026-01-11 NOWHHMM=12:00 TSXCHROM_INSTALLED=0 run check >/dev/null
+chk "$(jf "$T/run/update.json" .chromium_decision)" none "14: tsx-xx60-chromium installed -> none"
+chk "$(jf "$T/run/update.json" .reboot_pending)" true "14: a kernel package update needs a reboot"
+chk "$(jf "$T/run/update.json" .chromium_pinned)" tsx-xx60-chromium "14: status names the package"
+TSXCHROM_INSTALLED=0 run status | grep -q '^chromium:       tsx-xx60-chromium (ES2 patch built in' || { echo "FAIL: 14: status chromium line"; fail=1; }
+[ -e "$T/state/chromium-hold" ] && { echo "FAIL: 14: hold file written for a packaged chromium"; fail=1; }
+
+[ $fail = 0 ] && echo "PASS tsx-autoupdate flow (check/install/window/idle/chromium/status/healthcheck/repositories/tsx-xx60-chromium)"
 exit $fail
