@@ -6,6 +6,10 @@ respawn_delay=15
 respawn_max=0
 output_log=/var/log/tsx-mqtt.log
 error_log=/var/log/tsx-mqtt.log
+# tsx-mqtt bounds its own mosquitto_pub calls (a few seconds, even with an
+# unreachable broker) and exits on TERM; this is a safety net so `rc-service
+# tsx-mqtt stop` cannot hang if that ever fails: TERM, wait 5s, KILL, wait 5s.
+retry="TERM/5/KILL/5"
 depend() { need net; after tsx-idled tsx-buttons tsx-ledbar; }
 start() {
 	# not configured: nothing to run, but do not fail the runlevel

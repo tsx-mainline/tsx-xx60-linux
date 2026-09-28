@@ -7,7 +7,7 @@
 # those directly if you prefer.
 #
 #   BUILD_HOST=<ssh host> BUILD_DIR=<remote repo path> \
-#     tools/build/remote-build.sh [--dest DIR] [--with-modules] [-j N] <command> [arg]
+#     tools/build/remote-build.sh [--dest DIR] [--with-modules] [--no-pull] [-j N] <command> [arg]
 #
 #   kernel [--flavor lts|stable | BRANCH]  push the worktree that has BRANCH checked
 #                    out (default: the branch for --flavor/$FLAVOR, default lts ->
@@ -43,6 +43,12 @@
 # --flavor) picks lts (default) or stable for "kernel"/"image" when no
 # explicit BRANCH is given.
 #
+# --no-pull / REMOTE_PULL=0: skip copying the built artifacts back to this
+# machine (rootfs tarball, images -- around 1.1 GB for a rootfs build) and
+# just print where they sit on BUILD_HOST. Useful over a slow link when the
+# next steps (image/payload/install) also run on the build host, so nothing
+# needs the local copy. Default unchanged: artifacts are pulled back.
+#
 # Safety: never deletes local files (pull-back is rsync without --delete; it only
 # overwrites the named artifacts in the destination). --delete is used only for the
 # pushed SOURCE dirs on the host; build/out dirs on the host are excluded (protected).
@@ -54,11 +60,12 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)               # .../tsx-xx60-linux
 TOP=$(cd "$REPO/.." && pwd)
 LINUX=${LINUX_DIR:-$TOP/linux}                # the kernel fork checkout, sibling of this repo
-DEST= MODS=0 J= FLAVOR=${FLAVOR:-lts}
+DEST= MODS=0 J= FLAVOR=${FLAVOR:-lts} PULL=${REMOTE_PULL:-1}
 ARGS=() JOBREF=
 while [ $# -gt 0 ]; do case $1 in
 	--dest) DEST=$(mkdir -p "$2" && cd "$2" && pwd); shift;;
 	--with-modules) MODS=1;;
+	--no-pull) PULL=0;;
 	-j) J=$2; shift;;
 	--flavor) FLAVOR=$2; shift;;
 	--flavor=*) FLAVOR=${1#--flavor=};;
@@ -197,6 +204,13 @@ pull() {  # pull host files (absolute paths) into $1 (never --delete)
 	return $bad
 }
 
+maybe_pull() {  # like pull, but --no-pull/REMOTE_PULL=0 leaves the files on the host instead
+	if [ "$PULL" = 1 ]; then pull "$@"; return; fi
+	shift   # $1 was the local dest dir, unused when we are not pulling
+	say "--no-pull: artifacts left on $HOST:"
+	local f; for f in "$@"; do echo "  $HOST:$f"; done
+}
+
 t0=$(date +%s)
 case $CMD in
 kernel)
@@ -210,7 +224,7 @@ kernel)
 	to=${DEST:-$(dirname "$wt")/out-$FLAVOR}
 	rout=$(dirname "$rwt")/out-$FLAVOR
 	say "artifacts:"
-	pull "$to" "$rout/zImage" "$rout/meson8m2-crestron-tsw1060.dtb" "$rout/test.img" "$rout/kernel.release" "$rout/kernel.commit";;
+	maybe_pull "$to" "$rout/zImage" "$rout/meson8m2-crestron-tsw1060.dtb" "$rout/test.img" "$rout/kernel.release" "$rout/kernel.commit";;
 rootfs)
 	push_common; push_rootfs
 	if [ $MODS = 1 ]; then
@@ -231,18 +245,18 @@ rootfs)
 	rjob rootfs "cd $BUILD_DIR/rootfs && flock $BUILD_DIR/rootfs/.rootfs.lock env $apkenv bash -c 'set -e; $m; ./build-rootfs.sh rootfs'"
 	to=${DEST:-$REPO/rootfs/out}; o=$BUILD_DIR/rootfs/out
 	say "artifacts:"
-	pull "$to" "$o/rootfs.ext4" "$o/rootfs.tar.gz" "$o/rootfs.manifest" "$o/rootfs.sizes" "$o/rootfs.sha256";;
+	maybe_pull "$to" "$o/rootfs.ext4" "$o/rootfs.tar.gz" "$o/rootfs.manifest" "$o/rootfs.sizes" "$o/rootfs.sha256";;
 initramfs)
 	push_common; push_rootfs
 	rjob initramfs "cd $BUILD_DIR/rootfs && flock $BUILD_DIR/rootfs/.rootfs.lock ./build-rootfs.sh initramfs"
-	say "artifacts:"; pull "${DEST:-$REPO/rootfs/out}" "$BUILD_DIR/rootfs/out/initramfs-switchroot.cpio.gz";;
+	say "artifacts:"; maybe_pull "${DEST:-$REPO/rootfs/out}" "$BUILD_DIR/rootfs/out/initramfs-switchroot.cpio.gz";;
 image)
 	br=${ARG:-$(flavor_branch "$FLAVOR")}; wt=$(worktree_of "$br")
 	[ -n "$wt" ] || { echo "branch $br is not checked out in any worktree"; exit 1; }
 	kd=$(dirname "$(remote_worktree_path "$wt")")/out-$FLAVOR
 	push_common; push_rootfs
 	rjob image "cd $BUILD_DIR/rootfs && KDIR=$kd ./mkbootimg.sh"
-	say "artifacts:"; pull "${DEST:-$REPO/rootfs/out}" "$BUILD_DIR/rootfs/out/tsxboot.img" "$BUILD_DIR/rootfs/out/tsxboot.img.sha256";;
+	say "artifacts:"; maybe_pull "${DEST:-$REPO/rootfs/out}" "$BUILD_DIR/rootfs/out/tsxboot.img" "$BUILD_DIR/rootfs/out/tsxboot.img.sha256";;
 sync)
 	say "full mirror sync (no --delete)"
 	"${RS[@]}" --info=stats1 --filter="merge $HERE/rsync-filter.txt" "$REPO/" "$HOST:$BUILD_DIR/"

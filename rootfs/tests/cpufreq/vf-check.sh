@@ -2,7 +2,8 @@
 # cpufreq (ON THE PANEL): step the CPU through OPPs, check that VCCK follows AND
 # that the real CPU clock (clk-msr a9_clk_div16 x 16) matches the requested rate.
 # performance governor + scaling_max_freq pins each step. The tsx DT has no
-# 1800 MHz OPP any more (removed, not stable); pass the kHz list without it.
+# 1800 MHz OPP any more (removed, not stable); the default list is every OPP
+# of the tsx DT (192 and 96 MHz: sys_pll OD, docs/kernel.md "CPU frequency").
 # With a test DT that enables it: 1800 MHz is a boost
 # OPP: enable with BOOST=1 (echo 1 > .../cpufreq/boost), always reset to 0 at the end.
 # Usage: [BOOST=1] vf-check.sh [kHz ...]   Ends at 1608 MHz max, previous governor.
@@ -25,7 +26,7 @@ echo "regulator: $(cat $VREG/name) uV=$(cat $VREG/microvolts) users=$(cat $VREG/
 G=$(cat $CF/scaling_governor); echo performance > $CF/scaling_governor
 [ "${BOOST:-0}" = 1 ] && echo 1 > $B
 bad=0
-for f in ${*:-1608000 1416000 1608000 1800000 1608000 1200000 816000 96000 1608000}; do
+for f in ${*:-1608000 1416000 1200000 1008000 816000 720000 600000 504000 408000 312000 192000 96000 1608000}; do
 	echo $f > $CF/scaling_max_freq; sleep 1
 	c=$(cat $CF/scaling_cur_freq); v=$(cat $VREG/microvolts); e=$(expv $c); m=$(msr)
 	d=$((m - c)); [ $d -lt 0 ] && d=$((-d))

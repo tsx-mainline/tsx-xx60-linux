@@ -27,7 +27,9 @@
 #
 # Env overrides for tests: TSX_MQTT_CONF, TSX_RUN_DIR, TSX_IDLED_STATE,
 # TSX_BUTTONS_CONF, TSX_KIOSK_CONF, TSX_BACKLIGHT_DIR, TSX_MQTT_DRY=1 (print instead of publish,
-# read commands from stdin, one pass).
+# read commands from stdin, one pass). TSX_MQTT_PUB_TIMEOUT=seconds bounds each
+# mosquitto_pub connect+publish (default 5) so an unreachable broker cannot hang
+# the script; see pub() and the stop trap below.
 set -u
 CONF=${TSX_MQTT_CONF:-/etc/tsx/mqtt.conf}
 R=${TSX_RUN_DIR:-/run/tsx}
@@ -38,6 +40,8 @@ ACONF=${TSX_ALS_CONF:-/etc/tsx/als.conf}
 CARD=${TSX_SOUND_CARD:-TSW1060}
 ASOUND=${TSX_ASOUND_DIR:-/proc/asound}
 DRY=${TSX_MQTT_DRY:-0}
+PUBTO=${TSX_MQTT_PUB_TIMEOUT:-5}
+LASTPUBOK=1   # 0 once a publish fails/times out; the stop trap skips the LWT offline publish then
 
 BROKER= PORT=1883 USER= PASSWORD= CAFILE= DISCOVERY_PREFIX=homeassistant NODE_ID= BASE_TOPIC= DEVICE_NAME=
 [ -r "$CONF" ] && . "$CONF"
@@ -73,7 +77,17 @@ chmod 600 "$M/mosquitto_pub" "$M/mosquitto_sub"
 pub() {  # pub [-r] TOPIC PAYLOAD
 	r=; [ "$1" = -r ] && { r=-r; shift; }
 	if [ "$DRY" = 1 ]; then echo "PUB${r:+ (retained)} $1 $2"; return 0; fi
-	mosquitto_pub -i "$NODE-pub-$$" -q 1 $r -t "$1" -m "$2" || log "publish $1 failed"
+	# setsid + timeout bounds connect+publish to $PUBTO seconds even with an
+	# unreachable broker; setsid puts mosquitto_pub in its own process group
+	# (pgid = timeout's pid) so the stop trap can kill both with one signal
+	# instead of leaving mosquitto_pub orphaned mid-connect.
+	setsid timeout "$PUBTO" mosquitto_pub -i "$NODE-pub-$$" -q 1 $r -t "$1" -m "$2" &
+	pp=$!
+	echo "$pp" >> "$M/pub.pids"
+	wait "$pp"; rc=$?
+	sed -i "/^${pp}\$/d" "$M/pub.pids" 2>/dev/null
+	if [ $rc -eq 0 ]; then LASTPUBOK=1; else LASTPUBOK=0; log "publish $1 failed"; fi
+	return $rc
 }
 
 # ---- helpers ---------------------------------------------------------------
@@ -268,12 +282,29 @@ if [ "$DRY" = 1 ]; then
 	exit 0
 fi
 
-rm -f "$M/pending" "$M/poke" "$M/republish"
+rm -f "$M/pending" "$M/poke" "$M/republish" "$M/pub.pids"
 mkfifo "$M/sub.fifo" 2>/dev/null || { rm -f "$M/sub.fifo"; mkfifo "$M/sub.fifo"; }
 mosquitto_sub -i "$NODE-sub" -q 1 -v -t "$BASE/+/set" -t "$BASE/+/+/set" -t "$DP/status" \
 	--will-topic "$BASE/availability" --will-payload offline --will-retain > "$M/sub.fifo" &
 SUB=$!
-trap 'kill $SUB 2>/dev/null; pub -r "$BASE/availability" offline; rm -f "$M/sub.fifo"; exit 0' INT TERM
+HANDLER=   # set below; a signal landing before that must not hit set -u
+
+stop() {
+	kill $SUB 2>/dev/null
+	[ -n "$HANDLER" ] && kill $HANDLER 2>/dev/null
+	# kill any publisher still stuck connecting (whole setsid group: timeout + mosquitto_pub)
+	if [ -s "$M/pub.pids" ]; then
+		while read -r pp; do [ -n "$pp" ] && kill -TERM -- "-$pp" 2>/dev/null; done < "$M/pub.pids"
+		# that publish is dead, not finished: its own pub() never got back to
+		# set LASTPUBOK (we are running from inside its wait, via the trap)
+		LASTPUBOK=0
+	fi
+	[ "$LASTPUBOK" = 0 ] || pub -r "$BASE/availability" offline
+	rm -f "$M/sub.fifo" "$M/pub.pids"
+	exit 0
+}
+trap stop INT TERM
+
 ( while read -r topic payload; do
 	if [ "$topic" = "$DP/status" ]; then [ "$payload" = online ] && : > "$M/republish"; continue; fi
 	handle "$topic" "$payload" 2>&1 | sed 's/^/cmd: /'

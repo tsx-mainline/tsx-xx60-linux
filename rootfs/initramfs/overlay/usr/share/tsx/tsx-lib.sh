@@ -38,6 +38,14 @@ TSX_SWITCH_FALLBACK="${TSX_STOCK_SWITCH}"'if itest ${boot_retry} -lt 6; then run
 # the hook when boot_retry > 9, so U-Boot never reaches the golden (factory
 # recovery) image, which formats p5 and wipes /data.
 TSX_SWITCH_NOGOLDEN="${TSX_STOCK_SWITCH}"'if itest ${boot_retry} -lt 6 || itest ${boot_retry} -gt 9; then run tsx_boot; fi'
+# guard "once" (tested on hardware 2026-09-27, tsx-rescue-arm.sh's default):
+# a TRUE one-shot, gated on tsx_once instead of boot_retry. U-Boot clears
+# tsx_once (setenv 0; saveenv) BEFORE running tsx_boot, so the shot is spent
+# the instant this line is reached -- whether or not tsxboot.img is present,
+# and whether or not the rescue it boots ever checks in. With tsx_once unset
+# or 0 the hook does nothing and stock bootcmd runs (see docs/boot.md "The v2
+# env state machine"). boot_retry plays no part in this guard.
+TSX_SWITCH_ONCE="${TSX_STOCK_SWITCH}"'if itest ${tsx_once} -eq 1; then setenv tsx_once 0; saveenv; run tsx_boot; fi'
 
 # ---- tools ----
 tsx_pick_bb() {
@@ -136,6 +144,7 @@ tsx_hook_state() {
 	if [ "$sw" = "$TSX_STOCK_SWITCH" ]; then echo stock
 	elif [ "$sw" = "$TSX_SWITCH_FALLBACK" ]; then echo fallback
 	elif [ "$sw" = "$TSX_SWITCH_NOGOLDEN" ]; then echo nogolden
+	elif [ "$sw" = "$TSX_SWITCH_ONCE" ]; then echo once
 	elif [ "$sw" = "${TSX_STOCK_SWITCH}run tsx_boot" ]; then echo plain
 	else echo foreign; fi
 }

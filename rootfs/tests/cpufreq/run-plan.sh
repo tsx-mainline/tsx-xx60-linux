@@ -20,7 +20,7 @@ for ph in ${@:-info vf base soak}; do case $ph in
 		for c in /sys/class/thermal/cooling_device*; do echo "$c $(cat $c/type) max=$(cat $c/max_state) cur=$(cat $c/cur_state)"; done; \
 		for t in /sys/class/thermal/thermal_zone0/trip_point_*; do echo "$t $(cat $t)"; done; cat /sys/class/thermal/thermal_zone0/temp; \
 		dmesg | grep -iE "vcck|DCDC|rn5t618|cpufreq|opp|thermal|regulator"';;
-	vf)   run 01-vf-check "BOOST=${VF_BOOST:-0} sh /root/cpufreq/vf-check.sh 1608000 1416000 1200000 816000 96000 1608000";;
+	vf)   run 01-vf-check "BOOST=${VF_BOOST:-0} sh /root/cpufreq/vf-check.sh";;
 	base) run 02-base-1608 "sh /root/cpufreq/stress.sh -t $PIN_MIN -f 1608000";;
 	1800) run 03-pin-1800 "sh /root/cpufreq/stress.sh -t $PIN_MIN -f 1800000";;
 	1992) run 04-pin-1992 "sh /root/cpufreq/stress.sh -t $PIN_MIN -f 1992000";;
