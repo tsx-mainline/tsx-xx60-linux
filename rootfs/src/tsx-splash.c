@@ -26,6 +26,10 @@
  * black, so "status" needs no image. "show" and "status" do nothing while the
  * text console owns the screen (fbcon bound: the rescue, BOOT_VERBOSE, an
  * older kernel without fbcon=map:1), so they never draw over boot text.
+ * "show" records the framebuffer driver (fix.id) in /run/tsx-splash.fb; when
+ * "status" finds another driver on fb0 (the DRM driver replaced simpledrm on
+ * U-Boot's framebuffer after "show", and switched that plane off), it does a
+ * full "show" instead, so the splash comes back rather than a lone status band.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -40,6 +44,7 @@
 #include <unistd.h>
 
 static const char *dir = "/usr/share/tsx/splash", *fbdev = "/dev/fb0";
+static const char *fbid_file = "/run/tsx-splash.fb";
 static int W, H;            /* frame size */
 static uint8_t *rgb;        /* frame, 3 bytes per pixel */
 
@@ -292,7 +297,7 @@ static void compose(const char *status, int pct)
 	snprintf(path, sizeof path, "%s/splash-%dx%d.ppm", dir, W, H);
 	if (ppm_blit(path)) {
 		/* another panel size: the largest image that fits, centred */
-		static const int sz[][2] = { { 1280, 800 }, { 800, 480 } };
+		static const int sz[][2] = { { 1280, 800 }, { 1024, 600 } };
 		for (unsigned i = 0; i < sizeof sz / sizeof sz[0]; i++) {
 			if (sz[i][0] > W || sz[i][1] > H) continue;
 			snprintf(path, sizeof path, "%s/splash-%dx%d.ppm", dir, sz[i][0], sz[i][1]);
@@ -359,7 +364,18 @@ int main(int argc, char **argv)
 	}
 	if (fbcon_bound()) return 0;            /* the text console has the screen */
 	int fd = fb_open(&var, &fix);
+	char id[sizeof fix.id + 1];
+	memcpy(id, fix.id, sizeof fix.id); id[sizeof fix.id] = 0;
+	if (!strcmp(cmd, "status")) {
+		/* another driver than at "show" (or no "show" yet): full redraw */
+		char was[sizeof id] = "";
+		FILE *f = fopen(fbid_file, "r");
+		if (f) { if (!fgets(was, sizeof was, f)) was[0] = 0; fclose(f); }
+		if (strcmp(was, id)) cmd = "show";
+	}
 	if (!strcmp(cmd, "show")) {
+		FILE *f = fopen(fbid_file, "w");
+		if (f) { fputs(id, f); fclose(f); }
 		compose(status, pct);
 		/* the fbdev emulation programs the display on set_par: force it
 		 * (nothing else did, fbcon is not bound), then unblank */

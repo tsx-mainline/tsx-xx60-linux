@@ -18,12 +18,12 @@ mkdir -p "$W/d"
 python3 - "$W/d" <<'PY'
 import struct, sys
 d = sys.argv[1]
-w, h = 800, 480
+w, h = 1024, 600
 px = bytearray(w * h * 3)
-for y in range(235, 245):
-    for x in range(395, 405):
+for y in range(295, 305):
+    for x in range(507, 517):
         px[(y * w + x) * 3:(y * w + x) * 3 + 3] = b'\xff\xff\xff'
-open(d + '/splash-800x480.ppm', 'wb').write(b'P6\n# test\n800 480\n255\n' + bytes(px))
+open(d + '/splash-1024x600.ppm', 'wb').write(b'P6\n# test\n1024 600\n255\n' + bytes(px))
 # PSF2, 256 glyphs of 8x16, every pixel set
 open(d + '/font-16.psf', 'wb').write(struct.pack('<8I', 0x864ab572, 0, 32, 0, 256, 16, 16, 8) + b'\xff' * 16 * 256)
 PY
@@ -54,25 +54,25 @@ expect() {  # FILE X Y RRGGBB WHAT
 	[ "$got" = "$4" ] && ok "$5" || bad "$5: ($2,$3) is $got, want $4"
 }
 
-echo "== 800x480, image + status + 50 % =="
-"$W/tsx-splash" -d "$W/d" -g 800x480 -s AB -p 50 png "$W/a.png"
+echo "== 1024x600, image + status + 50 % =="
+"$W/tsx-splash" -d "$W/d" -g 1024x600 -s AB -p 50 png "$W/a.png"
 expect "$W/a.png" 0 0 000000 "background black"
-expect "$W/a.png" 400 240 ffffff "image centred"
-expect "$W/a.png" 395 340 9aa3ad "status text at 70 % (text centred, 2 glyphs of 8)"
-expect "$W/a.png" 390 340 000000 "left of the text is black"
-expect "$W/a.png" 300 361 3fa7e0 "bar: filled part"
-expect "$W/a.png" 500 361 1c2329 "bar: track past 50 %"
-expect "$W/a.png" 250 361 000000 "bar: 36 % wide, centred"
-[ "$("$W/tsx-splash" -g 800x480 size)" = 800x480 ] && ok "size -g" || bad "size -g"
+expect "$W/a.png" 512 300 ffffff "image centred"
+expect "$W/a.png" 505 425 9aa3ad "status text at 70 % (text centred, 2 glyphs of 8)"
+expect "$W/a.png" 500 425 000000 "left of the text is black"
+expect "$W/a.png" 400 445 3fa7e0 "bar: filled part"
+expect "$W/a.png" 600 445 1c2329 "bar: track past 50 %"
+expect "$W/a.png" 320 445 000000 "bar: 36 % wide, centred"
+[ "$("$W/tsx-splash" -g 1024x600 size)" = 1024x600 ] && ok "size -g" || bad "size -g"
 
 echo "== no bar (-p -1) =="
-"$W/tsx-splash" -d "$W/d" -g 800x480 -s AB -p -1 png "$W/b.png"
-expect "$W/b.png" 300 361 000000 "no bar"
+"$W/tsx-splash" -d "$W/d" -g 1024x600 -s AB -p -1 png "$W/b.png"
+expect "$W/b.png" 400 445 000000 "no bar"
 
-echo "== 1280x800: the 800x480 image centred, no font-24 (bar only) =="
+echo "== 1280x800: the 1024x600 image centred, no font-24 (bar only) =="
 "$W/tsx-splash" -d "$W/d" -g 1280x800 -s AB -p 100 png "$W/c.png"
 expect "$W/c.png" 640 400 ffffff "smaller image centred"
-expect "$W/c.png" 239 400 000000 "outside the smaller image is black"
+expect "$W/c.png" 127 400 000000 "outside the smaller image is black"
 expect "$W/c.png" 640 565 000000 "no font: no text"
 expect "$W/c.png" 869 598 3fa7e0 "bar full at 100 %"
 

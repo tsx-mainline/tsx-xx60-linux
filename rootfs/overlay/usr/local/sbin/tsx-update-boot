@@ -9,12 +9,86 @@
 #                                       readback verified; a bad readback restores the old image.
 #                                       Roll back: tsx-update-boot --emmc /data/tsxboot-emmc.prev.img
 #                                       $(cat /data/tsxboot-emmc.prev.img.sha256)
+#   tsx-update-boot --check IMG         only check that IMG carries this panel's DTB (below)
 #   tsx-update-boot --help
+# Board check (both write modes, and --check): U-Boot picks the DTB from the
+# boot image's "second" payload. A plain FDT is booted whatever the panel is;
+# an AML_ multi-DTB container is searched for the env aml_dt (e.g.
+# yushan_one_7inch), and without a matching entry nothing boots. So the
+# image must carry, for this panel's aml_dt, a DTB whose compatible names
+# this board (7inch: crestron,tsw760, 10inch: crestron,tsw1060); otherwise
+# nothing is written. aml_dt comes from the U-Boot env on the card (read
+# only), else from androidboot.lcdsize on the kernel command line.
+# --any-board (first option) skips the check.
 set -eu
-case "${1:-}" in -h|--help) sed -n '2,12p' "$0"; exit 0;; esac
+case "${1:-}" in -h|--help) sed -n '2,22p' "$0"; exit 0;; esac
+ANYBOARD=0; [ "${1:-}" = --any-board ] && { ANYBOARD=1; shift; }
+
+# ---- board check -----------------------------------------------------------
+# u32 at OFFSET of FILE, little endian / big endian
+u32le() { od -An -tu4 -j "$2" -N 4 "$1" | tr -d ' '; }
+u32be() { od -An -tu1 -j "$2" -N 4 "$1" | awk '{ print (($1 * 256 + $2) * 256 + $3) * 256 + $4 }'; }
+# bytes [OFF, OFF+LEN) of FILE
+bytes() { tail -c +$(($2 + 1)) "$1" 2>/dev/null | head -c "$3"; }	# tail hits EPIPE once head has its bytes
+# the aml_dt U-Boot will match (overrides for host tests: TSX_AML_DT, TSX_ENV_DEV, TSX_CMDLINE)
+panel_aml_dt() {
+	[ -n "${TSX_AML_DT:-}" ] && { echo "$TSX_AML_DT"; return; }
+	d=${TSX_ENV_DEV:-/dev/mmcblk0}
+	v=$(dd if="$d" bs=65536 skip=16 count=1 2>/dev/null | tr '\0' '\n' | sed -n 's/^aml_dt=//p' | head -1)
+	[ -n "$v" ] && { echo "$v"; return; }
+	l=$(tr ' ' '\n' < "${TSX_CMDLINE:-/proc/cmdline}" | sed -n 's/^androidboot.lcdsize=//p' | head -1)
+	[ -n "$l" ] && echo "yushan_one_$l"
+}
+# decode one 16-byte container id (every 4-byte group byte-reversed, space padded)
+# (decimal bytes: not every awk converts "0x.." strings)
+dec_id() { od -An -tu1 -v | tr -s ' \n' ' ' | awk '{ s = ""; for (i = 1; i <= NF; i += 4) for (j = 3; j >= 0; j--) if (i + j <= NF && $(i + j) > 32) s = s sprintf("%c", $(i + j) + 0); print s }'; }
+# board_check IMG: prints what it found; returns 0 if IMG boots this panel
+board_check() {
+	img=$1
+	dt=$(panel_aml_dt) || dt=
+	[ -n "$dt" ] || { echo "board check: cannot tell this panel's aml_dt (env, cmdline)"; return 1; }
+	case $dt in *7inch) compat=crestron,tsw760;; *10inch) compat=crestron,tsw1060;;
+		*) echo "board check: aml_dt=$dt is not a TSW-760/TSW-1060"; return 1;; esac
+	[ "$(head -c 8 "$img")" = "ANDROID!" ] || { echo "board check: $img is not an Android boot image"; return 1; }
+	ks=$(u32le "$img" 8) rs=$(u32le "$img" 16) ss=$(u32le "$img" 24) ps=$(u32le "$img" 36)
+	[ "$ss" -gt 0 ] && [ "$ps" -gt 0 ] || { echo "board check: $img has no DTB (empty second)"; return 1; }
+	so=$(( ps + (ks + ps - 1) / ps * ps + (rs + ps - 1) / ps * ps ))
+	magic=$(od -An -tx1 -j "$so" -N 4 "$img" | tr -d ' ')
+	case $magic in
+	d00dfeed) doff=$so; what="plain DTB";;
+	414d4c5f)
+		n=$(u32le "$img" $((so + 8))) i=0 doff=
+		while [ "$i" -lt "$n" ]; do
+			e=$((so + 12 + i * 56))
+			id="$(bytes "$img" "$e" 16 | dec_id)_$(bytes "$img" $((e + 16)) 16 | dec_id)_$(bytes "$img" $((e + 32)) 16 | dec_id)"
+			[ "$id" = "$dt" ] && { doff=$((so + $(u32le "$img" $((e + 48))))); break; }
+			i=$((i + 1))
+		done
+		[ -n "$doff" ] || { echo "board check: the DTB container in $img has no $dt entry (U-Boot would boot nothing)"; return 1; }
+		what="container entry $dt";;
+	*) echo "board check: unknown DTB payload (magic $magic) in $img"; return 1;;
+	esac
+	[ "$(od -An -tx1 -j "$doff" -N 4 "$img" | tr -d ' ')" = d00dfeed ] || { echo "board check: $what is not a DTB"; return 1; }
+	dsz=$(u32be "$img" $((doff + 4)))
+	# the root compatible property "crestron,tsw760\0amlogic,meson8m2\0": a string
+	# ending in the board compatible (the property header bytes before it land on
+	# the same line) followed by "amlogic,meson8m2"
+	if bytes "$img" "$doff" "$dsz" | tr '\0' '\n' | awk -v c="$compat" '
+		p && $0 == "amlogic,meson8m2" { f = 1 }
+		{ p = length($0) >= length(c) && substr($0, length($0) - length(c) + 1) == c }
+		END { exit !f }'; then
+		echo "board check: OK, $what is a $compat DTB (aml_dt=$dt)"; return 0
+	fi
+	echo "board check: $what is not a $compat DTB: this image would not boot this panel (aml_dt=$dt)"
+	return 1
+}
+
+if [ "${1:-}" = --check ]; then if board_check "${2:?IMG}"; then exit 0; else exit 1; fi; fi
 EMMC=0; [ "${1:-}" = --emmc ] && { EMMC=1; shift; }
 IMG=${1:?IMG}; SHA=${2:?SHA256}; P1=/dev/mmcblk0p1 M=/media/bootfat
 [ "$(sha256sum < "$IMG" | cut -d' ' -f1)" = "$SHA" ] || { echo "image sha mismatch"; exit 1; }
+if [ "$ANYBOARD" = 1 ]; then echo "board check skipped (--any-board)"
+else board_check "$IMG" || { echo "nothing written (--any-board skips this check)"; exit 1; }; fi
 
 if [ "$EMMC" = 1 ]; then
 	BOOT=/dev/mmcblk1p7 PREV=/data/tsxboot-emmc.prev.img

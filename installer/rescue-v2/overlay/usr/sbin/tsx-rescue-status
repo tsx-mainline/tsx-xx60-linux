@@ -4,7 +4,8 @@
 # CONFIG_DRM_FBDEV_EMULATION are on and "console=tty0" is already on the
 # kernel cmdline for this board -- see docs/recovery.md "The v2 splash and
 # status screen") and mirrored line-by-line to the serial console via
-# /dev/kmsg (kernel-timestamped, also reaches ttyAML0). busybox ash only.
+# /dev/kmsg (kernel-timestamped, also reaches ttyAML0; kept off the LCD, see
+# kmsg_off_lcd). busybox ash only.
 #
 #   tsx-rescue-status loop    redraws every ~2s until killed (the ::respawn
 #                              inittab entry restarts it if it ever exits)
@@ -23,23 +24,45 @@ TTY=${TSX_STATUS_TTY:-/dev/tty0}
 VERFILE=/etc/tsx/rescue-version
 . /usr/share/tsx/tsx-lib.sh 2>/dev/null || true
 
-# ---- splash: shown once at the top of every frame, tasteful and small enough
-# for an 80x25 console; the LCD (1280x800) just shows it smaller/top-left with
-# the default fbcon font, which is fine here (this is a repair screen, not a
-# logo screen). Tux: the classic public-domain ASCII penguin.
+# ---- splash: shown once at the top of every frame, small enough for an 80x25
+# console (63 columns). On the LCD the console font is Terminus bold sized
+# for the screen (tsx-confont: 16x32 on 1280x800 = 80x25, 12x24 on 1024x600 =
+# 85x25); the kernel's 8x16 VGA font would break the slanted figlet letters.
+# Tux: the classic public-domain ASCII penguin; the name is
+# `figlet -f smslant "TSX - LINUX"` (spaces around the dash).
 splash() {
 	cat <<'EOF'
     .--.
-   |o_o |      ___________  __    _  ___  ______ ___
-   |:_/ |     /_  __/ __/ |/_/___| |/_/ |/_/ __// _ \
-  //   \ \     / / _\ \_>  </___/>  <_>  </ _ \/ // /
- (|     | )   /_/ /___/_/|_|   /_/|_/_/|_|\___/\___/
+   |o_o |      ___________  __        __   _____  ____  ___  __
+   |:_/ |     /_  __/ __/ |/_/ ____  / /  /  _/ |/ / / / / |/_/
+  //   \ \     / / _\ \_>  <  /___/ / /___/ //    / /_/ />  <
+ (|     | )   /_/ /___/_/|_|       /____/___/_/|_/\____/_/|_|
 /'\_   _/`\
 \___)=(___/   mainline rescue -- TSW-760 / TSW-1060 / TSS-10
 EOF
 }
 
 kmsg_line() { echo "tsx-rescue-status: $1" > /dev/kmsg 2>/dev/null || true; }
+
+# Kernel messages (the kmsg lines above included) go to the serial console
+# and dmesg only, not onto this screen: the kernel's VT output is redirected
+# to VT 12 (busybox setlogcons = TIOCL_SETKMSGREDIRECT), which nobody shows;
+# opening /dev/tty12 once allocates it. Without this every status change
+# also printed as a kernel line under the frame.
+kmsg_off_lcd() {
+	[ "$TTY" = /dev/tty0 ] || return 0
+	[ -c /dev/tty12 ] && : < /dev/tty12 2>/dev/null
+	setlogcons 12 >/dev/null 2>&1 || true
+}
+
+# The Terminus console font for the LCD size. /init already loaded it before
+# the rescue started (text_console); again here in case the console was reset
+# since. Harmless when it is already loaded, a no-op without the tool.
+lcd_font() {
+	[ "$TTY" = /dev/tty0 ] || return 0
+	[ -x /usr/sbin/tsx-confont ] && /usr/sbin/tsx-confont "$TTY" 2>/dev/null
+	return 0
+}
 
 frame() {
 	local ip method mac macsrc model rver kver state prog progline pname punit reason
@@ -82,7 +105,8 @@ frame() {
 	echo "-----------------------------------------------------------------"
 	echo "reason for rescue : $reason"
 	echo "model             : ${pname:-unknown}${punit:+   unit $punit}"
-	echo "rescue / kernel   : $rver / $kver"
+	echo "rescue            : $rver"
+	echo "kernel            : $kver"
 	echo "network           : eth0 ${ip:-(no address yet)} ($method, MAC $mac${macsrc:+, $macsrc})"
 	if [ -n "$ip" ]; then echo "repair shell      : ssh root@$ip   (password: tsx)"
 	else echo "repair shell      : ssh root@<ip once DHCP/static assigns one>  (password: tsx)"; fi
@@ -109,6 +133,6 @@ frame() {
 
 case "${1:-loop}" in
 once) printf '\033[2J' > "$TTY" 2>/dev/null; frame;;
-loop) printf '\033[2J' > "$TTY" 2>/dev/null; while :; do frame; sleep 2; done;;
+loop) kmsg_off_lcd; lcd_font; printf '\033[2J' > "$TTY" 2>/dev/null; while :; do frame; sleep 2; done;;
 *) echo "usage: tsx-rescue-status once|loop" >&2; exit 2;;
 esac

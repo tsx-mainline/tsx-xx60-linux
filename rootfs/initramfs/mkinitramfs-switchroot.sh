@@ -23,6 +23,14 @@ install -D -m 755 /tmp/tsx-splash $R/usr/sbin/tsx-splash
 sh "$HERE/../splash/mksplash.sh" /tmp/splash-out >/dev/null
 mkdir -p $R/usr/share/tsx/splash
 cp /tmp/splash-out/*.ppm /tmp/splash-out/*.psf $R/usr/share/tsx/splash/
+# text console fonts for tsx-confont (Terminus bold, SIL OFL 1.1; it picks the
+# largest one that still gives 80x25 on the LCD), uncompressed for setfont
+apk add -q --no-cache font-terminus >/dev/null
+mkdir -p $R/usr/share/tsx/consolefonts
+for f in ter-116b ter-118b ter-120b ter-122b ter-124b ter-128b ter-132b; do
+  zcat /usr/share/consolefonts/$f.psf.gz > $R/usr/share/tsx/consolefonts/$f.psf
+done
+[ -x $R/usr/sbin/tsx-confont ] || { echo "tsx-confont missing in the overlay"; exit 1; }
 # installer stage 2: the rootfs installer inside the initramfs (tsx-autoinstall uses it)
 mkdir -p $R/usr/share/tsx
 cp "$HERE"/../install.sh "$HERE"/../tsx-disk.sh $R/usr/share/tsx/

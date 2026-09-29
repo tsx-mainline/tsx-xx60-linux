@@ -38,6 +38,8 @@ jobs:
         run: rootfs/tests/test-idled-runtime.sh
       - name: rootfs/tests/test-als.sh
         run: rootfs/tests/test-als.sh
+      - name: rootfs/tests/test-clock.sh - network time (chrony, DHCP NTP servers, boot clock floor)
+        run: sh rootfs/tests/test-clock.sh
       - name: rootfs/tests/test-autoupdate-logic.sh
         run: sh rootfs/tests/test-autoupdate-logic.sh
       - name: rootfs/tests/test-autoupdate-flow.sh
@@ -50,6 +52,8 @@ jobs:
         run: sh rootfs/tests/test-voice-esphome-run.sh
       - name: rootfs/tests/test-splash.sh - boot splash frames (image, status line, progress bar)
         run: sh rootfs/tests/test-splash.sh
+      - name: rootfs/tests/test-confont.sh - console font by screen size, TSX - LINUX banners
+        run: sh rootfs/tests/test-confont.sh
       - name: rootfs/tests/test-tsx-config.sh
         run: rootfs/tests/test-tsx-config.sh
       - name: rootfs/tests/test-tsx-config-apply.sh

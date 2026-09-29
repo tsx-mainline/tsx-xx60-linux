@@ -18,7 +18,8 @@
 # Screen: the kernel keeps the text console off the LCD (fbcon=map:1 on the
 # command line) and tsx-splash draws the boot splash on /dev/fb0. Every way
 # into the rescue system, and BOOT_VERBOSE, first gives the screen back to the
-# text console (tsx-splash console): a failure never hides behind the splash.
+# text console (tsx-splash console, then tsx-confont loads a console font that
+# suits the LCD size): a failure never hides behind the splash.
 mount -t proc proc /proc
 mount -t sysfs sys /sys
 mount -t devtmpfs dev /dev 2>/dev/null
@@ -26,7 +27,20 @@ mkdir -p /dev/pts /run /tmp /newroot; mount -t devpts devpts /dev/pts
 
 msg() { echo "tsx-initramfs: $*" > /dev/kmsg 2>/dev/null; echo "tsx-initramfs: $*" > /dev/tty0 2>/dev/null; }
 verbose=
-text_console() { verbose=1; /usr/sbin/tsx-splash console 2>/dev/null; }
+# The splash needs the real display driver: fb0 is simpledrm on U-Boot's
+# framebuffer until the meson DRM driver has probed, which can be a moment
+# after /init starts, and that driver switches U-Boot's plane off when it
+# takes over (and the console bound to simpledrm's fb0 does not follow). Wait
+# for it, at most 2 s (the U-Boot logo stays up meanwhile).
+wait_drm_fb() {
+	i=0
+	while [ $i -lt 40 ]; do
+		case $(cat /sys/class/graphics/fb0/name 2>/dev/null) in ''|*simple*) usleep 50000; i=$((i + 1));; *) return 0;; esac
+	done
+}
+# the text console binds to fb0 too: to the DRM driver's, not simpledrm's;
+# then a Terminus font sized for the LCD (80x25 or more; tsx-confont)
+text_console() { verbose=1; wait_drm_fb; /usr/sbin/tsx-splash console 2>/dev/null; /usr/sbin/tsx-confont 2>/dev/null; }
 # splash TEXT PERCENT [show]: status line + progress bar (no-op when verbose)
 splash() { [ -n "$verbose" ] || /usr/sbin/tsx-splash -s "$1" -p "$2" "${3:-status}" 2>/dev/null; }
 rescue() {
@@ -62,7 +76,7 @@ done
 # in the rescue's own rcS) to report "installer arm" vs "golden fallback" vs
 # "manual" precisely instead of this generic message.
 [ -e /etc/tsx/rescue-image ] && rescue "$(head -n 1 /etc/tsx/rescue-image)"
-if [ -n "$verbose" ]; then text_console; else splash "starting" 5 show; fi
+if [ -n "$verbose" ]; then text_console; else wait_drm_fb; splash "starting" 5 show; fi
 
 # installer: UART-free install (p1:tsxinst.cfg from stock Android, a stick with
 # tsx-install/GO, or a U-Boot jabil boot from a stick). Exit 0 = nothing to do.

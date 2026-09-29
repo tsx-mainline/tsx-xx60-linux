@@ -21,6 +21,13 @@
  *  - State is written to /run/tsx-idled.state ("on <level>" or "blank").
  *  - Every 5 s the level is re-applied if the schedule or someone else
  *    (drm panel enable on unblank, brightnessctl) changed it.
+ *  - Boot hold: started within the first minute after boot with the
+ *    backlight still lit (U-Boot's logo level, kept by the kernel), it does
+ *    not step the level to the day/night schedule until tsx-als has
+ *    published its first level (als-level), at most 15 s (TSX_BOOT_HOLD
+ *    seconds overrides; 0 = off). The state is "on <current>" meanwhile, so
+ *    tsx-als ramps from what is on the glass: no jump up to the schedule
+ *    and back down to the ambient level while the boot splash shows.
  *
  * Runtime files in /run/tsx (TSX_RUN_DIR), watched with inotify so a change
  * applies at once (als-level is only read, it changes every second):
@@ -266,7 +273,16 @@ static void write_bstate(int lvl)
 	write_run_file("brightness.state", b);
 }
 
+/* als-level written within the last 30 s (wall clock, as base_level) */
+static int als_fresh(void)
+{
+	char p[PATH_MAX + 16]; struct stat st;
+	snprintf(p, sizeof p, "%s/als-level", ovrdir);
+	return !stat(p, &st) && time(NULL) - st.st_mtime < 30 && read_int(ovrdir, "als-level") > 0;
+}
+
 static int cur_level = -1;
+static long long hold_until;   /* boot hold, see the header; 0 = none */
 static void backlight_on(void)
 {
 	int max, lvl = target_level();
@@ -274,6 +290,16 @@ static void backlight_on(void)
 	if (!bldir[0]) find_backlight();
 	max = bldir[0] ? read_int(bldir, "max_brightness") : -1;
 	if (max <= 0) { if (verbose) logm("no backlight"); set_state("on none"); return; }
+	if (hold_until) {
+		int cur = read_int(bldir, "brightness");
+		if (now_ms() < hold_until && !als_fresh() && read_int(ovrdir, "brightness") <= 0 && cur > 0) {
+			snprintf(st, sizeof st, "on %d", cur);
+			set_state(st);
+			return;
+		}
+		hold_until = 0;
+		if (verbose) logm("boot hold over (%s)", als_fresh() ? "als-level" : "timeout");
+	}
 	if (C.bl_max > 0 && max > C.bl_max) max = C.bl_max;
 	st_max = max;
 	if (lvl > max) lvl = max;
@@ -466,6 +492,17 @@ int main(int argc, char **argv)
 	signal(SIGCHLD, SIG_IGN);   /* OSK_TOGGLE_CMD children reap themselves */
 
 	cfg_load(&C); find_backlight();
+	{
+		/* boot hold (see the header) */
+		double up = 1e9; FILE *f = fopen("/proc/uptime", "r");
+		const char *e = getenv("TSX_BOOT_HOLD");
+		int secs = 15;
+		if (f) { if (fscanf(f, "%lf", &up) != 1) up = 1e9; fclose(f); }
+		if (e) secs = atoi(e);
+		else if (up >= 60) secs = 0;
+		if (secs > 0 && bldir[0] && read_int(bldir, "brightness") > 0 && read_int(bldir, "bl_power") <= 0)
+			hold_until = now_ms() + secs * 1000LL;
+	}
 	watch_rundir();
 	load_timeout(1);
 	logm("timeout %ds%s, day %d, night %d (%02d-%02d h), cap %d, backlight %s, osk gesture %s",

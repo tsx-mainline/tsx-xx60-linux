@@ -36,6 +36,7 @@ IDLED=${TSX_IDLED_STATE:-/run/tsx-idled.state}
 ALS_AUTO=1 ALS_CURVE="0:3 5:5 20:8 80:12 300:17 1000:21 3000:23" ALS_INTERVAL=1
 ALS_SMOOTH=5 ALS_HYST_PCT=25 ALS_HYST_ABS=2 ALS_HOLD=10 ALS_RAMP_MS=150
 ALS_NIGHT_CAP=0 ALS_BL_COMP=0 ALS_REPORT_PCT=10 ALS_REPORT_MAX=300 ALS_DEVICE=auto
+ALS_START_WAIT=12
 [ -r "$CONF" ] && . "$CONF"
 BACKLIGHT_MAX=23 NIGHT_START=22 NIGHT_END=7
 [ -r "$KCONF" ] && eval "$(grep -E '^(BACKLIGHT_MAX|NIGHT_START|NIGHT_END)=[0-9]+$' "$KCONF")"
@@ -139,6 +140,15 @@ while :; do
 		rm -f "$R/als-level"; sleep 10; continue
 	fi
 	raw=$(read_dlux "$dev") || { sleep "$ALS_INTERVAL"; continue; }
+	# Right after a cold boot the MAX44009 can read 0 lx for several seconds
+	# before its first conversion; taken at face value that dimmed the boot
+	# splash to the darkest step and back up 10-20 s later. Until the first
+	# level, a 0 reading waits (at most ALS_START_WAIT readings): no
+	# als-level yet, so tsx-idled keeps the level on the glass (boot hold).
+	if [ "$raw" -le 0 ] && [ "$cur" -eq 0 ] && [ "$n" -le "$ALS_START_WAIT" ]; then
+		[ -n "${TSX_ALS_LOOPS:-}" ] || sleep "$ALS_INTERVAL"
+		continue
+	fi
 	[ -n "$warned" ] && { log "sensor $dev: $((raw / 10)) lx"; warned=; }
 
 	# own-backlight compensation

@@ -1,0 +1,30 @@
+#!/bin/sh
+# tsx-dhcp-ntp: udhcpc hook (/etc/udhcpc/post-bound, post-renew): the NTP
+# servers of the DHCP lease (option 42; /etc/network/interfaces asks for it
+# with "udhcpc-opts -O ntpsrv") become chrony sources, preferred over the
+# pool (chrony.conf "sourcedir /run/chrony-dhcp"). A lease without the option
+# removes them. When the file changed and chronyd runs, it rereads its
+# sources at once ("chronyc reload sources"); at boot the lease usually
+# comes before chronyd starts, which reads the directory itself.
+# Env from udhcpc: interface, ntpsrv. Tests: TSX_CHRONY_DHCP_DIR, TSX_CHRONYC.
+D=${TSX_CHRONY_DHCP_DIR:-/run/chrony-dhcp}
+C=${TSX_CHRONYC:-chronyc}
+f=$D/${interface:-eth0}.sources
+mkdir -p "$D" && chmod 755 "$D" || exit 0
+: > "$f.new"
+for s in ${ntpsrv:-}; do
+	# addresses only (udhcpc passes dotted quads): nothing else reaches chrony's config
+	case $s in *[!0-9.]*|'') continue;; esac
+	echo "server $s iburst prefer" >> "$f.new"
+done
+if [ -s "$f.new" ]; then
+	if cmp -s "$f.new" "$f"; then rm -f "$f.new"; exit 0; fi
+	chmod 644 "$f.new"; mv -f "$f.new" "$f"
+	logger -t tsx-dhcp-ntp "NTP from DHCP: ${ntpsrv}" 2>/dev/null
+else
+	rm -f "$f.new"
+	[ -e "$f" ] || exit 0
+	rm -f "$f"
+fi
+"$C" reload sources >/dev/null 2>&1 || true
+exit 0

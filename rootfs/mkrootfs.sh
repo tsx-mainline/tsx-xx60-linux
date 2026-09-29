@@ -110,6 +110,10 @@ install -D -m 644 "$HERE/src/chromium-es2/sigs.json" $R/usr/local/share/tsx/chro
 printf '%s\n' "$TSX_APK_URL" > $R/etc/tsx/apk-url.default
 # build id for tsx-autoupdate / the HA update entity (installed_version)
 printf '%s\n' "${TSX_BUILD_ID:-$(date -u +%Y%m%d%H%M)}" > $R/etc/tsx/build-id
+# the boot clock's floor (no RTC): swclock sets the clock from this file's
+# mtime, so a new image never boots earlier than its build time
+# (/etc/periodic/15min/tsx-savetime keeps it current while NTP has the time)
+mkdir -p $R/var/lib/misc && touch $R/var/lib/misc/openrc-shutdowntime
 install -m 755 /build/tsx-idled $R/usr/local/sbin/tsx-idled
 install -m 755 /build/tsx-buttons $R/usr/local/sbin/tsx-buttons
 install -m 755 /build/tsx-ledbar $R/usr/local/bin/tsx-ledbar

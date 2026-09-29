@@ -22,6 +22,12 @@ once every 5 s. After TIMEOUT s it reveals whatever is there, so a page that
 never finishes (or keeps failing) still shows up. Without DevTools it reveals DELAY s after the
 browser window appeared.
 
+With the window revealed, sway's background (still the splash) is replaced by
+a solid colour: the page's own background colour (read over DevTools), else
+black. The background shows wherever the window does not cover the output for
+a moment, e.g. while Chromium repaints at its new size when the on-screen
+keyboard hides; it must not be the splash any more then.
+
 Usage: tsx-kiosk-reveal URL [--devtools 0|1] [--timeout S] [--time-wait S]
 Env: SWAYSOCK (from sway), TSX_REVEAL_DEVTOOLS (host:port, tests).
 Logs one line per step to stderr (the kiosk log), with the uptime.
@@ -29,6 +35,7 @@ Logs one line per step to stderr (the kiosk log), with the uptime.
 import base64
 import json
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -62,6 +69,17 @@ PAINTED = r'''new Promise(r => {
     setTimeout(f, 100);
   })();
 })'''
+# the page's background colour as #rrggbb ('' if transparent): body first,
+# else the root element (Home Assistant colours <html>)
+BACKGROUND = r'''(() => {
+  for (const e of [document.body, document.documentElement]) {
+    if (!e) continue;
+    const m = getComputedStyle(e).backgroundColor.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/);
+    if (m && (m[4] === undefined || parseFloat(m[4]) > 0))
+      return "#" + [m[1], m[2], m[3]].map(x => (+x).toString(16).padStart(2, "0")).join("");
+  }
+  return "";
+})()'''
 
 
 def uptime():
@@ -78,11 +96,14 @@ def swaymsg(cmd):
     return subprocess.call(['swaymsg', cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def reveal(why):
+def reveal(why, bg=None):
     # the later rule wins for windows that map from now on; then the open one
     swaymsg('for_window %s opacity 1' % RULE)
     swaymsg('%s opacity 1' % RULE)
-    log('revealed: %s' % why)
+    # no splash behind the page from now on (see the module docstring)
+    bg = bg if isinstance(bg, str) and re.fullmatch(r'#[0-9a-f]{6}', bg) else '#000000'
+    swaymsg('output * bg %s solid_color' % bg)
+    log('revealed: %s (background %s)' % (why, bg))
 
 
 class Ws:
@@ -214,7 +235,9 @@ def main():
             res = ws.call('Runtime.evaluate', {'expression': PAINTED, 'awaitPromise': True, 'returnByValue': True}, cid)
             state = res.get('result', {}).get('result', {}).get('value')
             if state == 'painted':
-                reveal('page painted')
+                cid += 1
+                bg = ws.call('Runtime.evaluate', {'expression': BACKGROUND, 'returnByValue': True}, cid)
+                reveal('page painted', bg.get('result', {}).get('result', {}).get('value'))
                 return 0
             if state == 'error':
                 # the clock first (TLS), then at most one new try per RETRY_GAP s

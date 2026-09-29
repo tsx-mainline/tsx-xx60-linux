@@ -14,7 +14,7 @@ ok()  { echo "ok   $*"; }
 bad() { echo "FAIL $*"; fail=1; }
 lux() { echo "$1" > "$T/iio/iio:device0/in_illuminance_input"; }
 run() {  # run LOOPS [extra conf lines]
-	printf 'ALS_SMOOTH=1\nALS_HOLD=0\nALS_RAMP_MS=10\n%s\n' "${2:-}" > "$T/als.conf"
+	printf 'ALS_SMOOTH=1\nALS_HOLD=0\nALS_RAMP_MS=10\nALS_START_WAIT=0\n%s\n' "${2:-}" > "$T/als.conf"
 	PATH=$T/bin:$PATH TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_RUN_DIR=$T/run \
 	TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_LOOPS=$1 TSX_ALS_NOW=1000 \
 		sh "$ALS" >> "$T/log" 2>&1
@@ -29,6 +29,13 @@ for c in "0.000000 3" "5.000000 5" "12.500000 7" "300.000000 17" "650.000000 19"
 done
 # 2. ramp: screen lit, backlight moved to the level
 [ "$(bl)" = 23 ] && ok "ramp wrote backlight 23" || bad "backlight $(bl), want 23"
+# 2b. start: 0 lx before the sensor's first conversion is not a level yet
+rm -f "$T/run/"*; echo 13 > "$T/bl/mp3309c/brightness"; lux 0.000000; run 3 "ALS_START_WAIT=3"
+[ ! -e "$T/run/als-level" ] && [ "$(bl)" = 13 ] && ok "start: 0 lx waits (no level, backlight kept)" || bad "start 0 lx: level $(cat "$T/run/als-level" 2>/dev/null), bl $(bl)"
+rm -f "$T/run/"*; run 4 "ALS_START_WAIT=3"
+[ "$(cat "$T/run/als-level" 2>/dev/null)" = 3 ] && ok "start: still 0 lx after ALS_START_WAIT: dark room level 3" || bad "start wait over: level $(cat "$T/run/als-level" 2>/dev/null)"
+rm -f "$T/run/"*; echo 13 > "$T/bl/mp3309c/brightness"; lux 135.000000; run 1 "ALS_START_WAIT=3"
+[ "$(cat "$T/run/als-level")" = 13 ] && ok "start: a real reading is used at once" || bad "start 135 lx: level $(cat "$T/run/als-level")"
 # 3. hysteresis: 300 lx -> 17; 340 lx (+13 %) stays 17; 450 lx (+50 %) moves
 # (hysteresis state lives inside one daemon run: feed values while it runs)
 rm -f "$T/run/"*; echo 17 > "$T/bl/mp3309c/brightness"

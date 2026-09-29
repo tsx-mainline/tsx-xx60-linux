@@ -241,7 +241,22 @@ cfg_show() {
 		printf '%s=%s\n' "$k" "$v"
 	done
 	warn_open_api
+	clock_status
 	return 0
+}
+
+# the clock's NTP state, for people (stderr, like the warning below; the
+# panel has no RTC: until chrony has synced, the time is the last saved one)
+clock_status() {
+	command -v "${TSX_CHRONYC:-chronyc}" >/dev/null 2>&1 || return 0
+	now=$(date '+%F %T %Z')
+	t=$("${TSX_CHRONYC:-chronyc}" -n tracking 2>/dev/null) || { echo "# clock: $now, chronyd not running" >&2; return 0; }
+	if echo "$t" | grep -q '^Leap status *: Normal'; then
+		ref=$(echo "$t" | sed -n 's/^Reference ID *: [0-9A-Fa-f]* (\(.*\))$/\1/p')
+		echo "# clock: $now, NTP synced (${ref:-?})" >&2
+	else
+		echo "# clock: $now, NOT synced yet (NTP; the time is the last saved one)" >&2
+	fi
 }
 
 # the ESPHome API with neither a key nor an allow-list: anyone on the LAN
