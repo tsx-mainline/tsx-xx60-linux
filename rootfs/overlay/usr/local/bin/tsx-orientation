@@ -21,9 +21,13 @@
 #       ROTATE          0..3, quarter turns clockwise of the picture on the LCD
 #       SWAY_TRANSFORM  sway "output * transform" (sway rotates clockwise)
 #       TOUCH_MATRIX    libinput calibration matrix (6 values, sway
-#                       "input type:touch calibration_matrix"): maps the raw
-#                       digitizer (native LCD coordinates) onto the rotated
-#                       output
+#                       "input type:touch calibration_matrix"): the identity
+#                       in every orientation. sway maps the touchscreen to
+#                       the built-in output, and wlroots then turns every
+#                       touch by that output's transform itself (measured on
+#                       a TSS-10: a turned matrix on top of that turned the
+#                       touches twice). It is still sent, so a live change
+#                       resets a matrix set by hand or by an older build.
 #       FBCON_ROTATE    /sys/class/graphics/fbcon/rotate_all (1 = clockwise,
 #                       3 = counter-clockwise; the same number as ROTATE)
 #       SLIDE_INVERT    1 = tsx-buttons turns the key-strip slide around, so
@@ -60,9 +64,9 @@ configured() {
 }
 
 # info NAME: the table. Only ROTATE is chosen per name; everything else
-# follows from it. If the panel shows a portrait picture upside down, the
-# compositor or fbcon turns the other way than documented: swap ROTATE 1 and 3
-# here (the touch matrix follows ROTATE, so it stays consistent).
+# follows from it. Checked on the panels (raw scanout dumps): sway transform
+# 270 and fbcon rotate 3 put the top of the picture at the native LCD's left
+# edge, i.e. upright on a panel turned clockwise (portrait).
 info() {
 	case "$1" in
 	landscape) r=0;;
@@ -71,14 +75,14 @@ info() {
 	portrait-flipped) r=1;;
 	*) return 1;;
 	esac
-	# picture turned r quarter turns clockwise on the LCD; a touch at raw
-	# (x, y) (0..1 across the native LCD) lands on the rotated output at
-	# (a x + b y + c, d x + e y + f)
+	# picture turned r quarter turns clockwise on the LCD; the touch matrix
+	# stays the identity (wlroots turns touches by the output transform)
+	m="1 0 0 0 1 0"
 	case $r in
-	0) t=normal m="1 0 0 0 1 0" inv=0;;
-	1) t=90 m="0 1 0 -1 0 1" inv=1;;
-	2) t=180 m="-1 0 1 0 -1 1" inv=1;;
-	3) t=270 m="0 -1 1 1 0 0" inv=0;;
+	0) t=normal inv=0;;
+	1) t=90 inv=1;;
+	2) t=180 inv=1;;
+	3) t=270 inv=0;;
 	esac
 	echo "ORIENTATION=$1"
 	echo "ROTATE=$r"

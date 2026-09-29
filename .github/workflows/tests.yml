@@ -60,6 +60,8 @@ jobs:
         run: rootfs/tests/test-tsx-config.sh
       - name: rootfs/tests/test-tsx-config-apply.sh
         run: rootfs/tests/test-tsx-config-apply.sh
+      - name: rootfs/tests/test-tsx-setup-mac.sh - eth0 MAC selection matches the rescue system's
+        run: rootfs/tests/test-tsx-setup-mac.sh
       - name: rootfs/tests/test-panelctl.sh - reject hostile/malformed FIFO input
         run: rootfs/tests/test-panelctl.sh
       - name: rootfs/tests/test-setup.sh - on-panel setup page, LAN pairing, form validation, secrets never echoed

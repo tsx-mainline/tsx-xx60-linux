@@ -15,7 +15,7 @@
 #   /run/tsx-install-state    free text, written by installer/steps/tsx-rescue-install
 #   /run/tsx-progress         "POS_BYTES OFF_BYTES LEN_BYTES NAME...", written by pr_dd (installer/lib/tsx-rescue.sh)
 #   /run/rescue-reason        why the rescue was entered (rootfs/initramfs/overlay/init)
-#   /run/tsx-eth0-mac-src     uboot|random (installer/rescue/overlay/etc/init.d/rcS)
+#   /run/tsx-eth0-mac-src     uboot|random (rootfs/initramfs/overlay/etc/init.d/rcS)
 #   the U-Boot env (product_name, ethaddr) via tsx-lib.sh, already on the rescue at
 #   /usr/share/tsx/tsx-lib.sh
 set -u

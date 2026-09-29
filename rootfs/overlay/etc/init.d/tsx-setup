@@ -1,6 +1,53 @@
 #!/sbin/openrc-run
 description="TSX early setup: time zone, eth0 MAC, zram swap, CPU governor"
 depend() { need localmount; before networking kiosk; }
+
+# select_eth0_mac: print the MAC eth0 should use, on stdout, and keep
+# TSX_ETH0_MAC_FILE in step with it. Split out of start() so a host test
+# (rootfs/tests/test-tsx-setup-mac.sh) can call just this, without the zram/
+# cpufreq/timezone side effects the rest of start() has on a real host.
+#
+# mainline has no MAC source on this board (stmmac picks a random one each
+# boot, so the DHCP address changed every boot). The U-Boot env "ethaddr"
+# (the MAC U-Boot itself uses for DHCP, read only from mmcblk0 at 1 MiB, the
+# live env, verified 2026-09-26) ALWAYS wins when it is present and valid,
+# matching the rescue system's own priority
+# (rootfs/initramfs/overlay/etc/init.d/rcS) -- a stateless RAM system that
+# re-derives it from the same env every boot, with no file to fall out of
+# sync. TSX_ETH0_MAC_FILE (/etc/tsx/eth0.mac) is only the fallback for a
+# board with no ethaddr in its env, and is kept in step with a valid ethaddr
+# whenever one is seen (docs/recovery.md "Random MAC in the rescue, and
+# the fix").
+#
+# TSX_MMCBLK0/TSX_ETH0_MAC_FILE: host-test hooks only (rootfs/tests/), same
+# idea as tsx-config's TSX_APPLY_PREFIX -- empty/unset leaves the panel's
+# real paths.
+select_eth0_mac() {
+	blk=${TSX_MMCBLK0:-/dev/mmcblk0}
+	macf=${TSX_ETH0_MAC_FILE:-/etc/tsx/eth0.mac}
+	mac=
+	if [ -b "$blk" ] || [ -f "$blk" ]; then
+		mac=$(dd if="$blk" bs=64k skip=16 count=1 2>/dev/null | tr '\0' '\n' | sed -n 's/^ethaddr=//p' | head -1)
+	fi
+	echo "$mac" | grep -qiE '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$' || mac=
+	if [ -n "$mac" ]; then
+		cur=
+		[ -s "$macf" ] && cur=$(head -1 "$macf")
+		if [ "$cur" != "$mac" ]; then
+			mkdir -p "$(dirname "$macf")" && echo "$mac" > "$macf"
+			einfo "eth0 MAC $mac (from U-Boot env; $macf was '${cur:-unset}', now back in sync)"
+		fi
+	else
+		[ -s "$macf" ] && mac=$(head -1 "$macf")
+		echo "$mac" | grep -qiE '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$' || mac=
+		if [ -z "$mac" ]; then
+			mac=$(od -An -N5 -tx1 /dev/urandom | tr -s ' ' ':' | sed 's/^:/02:/; s/:$//')
+			mkdir -p "$(dirname "$macf")" && echo "$mac" > "$macf"
+		fi
+	fi
+	printf '%s\n' "$mac"
+}
+
 start() {
 	ebegin "TSX setup"
 	# boot splash status line (no-op when the text console has the screen)
@@ -11,22 +58,7 @@ start() {
 		ln -sf "/usr/share/zoneinfo/$TZ_NAME" /etc/localtime
 		echo "$TZ_NAME" > /etc/timezone
 	fi
-	# stable eth0 MAC: mainline has no MAC source on this board (stmmac picks a
-	# random one each boot, so the DHCP address changed every boot). Use
-	# /etc/tsx/eth0.mac if present, else the U-Boot env "ethaddr" (the MAC
-	# U-Boot itself uses for DHCP), read only from mmcblk0 at 1 MiB (the live
-	# env, verified 2026-09-26), else a random locally administered one that
-	# is saved to /etc/tsx/eth0.mac.
-	mac=
-	[ -s /etc/tsx/eth0.mac ] && mac=$(head -1 /etc/tsx/eth0.mac)
-	if [ -z "$mac" ] && [ -b /dev/mmcblk0 ]; then
-		mac=$(dd if=/dev/mmcblk0 bs=64k skip=16 count=1 2>/dev/null | tr '\0' '\n' | sed -n 's/^ethaddr=//p' | head -1)
-	fi
-	echo "$mac" | grep -qiE '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$' || mac=
-	if [ -z "$mac" ]; then
-		mac=$(od -An -N5 -tx1 /dev/urandom | tr -s ' ' ':' | sed 's/^:/02:/; s/:$//')
-		mkdir -p /etc/tsx && echo "$mac" > /etc/tsx/eth0.mac
-	fi
+	mac=$(select_eth0_mac)
 	ip link set dev eth0 address "$mac" 2>/dev/null && einfo "eth0 MAC $mac"
 	# compressed swap in RAM (needs CONFIG_ZRAM; the panel kernel lacks it today)
 	if [ ! -e /sys/block/zram0 ]; then modprobe zram num_devices=1 2>/dev/null || true; fi

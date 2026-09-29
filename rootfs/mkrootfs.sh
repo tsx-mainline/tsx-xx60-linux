@@ -252,7 +252,7 @@ for s in devfs dmesg udev udev-trigger udev-settle; do rc-update add $s sysinit;
 for s in root localmount tsx-data tsx-config modules sysctl hostname bootmisc syslog swclock seedrng tsx-setup tsx-hostname udev-postmount machine-id; do
 	[ -e /etc/init.d/$s ] && rc-update add $s boot || echo "no service $s"
 done
-for s in networking chronyd sshd seatd crond watchdog tsx-idled tsx-cpufreq tsx-buttons tsx-als tsx-ledbar tsx-audio tsx-tfa-dsp dbus avahi-daemon tsx-sendspin tsx-panelctl tsx-esphome tsx-mqtt tsx-autoupdate kiosk tsx-boot-ok local; do
+for s in networking chronyd sshd seatd crond watchdog tsx-idled tsx-cpufreq tsx-buttons tsx-als tsx-ledbar tsx-audio tsx-tfa-dsp dbus avahi-daemon tsx-sendspin tsx-panelctl tsx-esphome tsx-mqtt tsx-autoupdate tsx-setup-helper tsx-setupd kiosk tsx-boot-ok local; do
 	[ -e /etc/init.d/$s ] && rc-update add $s default || { echo "MISSING service $s"; exit 1; }
 done
 for s in mount-ro killprocs savecache; do rc-update add $s shutdown; done

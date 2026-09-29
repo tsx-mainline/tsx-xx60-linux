@@ -236,7 +236,7 @@ else : > "$BK/p5-head-1M.bin"; fi
 if [ -f "$MNT_P1/boot.img" ] && [ "$GSHA" != "$(sha256sum < "$RESC" | cut -d' ' -f1)" ]; then
 	cp "$MNT_P1/boot.img" "$BK/golden-boot.img" && [ "$(sha256sum < "$BK/golden-boot.img" | cut -d' ' -f1)" = "$GSHA" ] || die "golden boot.img backup failed"
 fi
-"$FWP" > "$BK/fw_printenv.txt" 2>&1
+tsx_fw_bound "$FWP" > "$BK/fw_printenv.txt" 2>&1
 for p in 1 2 3 4 5 6 7 8; do [ -e /sys/block/$DISK/${DISK}p$p ] && echo "p$p $(cat /sys/block/$DISK/${DISK}p$p/start) $(cat /sys/block/$DISK/${DISK}p$p/size)"; done > "$BK/partitions.txt"
 echo "golden_boot_img_sha256=$GSHA" >> "$BK/partitions.txt"
 (cd "$BK" && sha256sum env-0x100000.bin disk-head-2M.bin p5-head-1M.bin fw_printenv.txt $( [ -f golden-boot.img ] && echo golden-boot.img) > SHA256SUMS)
@@ -302,7 +302,7 @@ rm -f "$MNT_P1/tsxboot.off"; sync
 
 # 4. U-Boot env through Android's fw_setenv (the same writer Crestron's scripts use on every boot)
 setv() {
-	"$FWS" "$1" "$2" >> "$LOG" 2>&1 || die "fw_setenv $1 failed (env backup: $BK/env-0x100000.bin, p1:tsxenv.bak)"
+	tsx_fw_bound "$FWS" "$1" "$2" >> "$LOG" 2>&1 || die "fw_setenv $1 failed or timed out (env backup: $BK/env-0x100000.bin, p1:tsxenv.bak)"
 	[ "$(tsx_env "$1")" = "$2" ] || die "readback of $1 differs after fw_setenv (restore the env backup with tsx-android-uninstall.sh --restore-env)"
 	log "env $1 set"
 }
@@ -311,7 +311,7 @@ setv() {
 setv boot_retry 0
 setv golden_boot_retry 0
 [ $DEFUSE = 1 ] && [ "$(tsx_env DataRecoveryDone 2>/dev/null)" != 1 ] && setv DataRecoveryDone 1
-"$FWP" > "$BK/fw_printenv-after.txt" 2>&1
+tsx_fw_bound "$FWP" > "$BK/fw_printenv-after.txt" 2>&1
 tsx_env_sane >/dev/null || die "env not sane after the writes: restore $BK/env-0x100000.bin (tsx-android-uninstall.sh --restore-env)"
 log "U-Boot env hook installed ($GUARD)"
 

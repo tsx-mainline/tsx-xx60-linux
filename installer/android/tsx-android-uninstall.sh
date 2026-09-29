@@ -71,11 +71,11 @@ revert)
 	ask "Revert the U-Boot hook and remove p1:tsxboot.img?"
 	if [ "$st" != stock ]; then
 		case "$st" in fallback|nogolden|plain) ;; *) die "switch_bootmode has unknown content; not touching it";; esac
-		run "$FWS" switch_bootmode "$TSX_STOCK_SWITCH"
+		run tsx_fw_bound "$FWS" switch_bootmode "$TSX_STOCK_SWITCH"
 		[ $DRY = 1 ] || [ "$(tsx_env switch_bootmode)" = "$TSX_STOCK_SWITCH" ] || die "switch_bootmode readback differs"
 	fi
-	tsx_env tsx_boot >/dev/null 2>&1 && run "$FWS" tsx_boot
-	run "$FWS" boot_retry 0
+	tsx_env tsx_boot >/dev/null 2>&1 && run tsx_fw_bound "$FWS" tsx_boot
+	run tsx_fw_bound "$FWS" boot_retry 0
 	run rm -f "$M/tsxboot.img" "$M/tsxboot.new" "$M/tsxboot.off" "$M/tsxinst.cfg" "$M/tsxinst.done" "$M/tsxinst.failed"
 	run sync
 	log "done: U-Boot runs stock Android again. p1:tsxenv.bak and /data/local/tsx-backup are kept.";;

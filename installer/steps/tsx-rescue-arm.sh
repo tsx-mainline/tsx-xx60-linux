@@ -164,7 +164,7 @@ dd if="$WHOLE" bs=1048576 count=2 of="$BK/disk-head-2M.bin" 2>/dev/null || die "
 if [ -f "$MNT_P1/boot.img" ] && [ "$GSHA" != "$(sha256sum < "$RESCUE" | cut -d' ' -f1)" ]; then
 	cp "$MNT_P1/boot.img" "$BK/golden-boot.img" && [ "$(sha256sum < "$BK/golden-boot.img" | cut -d' ' -f1)" = "$GSHA" ] || die "golden boot.img backup failed"
 fi
-"$FWP" > "$BK/fw_printenv.txt" 2>&1
+tsx_fw_bound "$FWP" > "$BK/fw_printenv.txt" 2>&1
 (cd "$BK" && sha256sum env-0x100000.bin disk-head-2M.bin fw_printenv.txt $( [ -f golden-boot.img ] && echo golden-boot.img) > SHA256SUMS)
 log "backups in $BK"
 
@@ -206,7 +206,7 @@ rm -f "$MNT_P1/tsxboot.off"; sync
 # is a clean starting point, not a special value). With --guard fallback/
 # nogolden (legacy), boot_retry=$ARM_BOOT_RETRY is still the arm.
 setv() {
-	"$FWS" "$1" "$2" >> "$LOG" 2>&1 || die "fw_setenv $1 failed (env backup: $BK/env-0x100000.bin)"
+	tsx_fw_bound "$FWS" "$1" "$2" >> "$LOG" 2>&1 || die "fw_setenv $1 failed or timed out (env backup: $BK/env-0x100000.bin)"
 	[ "$(tsx_env "$1")" = "$2" ] || die "readback of $1 differs after fw_setenv (env backup: $BK/env-0x100000.bin)"
 	log "env $1 set"
 }
@@ -220,7 +220,7 @@ else
 	setv boot_retry $ARM_BOOT_RETRY
 fi
 [ "$(tsx_env switch_bootmode)" = "$WANT_SWITCH" ] || setv switch_bootmode "$WANT_SWITCH"
-"$FWP" > "$BK/fw_printenv-after.txt" 2>&1
+tsx_fw_bound "$FWP" > "$BK/fw_printenv-after.txt" 2>&1
 tsx_env_sane >/dev/null || die "env not sane after the writes: restore $BK/env-0x100000.bin (dd it back to $WHOLE+0x100000)"
 
 sync

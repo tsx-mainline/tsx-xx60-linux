@@ -10,6 +10,7 @@
 #   TSX_DEVDIR    dir of the block device nodes (default /dev/block on Android, /dev elsewhere)
 #   TSX_BB        busybox binary                (default /system/bin/busybox, else busybox in PATH)
 #   TSX_FWENV     fw_printenv binary            (default /system/bin/fw_printenv, else in PATH)
+#   TSX_FWENV_TIMEOUT   bound on every fw_printenv/fw_setenv call, seconds (default 10)
 
 # ---- the Crestron MBR layout, as shipped from the factory (the Crestron MBR
 # layout notes, from the 2026-09-25 backup) ----
@@ -70,6 +71,31 @@ tsx_pick_fwenv() {
 	FWS=$(dirname "$FWP")/fw_setenv
 	[ -n "$FWP" ] && [ -x "$FWP" ] && [ -x "$FWS" ]
 }
+# tsx_fw_bound CMD ARGS...: run a fw_printenv/fw_setenv invocation bounded by
+# TSX_FWENV_TIMEOUT seconds (default 10). u-boot-tools' fw_env.c read loop
+# treats a short read (EOF) the same as a partial one and never advances, so
+# a config whose declared env size does not match the real device/file size
+# spins the tool at 100% CPU forever instead of erroring out (confirmed on
+# both uboot-tools 2026.07 and Alpine's 2026.04; see docs/boot.md
+# "fw_printenv can hang"). No dependency on a `timeout` binary being on
+# PATH -- not guaranteed on the Android side, where /system/bin/busybox is
+# whatever Crestron bundled: a background job, polled once a second, killed
+# if it is still alive past the bound. Every fw_printenv/fw_setenv call in
+# this file, and any direct call a caller makes with $FWP/$FWS, should go
+# through this.
+tsx_fw_bound() {
+	"$@" &
+	local fwb_pid=$! fwb_n=0
+	while kill -0 "$fwb_pid" 2>/dev/null; do
+		if [ "$fwb_n" -ge "${TSX_FWENV_TIMEOUT:-10}" ]; then
+			kill -9 "$fwb_pid" 2>/dev/null; wait "$fwb_pid" 2>/dev/null
+			echo "tsx_fw_bound: timed out after ${TSX_FWENV_TIMEOUT:-10}s: $*" >&2
+			return 137
+		fi
+		sleep 1; fwb_n=$((fwb_n + 1))
+	done
+	wait "$fwb_pid"
+}
 
 # ---- the boot disk ----
 # tsx_find_disk: sets DISK (e.g. mmcblk0), DEVDIR, P1..P8 device paths and
@@ -124,13 +150,13 @@ tsx_mounts_of() {
 # tsx_env NAME: prints the value, returns 1 if the variable is not set
 tsx_env() {
 	local out
-	out=$("$FWP" ${FWCFG:+-c "$FWCFG"} "$1" 2>/dev/null) || return 1
+	out=$(tsx_fw_bound "$FWP" ${FWCFG:+-c "$FWCFG"} "$1" 2>/dev/null) || return 1
 	case "$out" in "$1="*) printf '%s\n' "${out#"$1="}";; *) return 1;; esac
 }
 # tsx_env_sane: the env block has a valid CRC and is this board's env
 tsx_env_sane() {
 	local all
-	all=$("$FWP" ${FWCFG:+-c "$FWCFG"} 2>&1) || { echo "fw_printenv failed: $all"; return 1; }
+	all=$(tsx_fw_bound "$FWP" ${FWCFG:+-c "$FWCFG"} 2>&1) || { echo "fw_printenv failed or timed out: $all"; return 1; }
 	case "$all" in *[Bb]ad\ [Cc][Rr][Cc]*) echo "env CRC is bad (U-Boot uses its default env)"; return 1;; esac
 	echo "$all" | grep -q '^aml_dt=yushan_one' || { echo "env has no aml_dt=yushan_one*: not a xx60 env"; return 1; }
 	echo "$all" | grep -q '^crestron_uboot_version=' || { echo "env has no crestron_uboot_version"; return 1; }

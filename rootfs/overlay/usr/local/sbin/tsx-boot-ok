@@ -17,6 +17,14 @@ CONF=${TSX_ENV_CONF:-/etc/tsx/uboot-env.conf}   # override for host tests only
 . "$CONF"
 mode=${1:-write}
 die() { echo "tsx-boot-ok: $*" >&2; exit 1; }
+# Every fw_printenv/fw_setenv call below is bounded by `timeout -s KILL`
+# (TSX_FWENV_TIMEOUT, default 10s): u-boot-tools' fw_env.c read loop spins at
+# 100% CPU forever on a config/file size mismatch instead of erroring out
+# (docs/boot.md "fw_printenv can hang"). This runs unattended in the
+# background after every boot (see /etc/init.d/tsx-boot-ok), so a hang here
+# would otherwise burn a CPU core silently forever instead of just failing.
+FWTO=${TSX_FWENV_TIMEOUT:-10}
+FWTO_CMD=; command -v timeout >/dev/null 2>&1 && FWTO_CMD="timeout -s KILL $FWTO"
 
 # find the disk: "emmc" = the MMC-type device that has boot0 hw partitions;
 # "sd" = the SD-class device holding the Crestron MBR or the card layout
@@ -46,7 +54,7 @@ run=${TSX_RUN:-/run}
 cfg=$run/tsx-fw_env.config
 echo "$disk $ENV_OFFSET $ENV_SIZE" > "$cfg"
 readenv() {   # full env text; dies on a read error, a bad CRC or a foreign env
-	out=$(fw_printenv -c "$cfg" 2>&1) || die "fw_printenv failed: $out"
+	out=$($FWTO_CMD fw_printenv -c "$cfg" 2>&1) || die "fw_printenv failed or timed out after ${FWTO}s: $out"
 	echo "$out" | grep -qi 'bad crc' && die "env CRC bad at $disk $ENV_OFFSET: refusing to write"
 	echo "$out" | grep -q '^bootcmd=' && echo "$out" | grep -q '^aml_dt=yushan_one' || die "env at $disk $ENV_OFFSET does not look like the yushan_one U-Boot env"
 	printf '%s\n' "$out"
@@ -76,7 +84,7 @@ if [ -z "$want" ]; then echo "env already good (boot_retry=$br golden_boot_retry
 
 scr=$run/tsx-boot-ok.setenv
 printf '%s' "$want" > "$scr"
-fw_setenv -c "$cfg" -s "$scr" || die "fw_setenv failed (wanted: $names)"
+$FWTO_CMD fw_setenv -c "$cfg" -s "$scr" || die "fw_setenv failed or timed out after ${FWTO}s (wanted: $names)"
 rm -f "$scr"
 # verify: CRC + board check (readenv), new values, every other variable unchanged
 env1=$(readenv)

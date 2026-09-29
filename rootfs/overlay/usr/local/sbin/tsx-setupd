@@ -58,6 +58,7 @@ TSX_CONFIG_BIN = os.environ.get("TSX_CONFIG_BIN", "tsx-config")
 ZONEINFO_DIR = os.environ.get("TSX_ZONEINFO_DIR", "/usr/share/zoneinfo")
 RUN_DIR = os.environ.get("TSX_RUN_DIR", "/run/tsx")
 CONF_PATH = os.environ.get("TSX_SETUP_CONF", "/etc/tsx/setup.conf")
+KIOSK_CONF_PATH = os.environ.get("TSX_KIOSK_CONF", "/etc/kiosk.conf")
 NO_ZEROCONF = os.environ.get("TSX_SETUP_NO_ZEROCONF", "0") == "1"
 
 
@@ -235,6 +236,11 @@ def is_configured():
         now = time.monotonic()
         if now - _configured_cache["at"] > _CONFIGURED_CACHE_S:
             v = tcfg_show().get("KIOSK_URL")
+            if not (v and v.strip()):
+                # the image default the kiosk falls back to (kiosk-session:
+                # /etc/kiosk.conf, then the panel.conf override): an install
+                # with --kiosk-url and no panel.conf sets it only there
+                v = load_conf(KIOSK_CONF_PATH).get("KIOSK_URL")
             _configured_cache["val"] = bool(v and v.strip())
             _configured_cache["at"] = now
         return _configured_cache["val"]
@@ -513,12 +519,16 @@ PAIRING = Pairing()
 SIMPLE_KEYS = ["PANEL_NAME", "TZ_NAME", "VOICE", "WAKE_WORD", "MQTT_HOST",
                "MQTT_PORT", "MQTT_USER", "MQTT_PASSWORD", "SSH_AUTHORIZED_KEY",
                "KERNEL_FLAVOR", "BLANK_TIMEOUT", "ORIENTATION"]
-CLEARABLE_BLANK = {"MQTT_HOST", "MQTT_PORT", "MQTT_USER", "MQTT_PASSWORD"}
+# empty = cleared (the page pre-fills these, so an empty one was cleared on
+# purpose): the key is removed. MQTT_PASSWORD is not one: the page never
+# pre-fills it ("already set; leave blank to keep"), so empty = no change.
+CLEARABLE_BLANK = {"MQTT_HOST", "MQTT_PORT", "MQTT_USER"}
 
 
 def handle_submit(fields):
     errors = {}
     to_set = {}
+    to_unset = []
 
     url = fields.get("KIOSK_URL")
     if not isinstance(url, str) or not url.strip():
@@ -552,7 +562,13 @@ def handle_submit(fields):
             continue
         if val == "":
             if key in CLEARABLE_BLANK:
-                to_set[key] = val
+                # validated like any value, before anything is written: a
+                # set that fails half-way leaves KIOSK_URL written (so the
+                # LAN listener closes) with nothing applied
+                if tcfg_validate(key, val):
+                    to_unset.append(key)    # cleared: remove the key, never KEY=""
+                else:
+                    errors[key] = "invalid value"
             continue
         if not tcfg_validate(key, val):
             errors[key] = "invalid value"
@@ -572,6 +588,8 @@ def handle_submit(fields):
         ok, err = tcfg_set(key, val)
         if not ok:
             errors[key] = err or "failed to save"
+    for key in to_unset:
+        tcfg_unset(key)
     if method == "form":
         tcfg_unset("HA_LOGIN_METHOD")
         tcfg_unset("HA_TOKEN")
@@ -1134,7 +1152,15 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
           $("submit-status").textContent = ($("submit-status").textContent + " " + msg).trim();
         }
       });
-      if (first) first.scrollIntoView({behavior:"smooth", block:"center"});
+      if (Object.keys(errs).length) {
+        $("submit-status").className = "status bad";
+        $("submit-status").textContent = ("Not saved. " + $("submit-status").textContent).trim()
+          + (first ? " Check the field marked in red." : "");
+      }
+      if (first) {
+        var d = first.closest("details"); if (d) d.open = true;
+        first.scrollIntoView({behavior:"smooth", block:"center"});
+      }
     }).catch(function(){
       btn.disabled = false;
       $("submit-status").className = "status bad";
@@ -1209,11 +1235,22 @@ class ServerManager:
                               % (want, PORT, "on" if LAN_ON else "off", WINDOW))
 
     def watch_forever(self):
+        was_open = setup_open_fresh()
         while True:
             try:
                 self.ensure()
             except OSError as e:
                 sys.stderr.write("tsx-setupd: bind failed: %s (retrying)\n" % e)
+            # a reopened window (tsx-config setup / overlay "Setup") that
+            # simply runs out on a configured panel: take the kiosk back to
+            # Home Assistant -- kiosk-session only picks the URL at start,
+            # so without this the page stayed up until the next restart
+            now_open = setup_open_fresh()
+            if was_open and not now_open and is_configured():
+                sys.stderr.write("tsx-setupd: setup window expired: back to Home Assistant\n")
+                clear_setup_open()
+                restart_kiosk()
+            was_open = now_open
             time.sleep(POLL_S)
 
 

@@ -96,6 +96,25 @@ OUT=$(run_arm --rescue "$W/junk.img" --no-reboot); RC=$?
 [ $RC = 1 ] && echo "$OUT" | grep -q "not an Android boot image" && ok "refused" || bad "exit $RC: $OUT"
 grep -qx 'tsx_once=0' "$W/env" && ok "env untouched" || bad "env changed"
 
+echo "== 6. a hung fw_printenv is bounded, it does not hang the script (regression for the fw_env.c CPU-spin bug, docs/boot.md 'fw_printenv can hang')"
+setup "$ONCE"
+cat > "$W/bin/fw_printenv" <<'EOF'
+#!/bin/sh
+# simulates u-boot-tools' fw_env.c spinning forever on a size/file mismatch
+# (a short read hits EOF, read() keeps returning 0): sleep, not busy-spin, is
+# enough to prove the TIMEOUT bound in tsx-arm-from-mainline.sh works, since
+# it wraps the call in `timeout`, which kills either kind of hang the same way.
+exec sleep 300
+EOF
+chmod +x "$W/bin/fw_printenv"
+T0=$(date +%s)
+OUT=$(PATH="$W/bin:$PATH" TSX_TEST_ENV="$W/env" TSX_MNT="$W/p1" TSX_RUN="$W/run" TSX_P1=/dev/null TSX_FWENV_TIMEOUT=3 \
+	bash --posix "$ARM" --no-reboot 2>&1); RC=$?
+T1=$(date +%s)
+[ $RC = 1 ] && ok "exit 1 (not a hang)" || bad "exit $RC: $OUT"
+[ $((T1 - T0)) -le 15 ] && ok "returned within the bounded timeout ($((T1-T0))s), no CPU-spin/hang" || bad "took $((T1-T0))s: the timeout bound did not hold"
+echo "$OUT" | grep -q "cannot read the U-Boot env" && ok "reports the read failure" || bad "message: $OUT"
+
 echo "== $N ok, $F failed"
 [ $F = 0 ] && echo PASS test-arm-from-mainline || echo FAIL test-arm-from-mainline
 exit $F

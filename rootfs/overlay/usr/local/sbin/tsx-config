@@ -151,7 +151,7 @@ val_ok() {
 		return 0;;
 	MQTT_HOST) [ -z "$v" ] && return 0; printf '%s' "$v" | grep -Eq '^[A-Za-z0-9.:_-]+$';;
 	MQTT_PORT) [ -z "$v" ] && return 0; printf '%s' "$v" | grep -Eq '^[0-9]{1,5}$';;
-	MQTT_USER) printf '%s' "$v" | grep -Eq '^[A-Za-z0-9_.@-]*$';;
+	MQTT_USER) [ -z "$v" ] && return 0; printf '%s' "$v" | grep -Eq '^[A-Za-z0-9_.@-]+$';;
 	MQTT_PASSWORD) return 0;;
 	KERNEL_FLAVOR) case "$v" in lts|stable) return 0;; esac; return 1;;
 	# an http(s) mirror, a local directory (a LAN copy on a USB stick), or off
@@ -197,7 +197,7 @@ cfg_get() {
 		found=0
 	done < "$TSX_CONF"
 	[ $found = 0 ] || return 1
-	printf '%s' "$v"
+	printf '%s\n' "$v"
 }
 
 cfg_set() {
@@ -442,6 +442,17 @@ apply() {
 	if [ -n "$oldvsig" ] && [ "$vsig" != "$oldvsig" ] && command -v rc-service >/dev/null 2>&1 \
 		&& rc-service tsx-voice status >/dev/null 2>&1; then
 		rc-service tsx-voice restart >/dev/null 2>&1 || true
+	fi
+	# tsx-buttons reads the kiosk URL (front-key "home", its HA origin) from
+	# kiosk.conf + this override only at start/reload: reload it when the
+	# override changed (e.g. the setup page's first save), not on the first
+	# apply after boot (no signature yet: it has not started).
+	ksig=$(cat "$RUN/kiosk.conf" 2>/dev/null) || ksig=   # no override (no KIOSK_URL/TZ_NAME): set -e
+	kfirst=1; oldksig=; [ -e "$RUN/.kiosk-sig" ] && { kfirst=0; oldksig=$(cat "$RUN/.kiosk-sig"); }
+	printf '%s\n' "$ksig" > "$RUN/.kiosk-sig"
+	if [ "$kfirst" = 0 ] && [ "$ksig" != "$oldksig" ] && command -v rc-service >/dev/null 2>&1 \
+		&& rc-service tsx-buttons status >/dev/null 2>&1; then
+		rc-service tsx-buttons reload >/dev/null 2>&1 || true
 	fi
 
 	apk_repos

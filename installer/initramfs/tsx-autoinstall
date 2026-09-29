@@ -21,6 +21,10 @@
 # Test hooks: TSX_SYSBLOCK TSX_DEVDIR TSX_STICK (stick root, skips USB detection)
 #             TSX_USB_SYSFS (fake /sys/bus/usb/devices) TSX_USB_WAIT TSX_STICK_WAIT
 #             TSX_SHARE TSX_NO_REBOOT=1 TSX_CMDLINE TSX_DT_MODEL TSX_RUN
+#             TSX_FWENV_TIMEOUT: every fw_printenv/fw_setenv call (direct, or
+#             through tsx_env/tsx_env_sane) goes through tsx-lib.sh's
+#             tsx_fw_bound, default 10s (docs/boot.md
+#             "fw_printenv can hang": fw_env.c's read loop can spin at 100% CPU forever)
 SHARE=${TSX_SHARE:-/usr/share/tsx}
 . "$SHARE/tsx-lib.sh"
 RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
@@ -226,7 +230,7 @@ mkdir -p "$BK" || fail "cannot write to the stick"
 dd if="$WHOLE" bs=65536 skip=16 count=1 of="$BK/env-0x100000.bin" 2>/dev/null
 dd if="$WHOLE" bs=1048576 count=2 of="$BK/disk-head-2M.bin" 2>/dev/null
 dd if="$P5" bs=1048576 count=1 of="$BK/p5-head-1M.bin" 2>/dev/null
-[ $ENVOK = 1 ] && "$FWP" -c "$FWCFG" > "$BK/fw_printenv.txt" 2>&1
+[ $ENVOK = 1 ] && tsx_fw_bound "$FWP" -c "$FWCFG" > "$BK/fw_printenv.txt" 2>&1
 blkid "$P5" > "$BK/p5-blkid.txt" 2>&1
 (cd "$BK" && sha256sum * > SHA256SUMS) && sync
 P5SHA=$(sha256sum < "$BK/p5-head-1M.bin" | cut -d' ' -f1)
@@ -248,12 +252,12 @@ if [ $ENVOK = 1 ]; then
 	st=$(tsx_hook_state)
 	case "$st" in
 	stock|fallback|nogolden|plain)
-		[ "$(tsx_env tsx_boot 2>/dev/null)" = "$TSX_BOOT_CMD" ] || "$FWS" -c "$FWCFG" tsx_boot "$TSX_BOOT_CMD"
-		[ "$st" = "$GUARD" ] || "$FWS" -c "$FWCFG" switch_bootmode "$WANT"
-		"$FWS" -c "$FWCFG" boot_retry 0
+		[ "$(tsx_env tsx_boot 2>/dev/null)" = "$TSX_BOOT_CMD" ] || tsx_fw_bound "$FWS" -c "$FWCFG" tsx_boot "$TSX_BOOT_CMD"
+		[ "$st" = "$GUARD" ] || tsx_fw_bound "$FWS" -c "$FWCFG" switch_bootmode "$WANT"
+		tsx_fw_bound "$FWS" -c "$FWCFG" boot_retry 0
 		# on by default (keeps DataRecoveryDone=1 so the golden image does not format
 		# p5 / wipe /data); only DEFUSE_GOLDEN=0 in the stick's tsx-install.conf turns it off
-		[ "$(tsx_conf DEFUSE_GOLDEN "$CONF")" != 0 ] && [ "$(tsx_env DataRecoveryDone 2>/dev/null)" != 1 ] && "$FWS" -c "$FWCFG" DataRecoveryDone 1
+		[ "$(tsx_conf DEFUSE_GOLDEN "$CONF")" != 0 ] && [ "$(tsx_env DataRecoveryDone 2>/dev/null)" != 1 ] && tsx_fw_bound "$FWS" -c "$FWCFG" DataRecoveryDone 1
 		tsx_env_sane >/dev/null 2>&1 && [ "$(tsx_env switch_bootmode)" = "$WANT" ] || fail "env hook readback failed; env backup: $BK/env-0x100000.bin"
 		msg "U-Boot hook: $GUARD";;
 	*) msg "WARNING: switch_bootmode has foreign content, hook not installed";;

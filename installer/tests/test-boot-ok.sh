@@ -11,6 +11,36 @@
 set -euo pipefail
 INSTALLER_DIR=$(cd "$(dirname "$0")/.." && pwd)
 ROOTFS_DIR=$(cd "$INSTALLER_DIR/../rootfs" && pwd)
+
+# == 0. a short/truncated env file fails fast, it does not hang (regression for
+# the fw_env.c CPU-spin bug: u-boot-tools' read loop treats a short read (EOF)
+# the same as a partial one and never advances -- confirmed on both
+# uboot-tools 2026.07 and Alpine's 2026.04; see docs/boot.md
+# "fw_printenv can hang". This one check does not need the real unit captures
+# CAPTURES_DIR needs (below), or ARM emulation: tsx-boot-ok's shell logic is
+# architecture-independent, so a plain x86_64 alpine:latest (u-boot-tools
+# 2026.04-r1, the panel's own version) is enough.
+W0=${TMPDIR:-/tmp}/tsx-bootok-eof-test; rm -rf "$W0"; mkdir -p "$W0"
+trap 'rm -rf "$W0"' EXIT
+cp "$ROOTFS_DIR/overlay/usr/local/sbin/tsx-boot-ok" "$ROOTFS_DIR/overlay/etc/tsx/uboot-env.conf" "$W0/"
+docker run --rm --privileged -v "$W0:/w" alpine:latest sh -euc '
+apk add -q --no-cache u-boot-tools losetup coreutils >/dev/null
+for i in $(seq 0 7); do [ -b /dev/loop$i ] || mknod /dev/loop$i b 7 $i; done
+# a disk that ends 32 KiB into the declared 64 KiB env block: the same
+# size/file mismatch that spins fw_env.c (a short read hits EOF, read() keeps
+# returning 0, the loop never advances) -- confirmed on both uboot-tools
+# 2026.07 and Alpine 2026.04-r1, the panel'"'"'s own version.
+truncate -s $((0x100000 + 0x8000)) /w/short.img
+L=$(losetup -f --show /w/short.img); trap "losetup -d $L" EXIT
+sed "s|^ENV_DISK=.*|ENV_DISK=$L|" /w/uboot-env.conf > /w/conf.trunc
+T0=$(date +%s)
+TSX_ENV_CONF=/w/conf.trunc TSX_RUN=/tmp TSX_FWENV_TIMEOUT=3 sh /w/tsx-boot-ok > /tmp/o 2>&1 && { echo "  FAIL: short env disk accepted"; exit 1; }
+T1=$(date +%s)
+[ $((T1 - T0)) -le 8 ] && echo "  ok: short env disk failed within the bounded timeout ($((T1-T0))s), no CPU-spin hang" || { echo "  FAIL: took $((T1-T0))s: the timeout bound did not hold"; exit 1; }
+grep -qi "timed out\|failed" /tmp/o && echo "  ok: error message names the failure" || { echo "  FAIL: message: $(cat /tmp/o)"; exit 1; }
+echo "PASS test-boot-ok-eof"
+'
+
 CAPTURES=${CAPTURES_DIR:-}
 BFILE=$CAPTURES/tsw-1060-unitB/backup/tsw1060B-mmcblk0-20260926.img
 AFILE=$CAPTURES/tsw-1060/backup/tsw1060-mmcblk0p3-env.img

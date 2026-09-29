@@ -26,6 +26,27 @@ case "${1:-}" in
 esac
 die() { echo "tsx-install-usb: ERROR: $*" >&2; exit 1; }
 say() { echo "tsx-install-usb: $*"; }
+# tsx_fw_bound CMD ARGS...: bound a fw_printenv/fw_setenv call (TSX_FWENV_TIMEOUT
+# seconds, default 10). u-boot-tools' fw_env.c read loop spins at 100% CPU
+# forever on a config/file size mismatch instead of erroring out (confirmed on
+# both uboot-tools 2026.07 and Alpine's 2026.04; see docs/boot.md
+# "fw_printenv can hang"). No `timeout` binary dependency: this runs on
+# whatever shell it was invoked from (Android root shell or a mainline/rescue
+# shell), so it is a background job polled once a second instead.
+tsx_fw_bound() {
+	"$@" &
+	fwb_pid=$!
+	fwb_n=0
+	while kill -0 "$fwb_pid" 2>/dev/null; do
+		if [ "$fwb_n" -ge "${TSX_FWENV_TIMEOUT:-10}" ]; then
+			kill -9 "$fwb_pid" 2>/dev/null; wait "$fwb_pid" 2>/dev/null
+			echo "tsx-install-usb: fw_printenv/fw_setenv timed out after ${TSX_FWENV_TIMEOUT:-10}s: $*" >&2
+			return 137
+		fi
+		sleep 1; fwb_n=$((fwb_n + 1))
+	done
+	wait "$fwb_pid"
+}
 
 [ "$(id -u 2>/dev/null)" = 0 ] || die "not root (ssh -tt admin@<panel> then rootsh, or a UART root console)"
 SUMS=$HERE/tsx-install/SHA256SUMS
@@ -54,8 +75,8 @@ sh "$RECOVERY" enable || die "tsx-usb-recovery enable failed; the stick will not
 FWP=$(command -v fw_printenv 2>/dev/null || echo /system/bin/fw_printenv)
 FWS=$(command -v fw_setenv 2>/dev/null || echo /system/bin/fw_setenv)
 [ -x "$FWS" ] || die "no fw_setenv (in PATH or at /system/bin)"
-if [ "$("$FWP" -n DataRecoveryDone 2>/dev/null)" != "1" ]; then
-	"$FWS" DataRecoveryDone 1 || die "fw_setenv DataRecoveryDone 1 failed"
+if [ "$(tsx_fw_bound "$FWP" -n DataRecoveryDone 2>/dev/null)" != "1" ]; then
+	tsx_fw_bound "$FWS" DataRecoveryDone 1 || die "fw_setenv DataRecoveryDone 1 failed or timed out"
 	say "DataRecoveryDone=1 set"
 else
 	say "DataRecoveryDone already 1"

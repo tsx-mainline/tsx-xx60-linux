@@ -70,6 +70,15 @@ echo "$E3 0x0 0x10000" > "$W/cfg3"
 OUT=$(TSX_RUN="$W" tsx_env_apply "$W/cfg3" "boot_retry 1" 2>&1) && bad "bad CRC accepted" || ok "bad CRC refused"
 echo "$OUT" | grep -qi "bad crc" && ok "error mentions bad CRC"
 
+echo "== 4b. tsx_env_apply: a short/truncated env file fails fast, it does not hang (regression for the fw_printenv CPU spin, docs/boot.md 'fw_printenv can hang')"
+E3B=$W/env3b.bin; mkenv "$E3B" 0 0 0; truncate -s 32768 "$E3B"   # half the declared 0x10000
+echo "$E3B 0x0 0x10000" > "$W/cfg3b"
+T0=$(date +%s)
+OUT=$(TSX_RUN="$W" TSX_FWENV_TIMEOUT=3 tsx_env_apply "$W/cfg3b" "boot_retry 1" 2>&1) && bad "short env file accepted" || ok "short env file refused (not silently accepted)"
+T1=$(date +%s)
+[ $((T1 - T0)) -le 8 ] && ok "short env file failed within the bounded timeout ($((T1-T0))s), no CPU-spin hang" || bad "took $((T1-T0))s: the timeout bound did not hold"
+echo "$OUT" | grep -qi "timed out\|failed" && ok "error message names the failure"
+
 echo "== 5. tsx_mbr_fold: 0x05 -> 0x83, readback verified"
 D=$W/disk.bin; python3 -c "open('$D','wb').write(b'\0'*512)"
 printf '\5' | dd of="$D" bs=1 seek=498 conv=notrunc 2>/dev/null

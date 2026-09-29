@@ -26,6 +26,8 @@ run set KIOSK_URL "https://ha.example.org/lovelace/default_view?a=1&b=2" || bad 
 run set MQTT_PASSWORD 'p@ss "word" with \backslash\ and a $dollar `tick and spaces' || bad "set MQTT_PASSWORD"
 [ "$(run get MQTT_PASSWORD)" = 'p@ss "word" with \backslash\ and a $dollar `tick and spaces' ] && ok "quotes/backslash/\$/backtick round-trip" || bad "MQTT_PASSWORD round-trip"
 [ "$(stat -c '%a' "$CFG")" = 600 ] && ok "file mode 600" || bad "file mode not 600"
+RAW=$(run get KIOSK_URL; echo x)
+case "$RAW" in *$'\n'x) ok "get ends its output with a trailing newline";; *) bad "get output has no trailing newline";; esac
 
 echo "== comments and blank lines are tolerated =="
 printf '\n# a comment\nPANEL_NAME="Comment-Test"\n' >> "$CFG"

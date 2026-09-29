@@ -71,9 +71,14 @@ pr_dd() {
 # mid-transfer.
 tsx_env_apply() {
 	local cfg=$1 want=$2 names env0 env1 n v out lockdir=${TSX_RUN:-/run}
+	local fwto=${TSX_FWENV_TIMEOUT:-10}
+	local fwto_cmd=; command -v timeout >/dev/null 2>&1 && fwto_cmd="timeout -s KILL $fwto"
 	# -l "$lockdir": same lock-directory override installer/emmc/tsx-usb-recovery
 	# uses, needed for host tests (root on the real panel can always lock /run).
-	out=$(fw_printenv -c "$cfg" -l "$lockdir" 2>&1) || { echo "tsx_env_apply: ERROR: fw_printenv failed: $out"; return 1; }
+	# $fwto_cmd bounds the call: u-boot-tools' fw_env.c read loop spins at 100%
+	# CPU forever on a size/file mismatch instead of erroring out (see
+	# docs/boot.md "fw_printenv can hang").
+	out=$($fwto_cmd fw_printenv -c "$cfg" -l "$lockdir" 2>&1) || { echo "tsx_env_apply: ERROR: fw_printenv failed or timed out after ${fwto}s: $out"; return 1; }
 	echo "$out" | grep -qi 'bad crc' && { echo "tsx_env_apply: ERROR: env CRC bad ($cfg): refusing to write"; return 1; }
 	env0=$out
 	names=$(printf '%s\n' "$want" | awk 'NF{print $1}' | tr '\n' ' ')
@@ -86,10 +91,10 @@ tsx_env_apply() {
 	if [ "$ok" = 1 ]; then echo "tsx_env_apply: env already matches (nothing written): $names"; return 0; fi
 	local scr; scr=$(mktemp "$lockdir/tsx-env-apply.XXXXXX" 2>/dev/null) || scr=$lockdir/tsx-env-apply.$$
 	printf '%s\n' "$want" > "$scr"
-	fw_setenv -c "$cfg" -l "$lockdir" -s "$scr" >/dev/null 2>&1; local rc=$?
+	$fwto_cmd fw_setenv -c "$cfg" -l "$lockdir" -s "$scr" >/dev/null 2>&1; local rc=$?
 	rm -f "$scr"
-	[ $rc = 0 ] || { echo "tsx_env_apply: ERROR: fw_setenv failed (wanted: $names)"; return 1; }
-	env1=$(fw_printenv -c "$cfg" -l "$lockdir" 2>&1) || { echo "tsx_env_apply: ERROR: fw_printenv (readback) failed: $env1"; return 1; }
+	[ $rc = 0 ] || { echo "tsx_env_apply: ERROR: fw_setenv failed or timed out after ${fwto}s (wanted: $names)"; return 1; }
+	env1=$($fwto_cmd fw_printenv -c "$cfg" -l "$lockdir" 2>&1) || { echo "tsx_env_apply: ERROR: fw_printenv (readback) failed or timed out after ${fwto}s: $env1"; return 1; }
 	echo "$env1" | grep -qi 'bad crc' && { echo "tsx_env_apply: ERROR: env CRC bad after the write: $cfg"; return 1; }
 	for n in $names; do
 		v=$(printf '%s\n' "$want" | awk -v n="$n" '$1==n{ $1=""; sub(/^ /,""); print; exit }')

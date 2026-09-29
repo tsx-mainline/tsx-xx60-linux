@@ -63,6 +63,19 @@ grep -q '^command_user="tsx-setup:tsx-setup"$' "$HERE/overlay/etc/init.d/tsx-set
 grep -q 'adduser -D -H -s /sbin/nologin.*tsx-setup' "$HERE/mkrootfs.sh" \
 	&& ok "mkrootfs.sh creates the tsx-setup system user" \
 	|| bad "mkrootfs.sh does not create a tsx-setup user"
+for s in tsx-setup-helper tsx-setupd; do
+	grep -E '^for s in networking .* kiosk ' "$HERE/mkrootfs.sh" | grep -qw "$s" \
+		&& ok "mkrootfs.sh enables $s in the default runlevel" \
+		|| bad "mkrootfs.sh does not enable $s in the default runlevel (no setup page on the panel)"
+done
+grep -q 'checkpath -f -o tsx-setup:tsx-setup .*/var/log/tsx-setupd.log' "$HERE/overlay/etc/init.d/tsx-setupd" \
+	&& ok "init.d/tsx-setupd gives tsx-setup its own log file (supervise-daemon opens it as that user)" \
+	|| bad "init.d/tsx-setupd: no tsx-setup-owned /var/log/tsx-setupd.log (the daemon exits 1 on the panel)"
+for k in $(sed -n 's/^\([A-Z_]*\)=.*/\1/p' "$HERE/overlay/etc/tsx/setup.conf"); do
+	grep -q "\"$k\"" "$SETUPD" \
+		&& ok "setup.conf key $k is read by tsx-setupd" \
+		|| bad "setup.conf key $k is not read by tsx-setupd (a dead knob)"
+done
 
 # ---- fixtures -------------------------------------------------------------
 mkdir -p "$T/run" "$T/bin" "$T/zoneinfo/America"
@@ -238,7 +251,7 @@ for _ in $(seq 1 50); do grep -q "listening on" "$T/helper.log" 2>/dev/null && b
 grep -q "listening on" "$T/helper.log" 2>/dev/null || { echo "FAIL: tsx-setup-helper did not start"; cat "$T/helper.log"; exit 1; }
 
 TSX_CONFIG_BIN="$T/bin/tsx-config" TSX_RUN_DIR="$RUNDIR" TSX_ZONEINFO_DIR="$T/zoneinfo" \
-TSX_SETUP_CONF="$T/setup.conf" TSX_SETUP_NO_ZEROCONF=1 \
+TSX_SETUP_CONF="$T/setup.conf" TSX_SETUP_NO_ZEROCONF=1 TSX_KIOSK_CONF="$T/kiosk.conf" \
 	python3 "$SETUPD" > "$T/setupd.log" 2>&1 &
 SETUPD_PID=$!
 for _ in $(seq 1 50); do grep -q "listening on" "$T/setupd.log" 2>/dev/null && break; sleep 0.1; done
@@ -360,7 +373,10 @@ print(json.dumps({
 	'HA_LOGIN_METHOD': 'token', 'HA_TOKEN': '$TOKEN_VAL',
 	'PANEL_NAME': 'test-panel-1', 'TZ_NAME': 'America/Denver', 'VOICE': 'on', 'WAKE_WORD': 'okay_nabu',
 	'ORIENTATION': 'portrait',
-	'ROOT_PASSWORD': '$ROOTPW', 'SSH_AUTHORIZED_KEY': '$SSHKEY'
+	'ROOT_PASSWORD': '$ROOTPW', 'SSH_AUTHORIZED_KEY': '$SSHKEY',
+	# the rest exactly as the page sends an untouched field: empty strings
+	'MQTT_HOST': '', 'MQTT_PORT': '', 'MQTT_USER': '', 'MQTT_PASSWORD': '',
+	'KERNEL_FLAVOR': '', 'BLANK_TIMEOUT': ''
 }))
 ")
 out=$(call POST /setup/api/submit --data "$SUBMIT")
@@ -370,6 +386,8 @@ grep -q '^PANEL_NAME="test-panel-1"$' "$CONF" && ok "PANEL_NAME landed in panel.
 grep -q '^ORIENTATION="portrait"$' "$CONF" && ok "ORIENTATION landed in panel.conf" || bad "ORIENTATION missing"
 [ "$(cat "$T/prefix/etc/tsx/orientation" 2>/dev/null)" = portrait ] && ok "apply left /etc/tsx/orientation (portrait) in the prefix" || bad "no orientation file after apply"
 grep -q '^HA_TOKEN=' "$CONF" && ok "HA_TOKEN was written" || bad "HA_TOKEN missing"
+grep -Eq '^MQTT_(HOST|PORT|USER)=' "$CONF" && bad "cleared MQTT fields were written as KEY=\"\" instead of removed" || ok "cleared MQTT host/port/user are removed from panel.conf"
+[ "$(TSX_CONF="$CONF" busybox sh "$TSXCONFIG" get MQTT_PASSWORD)" = "$PAYLOAD" ] && ok "an empty MQTT password field keeps the stored one (leave blank to keep)" || bad "an empty MQTT password field changed the stored password"
 [ -s "$FAKE_CHPASSWD_LOG" ] && grep -qF "root:$ROOTPW" "$FAKE_CHPASSWD_LOG" && ok "chpasswd received the new root password over stdin" || bad "chpasswd did not get the password"
 grep -q '^ROOT_PASSWORD_HASH=' "$CONF" && ok "the resulting hash was mirrored into panel.conf (ROOT_PASSWORD_HASH)" || bad "ROOT_PASSWORD_HASH missing from panel.conf"
 grep -qF "$ROOTPW" "$CONF" && bad "the plaintext root password ended up in panel.conf" || ok "panel.conf holds the hash, not the plaintext password"
@@ -430,7 +448,11 @@ if [ -n "$LANIP" ]; then
 	out=$(call GET /setup --source "$LANIP")
 	[ "$(status_of "$out")" = 200 ] && ok "LAN reachable again during the reopened window" || bad "LAN still refused during the reopened window: $(status_of "$out")"
 fi
+KR0=$(grep -c 'kiosk-restart' "$T/helper.log" 2>/dev/null || true)
 sleep 7
+KR1=$(grep -c 'kiosk-restart' "$T/helper.log" 2>/dev/null || true)
+[ "$KR1" -gt "$KR0" ] && ok "the expired window asks the helper to restart the kiosk (back to Home Assistant)" || bad "window expired but the kiosk was not restarted (setup page stays up): $KR0 -> $KR1"
+[ ! -e "$RUNDIR/setup-open" ] && ok "the expired window's flag is removed" || bad "setup-open left behind after expiry"
 RESOLVED2=$(PATH="$T/bin:$PATH" TSX_SETUP_CONF="$T/setup.conf" TSX_RUN_DIR="$RUNDIR" busybox sh "$KIOSKURL" "https://ha.example.org/lovelace/0")
 [ "$RESOLVED2" = "https://ha.example.org/lovelace/0" ] && ok "the reopened window expires (tsx-kiosk-url), unaffected by the broken date the whole time" || bad "window did not expire: $RESOLVED2"
 for _ in $(seq 1 20); do
@@ -446,6 +468,20 @@ fi
 echo "== tsx-kiosk-url: unconfigured always shows setup =="
 R=$(TSX_SETUP_CONF="$T/setup.conf" TSX_RUN_DIR="$RUNDIR" busybox sh "$KIOSKURL" "")
 [ "$R" = "http://127.0.0.1:$PORT/setup" ] && ok "empty KIOSK_URL -> setup page" || bad "empty KIOSK_URL did not trigger setup: $R"
+
+# ---- 9. a URL only in /etc/kiosk.conf (install --kiosk-url, no panel.conf) is configured too
+echo "== is_configured: panel.conf KIOSK_URL, else /etc/kiosk.conf's =="
+isconf() {  # isconf PANEL_CONF_URL KIOSK_CONF_TEXT -> True/False
+	printf '%s\n' "$2" > "$T/kiosk-ic.conf"
+	TSX_KIOSK_CONF="$T/kiosk-ic.conf" TSX_SETUP_CONF="$T/setup.conf" TSX_RUN_DIR="$T/ic-run" TSX_SETUP_NO_ZEROCONF=1 \
+		python3 -c 'import sys, importlib.machinery as m
+d = m.SourceFileLoader("setupd", sys.argv[1]).load_module()
+d.tcfg_show = lambda: {"KIOSK_URL": sys.argv[2]} if sys.argv[2] else {}
+print(d.is_configured())' "$SETUPD" "$1" 2>/dev/null
+}
+[ "$(isconf "" 'KIOSK_URL=""')" = False ] && ok "no URL anywhere: unconfigured" || bad "no URL anywhere should be unconfigured"
+[ "$(isconf "" 'KIOSK_URL="https://ha.example.org"')" = True ] && ok "URL only in /etc/kiosk.conf: configured (LAN setup closed)" || bad "a kiosk.conf URL left the panel unconfigured (LAN setup open while the kiosk shows HA)"
+[ "$(isconf "https://ha.example.org" '# KIOSK_URL="https://x.example.org"')" = True ] && ok "panel.conf URL: configured" || bad "panel.conf URL should be configured"
 
 echo "== $N ok, $F failed =="
 [ "$F" = 0 ] && echo PASS test-setup || echo FAIL test-setup

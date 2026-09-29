@@ -5,9 +5,11 @@
 #     matrix, fbcon rotation, slide direction), the configured name from the
 #     file (missing / junk = landscape), the sway lines, and `apply` (swaymsg
 #     on every sway socket of the kiosk user, a stale one is skipped);
-#   - the touch matrix agrees with the picture: tsx-splash draws a marker at
-#     a frame position, turned onto the LCD (fbpng), and a touch on the LCD
-#     where the marker shows maps back to that frame position;
+#   - touch agrees with the picture: tsx-splash draws a marker at a frame
+#     position, turned onto the LCD (fbpng), and a touch on the LCD where the
+#     marker shows maps back to that frame position through the touch matrix
+#     and then the output transform, the way wlroots applies it to a touch
+#     device mapped to an output (measured on a TSS-10 with injected touches);
 #   - kiosk-session puts the sway lines into the session config, the
 #     initramfs gets the same tsx-orientation;
 #   - tsx-overlay's layout (tsx-overlay-layout.h) on the four outputs
@@ -26,8 +28,8 @@ o() { TSX_ORIENTATION_FILE=$T/none busybox sh "$ORI" "$@"; }
 
 echo "== the table =="
 busybox sh -n "$ORI" && ok "busybox sh -n" || bad "busybox sh -n"
-for row in "landscape 0 normal 1_0_0_0_1_0 0" "portrait 3 270 0_-1_1_1_0_0 0" \
-	"landscape-flipped 2 180 -1_0_1_0_-1_1 1" "portrait-flipped 1 90 0_1_0_-1_0_1 1"; do
+for row in "landscape 0 normal 1_0_0_0_1_0 0" "portrait 3 270 1_0_0_0_1_0 0" \
+	"landscape-flipped 2 180 1_0_0_0_1_0 1" "portrait-flipped 1 90 1_0_0_0_1_0 1"; do
 	set -- $row
 	got=$(o info "$1" | tr '\n' ' ')
 	want="ORIENTATION=$1 ROTATE=$2 SWAY_TRANSFORM=$3 TOUCH_MATRIX=\"$(echo "$4" | tr _ ' ')\" FBCON_ROTATE=$2 SLIDE_INVERT=$5 "
@@ -45,7 +47,7 @@ echo portrait-flipped > "$T/o1"
 printf 'upside-down\n' > "$T/o2"; : > "$T/o3"
 [ "$(busybox sh "$ORI" -f "$T/o2" get)/$(busybox sh "$ORI" -f "$T/o3" get)" = landscape/landscape ] && ok "junk or empty file: landscape" || bad "junk file"
 [ "$(busybox sh "$ORI" -f "$T/o1" sway)" = "output * transform 90
-input type:touch calibration_matrix 0 1 0 -1 0 1" ] && ok "sway lines for the configured name" || bad "sway: $(busybox sh "$ORI" -f "$T/o1" sway)"
+input type:touch calibration_matrix 1 0 0 0 1 0" ] && ok "sway lines for the configured name" || bad "sway: $(busybox sh "$ORI" -f "$T/o1" sway)"
 
 echo "== apply: every sway socket of the kiosk user =="
 me=$(id -un); uid=$(id -u)
@@ -63,7 +65,7 @@ ap() { TSX_ORIENTATION_FILE=$1 TSX_SWAYMSG=$T/bin/swaymsg TSX_RUN_USER_DIR=$T/ru
 echo portrait > "$T/o4"
 msg=$(ap "$T/o4")
 [ "$(cat "$T/swaymsg.log")" = "sway-ipc.$uid.100.sock output * transform 270
-sway-ipc.$uid.100.sock input type:touch calibration_matrix 0 -1 1 1 0 0" ] && ok "portrait: transform 270 + touch matrix on the live socket, the stale one skipped" || bad "swaymsg: $(cat "$T/swaymsg.log")"
+sway-ipc.$uid.100.sock input type:touch calibration_matrix 1 0 0 0 1 0" ] && ok "portrait: transform 270 + identity touch matrix on the live socket, the stale one skipped" || bad "swaymsg: $(cat "$T/swaymsg.log")"
 case "$msg" in *"turned to portrait"*) ok "says so";; *) bad "message: $msg";; esac
 : > "$T/swaymsg.log"; ap "$T/none" >/dev/null
 grep -q 'transform normal' "$T/swaymsg.log" && grep -q 'calibration_matrix 1 0 0 0 1 0' "$T/swaymsg.log" && ok "back to landscape: explicit normal + identity" || bad "landscape: $(cat "$T/swaymsg.log")"
@@ -77,7 +79,7 @@ grep -q 'overlay/usr/local/bin/tsx-orientation" \$R/usr/sbin/tsx-orientation' "$
 grep -q 'tsx-orientation -f /newroot/etc/tsx/orientation info' "$HERE/rootfs/initramfs/overlay/init" && ok "/init reads the orientation from the mounted root" || bad "/init does not read the orientation"
 
 CC=${CC:-gcc}
-echo "== touch matrix vs the turned splash (CC=$CC) =="
+echo "== touch (matrix + output transform) vs the turned splash (CC=$CC) =="
 $CC -O2 -Wall -Wextra -Werror -o "$T/tsx-splash" "$HERE/rootfs/src/tsx-splash.c"
 mkdir -p "$T/d"
 # frames with an 11x11 white marker centred on (105, 205), upright
@@ -94,7 +96,8 @@ PY
 for v in landscape portrait landscape-flipped portrait-flipped; do
 	"$T/tsx-splash" -d "$T/d" -g 1280x800 -o "$v" -p -1 fbpng "$T/fb-$v.png"
 	m=$(o info "$v" | sed -n 's/^TOUCH_MATRIX="\(.*\)"$/\1/p')
-	res=$(python3 - "$T/fb-$v.png" "$m" <<'PY'
+	tr=$(o info "$v" | sed -n 's/^SWAY_TRANSFORM=//p')
+	res=$(python3 - "$T/fb-$v.png" "$m" "$tr" <<'PY'
 import struct, sys, zlib
 b = open(sys.argv[1], 'rb').read()
 o, idat = 8, b''
@@ -109,8 +112,11 @@ pts = [(x, y) for y in range(h) for x in range(w)
 cx = sum(p[0] for p in pts) / len(pts) + 0.5; cy = sum(p[1] for p in pts) / len(pts) + 0.5
 a, bb, c, d, e, f = map(float, sys.argv[2].split())
 x, y = cx / w, cy / h                    # the touch where the marker shows, raw 0..1
-lx, ly = a * x + bb * y + c, d * x + e * y + f
-turned = sys.argv[2].split()[0] == '0'   # a quarter turn: the frame is 800x1280
+lx, ly = a * x + bb * y + c, d * x + e * y + f   # libinput calibration
+# wlroots then turns the touch by the output transform (sway maps the
+# touchscreen to the built-in output); measured on the panel:
+lx, ly = {'normal': (lx, ly), '90': (ly, 1 - lx), '180': (1 - lx, 1 - ly), '270': (1 - ly, lx)}[sys.argv[3]]
+turned = sys.argv[3] in ('90', '270')    # a quarter turn: the frame is 800x1280
 fw, fh = (h, w) if turned else (w, h)
 print('%dx%d %d %.1f %.1f' % (w, h, len(pts), lx * fw, ly * fh))
 PY

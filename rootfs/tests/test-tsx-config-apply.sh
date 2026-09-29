@@ -100,8 +100,12 @@ set_ HA_API_KEY "$KEY" >/dev/null; applyp
 grep -qF -- "$KEY" "$FX/run/tsx/esphome.conf" "$FX/run/tsx/.esphome-sig" "$FX/run/tsx/.voice-sig" 2>/dev/null && bad "the key leaked into a world-readable file" || ok "the key is in no world-readable file"
 [ "$(restarts)" = 4 ] && ok "a new HA_API_KEY restarts tsx-esphome" || bad "HA_API_KEY: $(restarts) tsx-esphome restarts"
 [ "$(vrestarts)" = 2 ] && ok "a new HA_API_KEY restarts tsx-voice" || bad "HA_API_KEY: $(vrestarts) tsx-voice restarts"
+breloads() { grep -c 'tsx-buttons reload' "$W/rc.log" 2>/dev/null || true; }
+b0=$(breloads)
 set_ KIOSK_URL "https://ha.example.org/third" >/dev/null; applyp
 [ "$(restarts)/$(vrestarts)" = 4/2 ] && ok "a KIOSK_URL change restarts neither" || bad "KIOSK_URL change: $(restarts)/$(vrestarts) restarts"
+[ "$(breloads)" = $((b0 + 1)) ] && ok "a KIOSK_URL change reloads tsx-buttons (front-key home URL)" || bad "KIOSK_URL change: $(breloads) tsx-buttons reloads (was $b0)"
+applyp; [ "$(breloads)" = $((b0 + 1)) ] && ok "an unchanged apply does not reload tsx-buttons" || bad "unchanged apply reloaded tsx-buttons ($(breloads))"
 OUT=$(TSX_CONF="$CFG" busybox sh "$SCRIPT" show 2>&1)
 case "$OUT" in *"$KEY"*) bad "show prints HA_API_KEY";; *"HA_API_KEY=********"*) ok "show masks HA_API_KEY";; *) bad "show does not list HA_API_KEY";; esac
 TSX_CONF="$CFG" busybox sh "$SCRIPT" unset HA_API_KEY >/dev/null; applyp
@@ -201,6 +205,17 @@ set_ ORIENTATION landscape >/dev/null; applyo
 set_ ORIENTATION landscape-flipped >/dev/null; applyo
 TSX_CONF="$CFG" busybox sh "$SCRIPT" unset ORIENTATION >/dev/null; applyo
 [ ! -e "$FX/etc/tsx/orientation" ] && [ "$(lives)" = 5 ] && ok "unset again: file removed, kiosk turned back" || bad "unset: $(lives)"
+echo "== unconfigured panel (no KIOSK_URL, no TZ_NAME): apply runs to the end =="
+CFG2="$W/panel-unconf.conf"; FX2="$W/fx-unconf"; mkdir -p "$FX2/run" "$FX2/etc"
+printf '# header only\nKERNEL_FLAVOR="stable"\n' > "$CFG2"
+rm -f "$W/rc.log"
+out=$(PATH="$W/bin:$PATH" env TSX_CONF="$CFG2" TSX_RUN="$FX2/run" TSX_STATE_DIR="$FX2/var/lib/tsx" TSX_APPLY_PREFIX="$FX2" TSX_APPLY_ALLOW_NONROOT=1 busybox sh "$SCRIPT" apply 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "apply exits 0 with no kiosk override" || bad "apply exit $rc with no kiosk override (set -e)"
+case "$out" in *"apply done"*) ok "apply reached its end (apply done)";; *) bad "apply stopped early: $(printf '%s' "$out" | tail -1)";; esac
+[ -e "$FX2/run/tsx/.kiosk-sig" ] && ok "the kiosk signature exists after the first apply" || bad "no .kiosk-sig after the first apply"
+TSX_CONF="$CFG2" busybox sh "$SCRIPT" set KIOSK_URL https://ha.example.org >/dev/null
+PATH="$W/bin:$PATH" env TSX_CONF="$CFG2" TSX_RUN="$FX2/run" TSX_STATE_DIR="$FX2/var/lib/tsx" TSX_APPLY_PREFIX="$FX2" TSX_APPLY_ALLOW_NONROOT=1 busybox sh "$SCRIPT" apply >/dev/null 2>&1
+grep -q 'tsx-buttons reload' "$W/rc.log" 2>/dev/null && ok "the first KIOSK_URL (setup page save) reloads tsx-buttons" || bad "first KIOSK_URL did not reload tsx-buttons"
 
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-tsx-config-apply || echo FAIL test-tsx-config-apply

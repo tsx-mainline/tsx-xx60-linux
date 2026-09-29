@@ -61,7 +61,15 @@ start() {
 		if [ -n "$disk" ] && [ -b "$disk" ] && [ -n "${ENV_OFFSET:-}" ] && [ "$ENV_OFFSET" != TODO ]; then
 			cfg=${TSX_RUN:-/run}/tsx-fw_env.config
 			echo "$disk $ENV_OFFSET ${ENV_SIZE:-0x10000}" > "$cfg"
-			out=$(fw_printenv -c "$cfg" 2>/dev/null) || out=
+			# Bounded: this runs before networking/syslog in the main boot
+			# sequence (see "depend" above), so a hang here would stall the
+			# WHOLE boot. u-boot-tools' fw_env.c read loop spins at 100% CPU
+			# forever on a config/size mismatch instead of erroring out
+			# (docs/boot.md "fw_printenv can hang"); fail soft (fall
+			# through to <model>-<MAC>, or tsx-kiosk) instead of hanging boot.
+			fwto=${TSX_FWENV_TIMEOUT:-10}
+			fwto_cmd=; command -v timeout >/dev/null 2>&1 && fwto_cmd="timeout -s KILL $fwto"
+			out=$($fwto_cmd fw_printenv -c "$cfg" 2>/dev/null) || { out=; ewarn "fw_printenv failed or timed out after ${fwto}s: falling back to <model>-<MAC>/tsx-kiosk"; }
 			lh=$(printf '%s\n' "$out" | sed -n 's/^lan_hostname=//p')
 			pn=$(printf '%s\n' "$out" | sed -n 's/^product_name=//p')
 		fi

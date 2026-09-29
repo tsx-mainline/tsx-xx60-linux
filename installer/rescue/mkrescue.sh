@@ -22,15 +22,15 @@ d = open(sys.argv[1], 'rb').read(); h = struct.unpack_from('<8s10I', d, 0); asse
 ks, rs, ps = h[1], h[3], h[8]; pad = lambda n: (n + ps - 1) // ps * ps
 open(sys.argv[2], 'wb').write(d[ps + pad(ks): ps + pad(ks) + rs])
 PY
-mkdir -p "$W/base"; (cd "$W/base" && zcat "$W/base-rd.gz" | cpio -id --quiet init etc/inittab usr/sbin/tsx-autoinstall 2>/dev/null) || true
+mkdir -p "$W/base"; (cd "$W/base" && zcat "$W/base-rd.gz" | cpio -id --quiet init etc/inittab etc/init.d/rcS usr/sbin/tsx-autoinstall 2>/dev/null) || true
 grep -q '/etc/tsx/rescue-image' "$W/base/init" || { echo "BASE's /init has no rescue-image check: rebuild the initramfs after integrate.sh"; exit 1; }
+grep -q 'ethaddr' "$W/base/etc/init.d/rcS" 2>/dev/null || { echo "BASE's rcS does not set the eth0 MAC from the U-Boot env: rebuild the initramfs"; exit 1; }
 R=$W/ov; mkdir -p "$R"; cp -a "$HERE/overlay/." "$R/"
 install -D -m 755 "$ROOTFS_DIR/overlay/usr/local/sbin/tsx-boot-ok" "$R/usr/local/sbin/tsx-boot-ok"
 install -D -m 644 "$ROOTFS_DIR/overlay/etc/tsx/uboot-env.conf" "$R/etc/tsx/uboot-env.conf"
 grep -q '^ENV_VERIFIED=yes' "$R/etc/tsx/uboot-env.conf" || { echo "uboot-env.conf not verified"; exit 1; }
 { cat "$W/base/etc/inittab"; echo "::once:/usr/sbin/tsx-rescue banner"; } > "$R/etc/inittab"
 chmod 755 "$R/usr/sbin/tsx-rescue"
-[ -f "$R/etc/init.d/rcS" ] && chmod 755 "$R/etc/init.d/rcS"
 (cd "$R" && find . -mindepth 1 | sort | cpio -o -H newc -R 0:0 --quiet | gzip -9n) > "$W/ov.gz"
 cat "$W/base-rd.gz" "$W/ov.gz" > "$W/rd.gz"
 python3 "$INSTALLER_DIR/initramfs/repack-bootimg.py" "$BASE" "$W/rd.gz" "$OUT"

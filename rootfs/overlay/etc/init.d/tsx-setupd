@@ -19,4 +19,9 @@ depend() {
 	after tsx-idled tsx-config tsx-setup-helper
 	before kiosk
 }
-start_pre() { checkpath -d -m 0755 /run/tsx; }
+# supervise-daemon opens output_log as command_user: without a log file that
+# user may write (/var/log is root's), the daemon exits 1 before it runs.
+start_pre() {
+	checkpath -d -m 0755 /run/tsx
+	checkpath -f -o tsx-setup:tsx-setup -m 0640 /var/log/tsx-setupd.log
+}

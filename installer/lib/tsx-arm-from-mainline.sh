@@ -28,7 +28,13 @@
 # --no-reboot) on success; exit 1 with a reason otherwise.
 # Test hooks: TSX_P1 (vfat p1 device), TSX_ENV_CFG_LINE (fw_env.config line),
 # TSX_MNT (mount point), TSX_RUN (dir for the env config file).
+# TSX_FWENV_TIMEOUT bounds every fw_printenv/fw_setenv call below (default
+# 10s): u-boot-tools' fw_env.c read loop spins at 100% CPU forever on a
+# size/file mismatch instead of erroring out (docs/boot.md
+# "fw_printenv can hang").
 set -u
+FWTO=${TSX_FWENV_TIMEOUT:-10}
+FWTO_CMD=; command -v timeout >/dev/null 2>&1 && FWTO_CMD="timeout -s KILL $FWTO"
 SRC= REBOOT=1
 while [ $# -gt 0 ]; do case "$1" in
 	--rescue) SRC=$2; shift;; --no-reboot) REBOOT=0;;
@@ -44,7 +50,7 @@ sha() { sha256sum < "$1" | cut -d' ' -f1; }
 
 # 1. the env and the hook, read only
 echo "${TSX_ENV_CFG_LINE:-/dev/mmcblk0 0x100000 0x10000}" > "$CFG" || fail "cannot write $CFG"
-sw=$(fw_printenv -c "$CFG" -l "$RUN" -n switch_bootmode 2>/dev/null) || fail "cannot read the U-Boot env"
+sw=$($FWTO_CMD fw_printenv -c "$CFG" -l "$RUN" -n switch_bootmode 2>/dev/null) || fail "cannot read the U-Boot env (failed or timed out after ${FWTO}s)"
 case "$sw" in *tsx_boot*) ;; *) fail "the U-Boot hook (tsx_boot) is not installed: the reboot would not reach the rescue";; esac
 case "$sw" in *tsx_once*) GUARD=once;; *) GUARD=boot_retry;; esac
 
@@ -80,11 +86,11 @@ sync
 
 # 3. arm: tsx_once=1 with the once guard (the boot_retry guard needs nothing)
 if [ "$GUARD" = once ]; then
-	fw_setenv -c "$CFG" -l "$RUN" tsx_once 1 || fail "fw_setenv tsx_once 1 failed"
-	[ "$(fw_printenv -c "$CFG" -l "$RUN" -n tsx_once 2>/dev/null)" = 1 ] || fail "tsx_once=1 did not take"
+	$FWTO_CMD fw_setenv -c "$CFG" -l "$RUN" tsx_once 1 || fail "fw_setenv tsx_once 1 failed or timed out after ${FWTO}s"
+	[ "$($FWTO_CMD fw_printenv -c "$CFG" -l "$RUN" -n tsx_once 2>/dev/null)" = 1 ] || fail "tsx_once=1 did not take"
 	echo "tsx_once=1 armed (one rescue boot)"
 else
-	echo "hook: boot_retry=$(fw_printenv -c "$CFG" -l "$RUN" -n boot_retry 2>/dev/null) (runs tsx_boot while < 6)"
+	echo "hook: boot_retry=$($FWTO_CMD fw_printenv -c "$CFG" -l "$RUN" -n boot_retry 2>/dev/null) (runs tsx_boot while < 6)"
 fi
 sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 echo "p1:tsxboot.img = rescue $g"
