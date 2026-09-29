@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+# On-panel first-boot setup page (docs/rootfs.md "Setup page"). Runs as the
+# unprivileged "tsx-setup" system user (created by mkrootfs.sh next to
+# "kiosk"), NOT root: unlike tsx-mqtt/tsx-esphome, this daemon parses HTTP
+# from the LAN before any pairing has happened, so it gets no root at all --
+# every privileged action (reading/writing panel.conf, chpasswd) goes
+# through tsx-setup-helper, the one root process with a fixed, validated
+# command set (rootfs/overlay/usr/local/sbin/tsx-setup-helper).
+description="On-panel setup page (tsx-setupd)"
+supervisor=supervise-daemon
+command=/usr/local/sbin/tsx-setupd
+command_user="tsx-setup:tsx-setup"
+respawn_delay=3
+respawn_max=0
+output_log=/var/log/tsx-setupd.log
+error_log=/var/log/tsx-setupd.log
+depend() {
+	need net
+	after tsx-idled tsx-config tsx-setup-helper
+	before kiosk
+}
+start_pre() { checkpath -d -m 0755 /run/tsx; }

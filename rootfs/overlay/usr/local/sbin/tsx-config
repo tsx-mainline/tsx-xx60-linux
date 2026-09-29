@@ -1,12 +1,16 @@
 #!/bin/sh
 # tsx-config: read/write the panel's one configuration file and apply it to
 # the running services. Same script on the panel, in host-side installer
-# tooling (TSX_CONF pointed at a build-time file) and, later, an on-panel
-# setup page (PLAN.md section 16 item 3) can drive it -- busybox ash and
+# tooling (TSX_CONF pointed at a build-time file) and the on-panel setup page
+# (tsx-setupd, docs/rootfs.md "Setup page") can drive it -- busybox ash and
 # plain POSIX sh only (`busybox sh -n`), no bash-only syntax.
 #
 #   tsx-config get KEY            print the value (empty + exit 1 if unset)
 #   tsx-config set KEY VALUE      validate + write (creates the file/dir)
+#   tsx-config validate KEY VALUE same checks as set, exit status only, never
+#                                  writes (the setup page validates a field
+#                                  before it is ever submitted; a stray/
+#                                  unknown key is also "invalid", never dies)
 #   tsx-config unset KEY          remove a key
 #   tsx-config show               print every set key (secrets masked)
 #   tsx-config apply              (panel, root) regenerate the small
@@ -16,6 +20,10 @@
 #                                  (hostname, root password, ssh key, voice
 #                                  enable/disable). Run by the tsx-config
 #                                  OpenRC service early at boot.
+#   tsx-config setup               (panel, root) show the on-panel setup page
+#                                  for one ~15 min window even if KIOSK_URL is
+#                                  already set (touches /run/tsx/setup-open;
+#                                  restarts the kiosk service if it is up).
 #
 # File: $TSX_CONF (default /data/tsx/panel.conf) -- KEY="value" lines, one
 # setting per line, '#' comments, blank lines. It is NEVER `.` sourced by a
@@ -62,7 +70,7 @@ PREFIX=${TSX_APPLY_PREFIX:-}
 KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT BOOT_VERBOSE ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 SECRET_KEYS="HA_TOKEN HA_API_KEY MQTT_PASSWORD ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 
-usage() { sed -n '2,16p' "$0" >&2; exit 2; }
+usage() { sed -n '2,26p' "$0" >&2; exit 2; }
 die() { echo "tsx-config: ERROR: $*" >&2; exit 2; }
 log() { echo "tsx-config: $*" >&2; }
 
@@ -468,13 +476,39 @@ apply() {
 	log "apply done"
 }
 
+# setup: force the on-panel setup page (tsx-setupd) up for one ~15 min window
+# even if the panel is already configured -- the CLI form of the "Setup"
+# overlay entry (tsx-panelctl's "setup" command, PLAN.md section 16 item 3).
+# Only touches a runtime flag (kiosk-session/tsx-kiosk-url and tsx-setupd all
+# read its age); never edits panel.conf.
+#
+# Monotonic (seconds since boot, /proc/uptime), NOT date +%s: the panel has
+# no RTC, so it boots with a stale clock that NTP steps by months once
+# chrony syncs (docs/boot.md); a wall-clock timestamp written just before
+# that step would read as instantly expired or good for months, either way
+# wrong. /run is tmpfs, so a reboot (a new boot, a new uptime epoch) always
+# clears this file anyway.
+setup() {
+	[ "${TSX_APPLY_ALLOW_NONROOT:-0}" = 1 ] || [ "$(id -u)" = 0 ] || die "setup must run as root"
+	mkdir -p "$RUN"
+	(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 0) > "$RUN/setup-open"
+	log "local setup page enabled for about 15 minutes (/run/tsx/setup-open)"
+	if command -v rc-service >/dev/null 2>&1 && rc-service kiosk status >/dev/null 2>&1; then
+		rc-service kiosk restart >/dev/null 2>&1 \
+			&& log "kiosk restarted: showing it now" \
+			|| log "kiosk restart failed; it will show at the next kiosk (re)start"
+	fi
+}
+
 CMD=${1:-}
 [ $# -ge 1 ] && shift || true
 case "$CMD" in
 get) [ $# = 1 ] || usage; key_known "$1" || die "unknown key: $1"; cfg_get "$1" || exit 1;;
 set) [ $# = 2 ] || usage; cfg_set "$1" "$2";;
+validate) [ $# = 2 ] || usage; key_known "$1" && val_ok "$1" "$2" || exit 1;;
 unset) [ $# = 1 ] || usage; key_known "$1" || die "unknown key: $1"; cfg_unset "$1";;
 show) [ $# = 0 ] || usage; cfg_show;;
 apply) [ $# = 0 ] || usage; apply;;
+setup) [ $# = 0 ] || usage; setup;;
 *) usage;;
 esac

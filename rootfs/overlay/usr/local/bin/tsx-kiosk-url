@@ -1,0 +1,48 @@
+#!/bin/sh
+# tsx-kiosk-url CURRENT_URL: prints the URL kiosk-session should load.
+#
+# CURRENT_URL is whatever kiosk-session has already resolved from
+# /etc/kiosk.conf, panel.conf's KIOSK_URL override (tsx-config apply) and a
+# front-key choice (/run/tsx/kiosk-url) -- this script does not read any of
+# those itself. It prints CURRENT_URL back unchanged UNLESS:
+#
+#   - it is empty (nothing configured at all: /etc/kiosk.conf ships with an
+#     empty KIOSK_URL on purpose, docs/rootfs.md "Setup page"), or
+#   - /run/tsx/setup-open is fresh (`tsx-config setup` / the overlay "Setup"
+#     entry, for one ~15 min window, even on an already-configured panel)
+#
+# in which case it prints the local setup page's own URL (tsx-setupd)
+# instead. Never touches panel.conf or any other state; a pure function of
+# its argument and /run/tsx/setup-open, so it is trivial to test standalone
+# (rootfs/tests/test-setup.sh) without dragging in the rest of kiosk-session
+# (compositor, GPU probing, Chromium flags...).
+#
+# Env overrides for tests: TSX_RUN_DIR, TSX_SETUP_CONF (both also used by
+# tsx-config/tsx-setupd, so a test fixture directory works for all three).
+#
+# The flag's age is compared in monotonic time (seconds since boot,
+# /proc/uptime), never date +%s: the panel has no RTC, so it boots with a
+# stale clock that NTP steps by months once chrony syncs; a wall-clock
+# comparison spanning that step would read as instantly expired or good for
+# months. /run is tmpfs, so a reboot always starts both the flag and the
+# uptime clock fresh together.
+set -u
+cur=${1:-}
+conf=${TSX_SETUP_CONF:-/etc/tsx/setup.conf}
+[ -r "$conf" ] && . "$conf"
+: "${TSX_SETUP_PORT:=8080}" "${TSX_SETUP_WINDOW:=900}"
+flag=${TSX_RUN_DIR:-/run/tsx}/setup-open
+open=0
+if [ -s "$flag" ]; then
+	at=$(cat "$flag" 2>/dev/null); at=${at:-0}
+	case "$at" in *[!0-9]*|'') at=0;; esac
+	now=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 0)
+	if [ "$at" != 0 ] && [ $((now - at)) -ge 0 ] && [ $((now - at)) -le "$TSX_SETUP_WINDOW" ]; then
+		open=1
+	fi
+fi
+if [ -z "$cur" ] || [ "$open" = 1 ]; then
+	printf 'http://127.0.0.1:%s/setup\n' "$TSX_SETUP_PORT"
+else
+	printf '%s\n' "$cur"
+fi

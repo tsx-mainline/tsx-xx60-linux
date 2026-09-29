@@ -9,9 +9,10 @@
 #                      (also done automatically by "kernel" when BUILD_DIR/.config
 #                      is missing or the fragment is newer)
 #          kernel   : zImage dtbs modules
-#          image    : copy zImage + board DTB to OUT_DIR, write kernel.release
+#          image    : copy zImage + board DTBs (TSW-1060, and TSW-760 when the
+#                     kernel has it) to OUT_DIR, write kernel.release
 #                     + kernel.commit, and pack OUT_DIR/test.img with
-#                     kernel/mkimage.sh (adds an initrd if
+#                     kernel/mkimage.sh --board-dtbs (adds an initrd if
 #                     rootfs/out/initramfs-switchroot.cpio.gz has been built)
 #          cmd "<make args>" : any make target in the build dir
 #          stats    : ccache statistics (only with CCACHE=1)
@@ -118,14 +119,16 @@ while [ $# -gt 0 ]; do
 	kernel) if [ ! -f "$B/.config" ] || ! cmp -s "$FRAG" "$B/.tsx-frag.stamp"; then config; fi
 		run "set -e; $MK -j$J zImage dtbs modules";;
 	image)	cp "$B/arch/arm/boot/zImage" "$OUT/zImage"; cp "$DTB" "$OUT/"
+		DTB760=$(dirname "$DTB")/meson8m2-crestron-tsw760.dtb DTBS_OUT=$(basename "$DTB")
+		if [ -f "$DTB760" ]; then cp "$DTB760" "$OUT/"; DTBS_OUT="$DTBS_OUT $(basename "$DTB760")"; else rm -f "$OUT/$(basename "$DTB760")"; fi
 		cp "$B/include/config/kernel.release" "$OUT/kernel.release"
 		case "$(cat "$OUT/kernel.release")" in *-g[0-9a-f]*) ;; *)
 			echo "kbuild: WARNING: kernel release '$(cat "$OUT/kernel.release")' has no -g<commit> suffix (git not usable in the build container?)";; esac
 		git -C "$LINUX_DIR" rev-parse HEAD > "$OUT/kernel.commit"
 		INITRD=$REPO/rootfs/out/initramfs-switchroot.cpio.gz
 		INITRD_ARG=; [ -f "$INITRD" ] && INITRD_ARG="--initrd $INITRD"
-		run "$REPO/kernel/mkimage.sh --kernel $OUT/zImage --dtb $OUT/$(basename "$DTB") $INITRD_ARG --out $OUT/test.img"
-		(cd "$OUT" && sha256sum zImage "$(basename "$DTB")" test.img > sha256sums.txt)
+		run "$REPO/kernel/mkimage.sh --kernel $OUT/zImage --board-dtbs $OUT $INITRD_ARG --out $OUT/test.img"
+		(cd "$OUT" && sha256sum zImage $DTBS_OUT test.img > sha256sums.txt)
 		ls -l "$OUT";;
 	cmd)	run "$MK $1"; shift;;
 	stats)	run "ccache -s";;

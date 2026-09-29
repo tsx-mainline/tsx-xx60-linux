@@ -64,6 +64,7 @@ jobs:
           path: |
             ../out-${{ matrix.flavor }}/zImage
             ../out-${{ matrix.flavor }}/meson8m2-crestron-tsw1060.dtb
+            ../out-${{ matrix.flavor }}/meson8m2-crestron-tsw760.dtb
             ../out-${{ matrix.flavor }}/kernel.release
             ../out-${{ matrix.flavor }}/kernel.commit
             ../out-${{ matrix.flavor }}/sha256sums.txt
@@ -399,6 +400,7 @@ jobs:
           for f in lts stable; do
             cp release/k-$f/zImage release/out/zImage-$f
             cp release/k-$f/meson8m2-crestron-tsw1060.dtb release/out/meson8m2-crestron-tsw1060-$f.dtb
+            if [ -f release/k-$f/meson8m2-crestron-tsw760.dtb ]; then cp release/k-$f/meson8m2-crestron-tsw760.dtb release/out/meson8m2-crestron-tsw760-$f.dtb; fi
             cp release/k-$f/kernel.release release/out/kernel.release-$f
             cp release/k-$f/kernel.commit release/out/kernel.commit-$f
           done

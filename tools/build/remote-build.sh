@@ -224,7 +224,9 @@ kernel)
 	to=${DEST:-$(dirname "$wt")/out-$FLAVOR}
 	rout=$(dirname "$rwt")/out-$FLAVOR
 	say "artifacts:"
-	maybe_pull "$to" "$rout/zImage" "$rout/meson8m2-crestron-tsw1060.dtb" "$rout/test.img" "$rout/kernel.release" "$rout/kernel.commit";;
+	maybe_pull "$to" "$rout/zImage" "$rout/meson8m2-crestron-tsw1060.dtb" "$rout/test.img" "$rout/kernel.release" "$rout/kernel.commit"
+	# the TSW-760 DTB exists from the kernel commit that added its DTS on
+	if rsh "test -e $rout/meson8m2-crestron-tsw760.dtb"; then maybe_pull "$to" "$rout/meson8m2-crestron-tsw760.dtb"; fi;;
 rootfs)
 	push_common; push_rootfs
 	if [ $MODS = 1 ]; then

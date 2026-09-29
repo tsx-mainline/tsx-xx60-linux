@@ -237,6 +237,13 @@ addgroup -S render 2>/dev/null || true
 adduser -D -H -h /var/lib/kiosk -s /sbin/nologin -g "kiosk browser" kiosk
 for g in video input seat render audio; do addgroup kiosk $g 2>/dev/null || true; done
 mkdir -p /var/lib/kiosk && chown kiosk:kiosk /var/lib/kiosk
+# on-panel setup page (docs/rootfs.md "Setup page"): deliberately its OWN
+# unprivileged user, not "kiosk" -- it parses HTTP from the LAN before any
+# pairing has happened, a smaller and different trust boundary than the
+# always-unsandboxed browser, and it never needs kiosk's video/input/audio
+# group access. No home directory; talks to root only through
+# tsx-setup-helper's FIFOs (group tsx-setup, created by that service).
+adduser -D -H -s /sbin/nologin -g "on-panel setup page" tsx-setup
 for s in devfs dmesg udev udev-trigger udev-settle; do rc-update add $s sysinit; done
 for s in root localmount tsx-data tsx-config modules sysctl hostname bootmisc syslog swclock seedrng tsx-setup tsx-hostname udev-postmount machine-id; do
 	[ -e /etc/init.d/$s ] && rc-update add $s boot || echo "no service $s"

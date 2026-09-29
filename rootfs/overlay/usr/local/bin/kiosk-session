@@ -21,6 +21,12 @@ set -u
 [ -r /run/tsx/kiosk.conf ] && . /run/tsx/kiosk.conf
 # URL chosen with a front-panel key when DevTools is off (tsx-buttons, NAV_FALLBACK=restart)
 [ -s /run/tsx/kiosk-url ] && KIOSK_URL=$(cat /run/tsx/kiosk-url)
+# On-panel setup page when nothing is configured yet, or for ~15 min after
+# `tsx-config setup` / the overlay "Setup" entry (docs/rootfs.md "Setup
+# page"); tsx-kiosk-url is a pure function of its argument and
+# /run/tsx/setup-open, kept out of this script so it can be tested standalone
+# (rootfs/tests/test-setup.sh) rather than inlined here.
+KIOSK_URL=$(/usr/local/bin/tsx-kiosk-url "${KIOSK_URL:-}")
 : "${KIOSK_URL:=https://ha.example.org}" "${KIOSK_GPU:=auto}" "${KIOSK_SCALE:=1.0}"
 : "${KIOSK_PROFILE:=/var/lib/kiosk/chromium}" "${KIOSK_EXTRA_FLAGS:=}" "${KIOSK_DEVTOOLS:=0}"
 : "${KIOSK_OSK:=squeekboard}" "${KIOSK_OSK_HEIGHT:=300}"
@@ -29,6 +35,25 @@ export XDG_RUNTIME_DIR=/run/user/$(id -u)
 export HOME=/var/lib/kiosk
 log() { [ "$ROLE" = session ] && echo "kiosk-session: $*" >&2; }
 case "$KIOSK_OSK" in squeekboard|wvkbd|off) ;; *) log "unknown KIOSK_OSK=$KIOSK_OSK, using off"; KIOSK_OSK=off;; esac
+
+# Boot race: tsx-kiosk-url picked the local setup page, but tsx-setupd (its
+# own OpenRC service) may not have bound its port yet this early in boot.
+# Bounded wait (about 10s) with a heartbeat log line, so a slow-starting
+# setup service does not show a browser connection-refused error page --
+# tsx-kiosk-reveal's own chrome-error retry (docs/boot.md) only covers the
+# sway+DevTools path, not KIOSK_OSK=off / KIOSK_DEVTOOLS=0.
+case "$KIOSK_URL" in
+http://127.0.0.1:*/setup)
+	port=${KIOSK_URL#http://127.0.0.1:}; port=${port%%/*}
+	i=0
+	while [ $i -lt 50 ]; do
+		curl -s -o /dev/null -m 1 "http://127.0.0.1:$port/setup" 2>/dev/null && break
+		[ $((i % 10)) = 0 ] && log "waiting for the setup page on 127.0.0.1:$port..."
+		i=$((i + 1)); sleep 0.2
+	done
+	[ $i -lt 50 ] || log "setup page still not reachable on 127.0.0.1:$port after ~10s, loading it anyway"
+	;;
+esac
 
 # --- renderer selection -------------------------------------------------
 # Primary path: drm/meson KMS (display) + Lima (render node), GLES2 in cage

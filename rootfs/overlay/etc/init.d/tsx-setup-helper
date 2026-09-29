@@ -1,0 +1,16 @@
+#!/sbin/openrc-run
+# Privileged command FIFO for the unprivileged on-panel setup page
+# (tsx-setupd). docs/rootfs.md "Setup page".
+description="Privileged helper for the on-panel setup page (tsx-setupd)"
+supervisor=supervise-daemon
+command=/usr/local/sbin/tsx-setup-helper
+respawn_delay=2
+respawn_max=0
+output_log=/var/log/tsx-setup-helper.log
+error_log=/var/log/tsx-setup-helper.log
+depend() {
+	need localmount
+	after tsx-config
+	before tsx-setupd
+}
+start_pre() { checkpath -d -m 0755 /run/tsx; }

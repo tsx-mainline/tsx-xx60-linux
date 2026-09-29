@@ -15,6 +15,7 @@
 #   mkimage.sh --kernel zImage --dtb board.dtb [--initrd initrd.cpio.gz] [--cmdline ".."] \
 #              [--append-dtb] --out boot.img
 #   mkimage.sh --kernel zImage --dtbs name=path.dtb[,name=path.dtb...] [...] --out boot.img
+#   mkimage.sh --kernel zImage --board-dtbs DIR [...] --out boot.img
 #   mkimage.sh --uimage uImage [--second second.bin] [--initrd ramdisk] --out boot.img
 #   mkimage.sh --selftest        (repack the stock boot.img and compare byte for byte,
 #                                  plus a multi-DTB "AML_" container round-trip check)
@@ -24,16 +25,25 @@
 # selected at runtime by the vendor U-Boot's env aml_dt (see aml_dt.c / aml-dt.py header
 # comment). Each name is "soc_platform_variant", e.g. yushan_one_10inch. Mutually
 # exclusive with --dtb and incompatible with --append-dtb (which needs a single flat FDT).
+#
+# --board-dtbs DIR is the one xx60 boot image for every panel size: the container from
+# DIR/meson8m2-crestron-tsw1060.dtb and DIR/meson8m2-crestron-tsw760.dtb, one entry per
+# aml_dt value U-Boot may hold (board_dtbs below). U-Boot boots nothing when no entry
+# matches its aml_dt (aml_dt.c returns the container itself), so the "old" variants of
+# the vendor container get the DTB of their panel size, the same DTB a plain FDT gave
+# them before. A DIR without the TSW-760 DTB (a kernel older than the TSW-760 DTS) gives
+# the plain TSW-1060 FDT, as before.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 LOADADDR=0x00208000          # = Meson TEXT_OFFSET, same as stock uImage
-KERNEL= DTB= DTBS= UIMAGE= SECOND= INITRD= OUT= CMDLINE= APPEND=0 SELFTEST=0
+KERNEL= DTB= DTBS= UIMAGE= SECOND= INITRD= OUT= CMDLINE= APPEND=0 SELFTEST=0 BOARD_DIR=
 
 while [ $# -gt 0 ]; do
   case $1 in
     --kernel) KERNEL=$2; shift;;
     --dtb) DTB=$2; shift;;
     --dtbs) DTBS=$2; shift;;
+    --board-dtbs) BOARD_DIR=$2; shift;;
     --uimage) UIMAGE=$2; shift;;
     --second) SECOND=$2; shift;;
     --initrd) INITRD=$2; shift;;
@@ -45,6 +55,21 @@ while [ $# -gt 0 ]; do
   esac; shift
 done
 
+# board_dtbs DIR: the --dtbs list for the xx60 panels (aml_dt variant -> DTB)
+board_dtbs() {
+  local d10=$1/meson8m2-crestron-tsw1060.dtb d7=$1/meson8m2-crestron-tsw760.dtb
+  echo "yushan_one_10inch=$d10,yushan_one_7inch=$d7,yushan_one_old10inch=$d10,yushan_one_old7inch=$d7"
+}
+if [ -n "$BOARD_DIR" ]; then
+  [ -z "$DTB" ] && [ -z "$DTBS" ] || { echo "--board-dtbs excludes --dtb and --dtbs" >&2; exit 1; }
+  [ -f "$BOARD_DIR/meson8m2-crestron-tsw1060.dtb" ] || { echo "--board-dtbs: no $BOARD_DIR/meson8m2-crestron-tsw1060.dtb" >&2; exit 1; }
+  if [ -f "$BOARD_DIR/meson8m2-crestron-tsw760.dtb" ]; then
+    DTBS=$(board_dtbs "$BOARD_DIR")
+  else
+    echo "mkimage.sh: no TSW-760 DTB in $BOARD_DIR: plain TSW-1060 FDT" >&2
+    DTB=$BOARD_DIR/meson8m2-crestron-tsw1060.dtb
+  fi
+fi
 if [ -n "$DTB" ] && [ -n "$DTBS" ]; then
   echo "--dtb and --dtbs are mutually exclusive" >&2; exit 1
 fi
@@ -79,22 +104,19 @@ if [ $SELFTEST = 1 ]; then
   mkbootimg "$HERE/stock/kernel.uImage" "$HERE/stock/ramdisk.img" "$HERE/stock/second" "" "$TMP/re.img" >/dev/null
   cmp "$STOCK" "$TMP/re.img" && echo "selftest OK: repacked stock boot.img is byte-identical"
 
-  # Multi-DTB container path (--dtbs): pack our TSW-1060 DTB under yushan_one_10inch,
-  # and again under yushan_one_7inch as a TSW-760 placeholder (a future TSW-760 DTS/DTB
-  # will supply the real 7-inch entry there), then unpack and confirm both entries
-  # round-trip intact.
-  TSW1060_DTB=$HERE/out/meson8m2-crestron-tsw1060.dtb
+  # Multi-DTB container path (--dtbs): pack the TSW-1060 and TSW-760 DTBs (the
+  # TSW-1060 one twice when there is no TSW-760 DTB in out/), then unpack and
+  # confirm both entries round-trip intact.
+  TSW1060_DTB=$HERE/out/meson8m2-crestron-tsw1060.dtb TSW760_DTB=$HERE/out/meson8m2-crestron-tsw760.dtb
+  [ -f "$TSW760_DTB" ] || TSW760_DTB=$TSW1060_DTB
   if [ -f "$TSW1060_DTB" ]; then
     python3 "$HERE/aml-dt.py" pack \
       --entry yushan_one_10inch="$TSW1060_DTB" \
-      --entry yushan_one_7inch="$TSW1060_DTB" \
+      --entry yushan_one_7inch="$TSW760_DTB" \
       "$TMP/dtbs.img" >/dev/null
     python3 "$HERE/aml-dt.py" unpack "$TMP/dtbs.img" "$TMP/dtbs-out" >/dev/null
-    SRC_HASH=$(sha256sum "$TSW1060_DTB" | cut -d' ' -f1)
-    H10=$(sha256sum "$TMP/dtbs-out/yushan_one_10inch.dtb" | cut -d' ' -f1)
-    H7=$(sha256sum "$TMP/dtbs-out/yushan_one_7inch.dtb" | cut -d' ' -f1)
-    [ "$SRC_HASH" = "$H10" ] && [ "$SRC_HASH" = "$H7" ] || {
-      echo "selftest FAILED: --dtbs container round-trip hash mismatch" >&2; exit 1; }
+    cmp -s "$TSW1060_DTB" "$TMP/dtbs-out/yushan_one_10inch.dtb" && cmp -s "$TSW760_DTB" "$TMP/dtbs-out/yushan_one_7inch.dtb" || {
+      echo "selftest FAILED: --dtbs container round-trip mismatch" >&2; exit 1; }
     echo "selftest OK: --dtbs container (yushan_one_10inch + yushan_one_7inch) round-trips intact"
   else
     echo "selftest SKIPPED: --dtbs check ($TSW1060_DTB not found)" >&2

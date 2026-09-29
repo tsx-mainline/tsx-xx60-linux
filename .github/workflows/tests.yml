@@ -56,6 +56,8 @@ jobs:
         run: rootfs/tests/test-tsx-config-apply.sh
       - name: rootfs/tests/test-panelctl.sh - reject hostile/malformed FIFO input
         run: rootfs/tests/test-panelctl.sh
+      - name: rootfs/tests/test-setup.sh - on-panel setup page, LAN pairing, form validation, secrets never echoed
+        run: rootfs/tests/test-setup.sh
       - name: rootfs/tests/test-esphome.sh - one Home Assistant device over the ESPHome API, plaintext and encrypted, both front ends
         run: rootfs/tests/test-esphome.sh
       - name: rootfs/tests/test-build-modules.sh - both flavors' module trees staged

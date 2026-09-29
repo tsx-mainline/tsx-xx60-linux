@@ -37,6 +37,7 @@ jobs:
           path: |
             ../out-${{ matrix.flavor }}/zImage
             ../out-${{ matrix.flavor }}/meson8m2-crestron-tsw1060.dtb
+            ../out-${{ matrix.flavor }}/meson8m2-crestron-tsw760.dtb
             ../out-${{ matrix.flavor }}/test.img
             ../out-${{ matrix.flavor }}/kernel.release
             ../out-${{ matrix.flavor }}/kernel.commit

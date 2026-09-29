@@ -5,7 +5,8 @@
 # them with the existing root-only CLIs (tsx-ledbar, tsx-keypad, tsx-blank,
 # tsx-config, reboot) or writes the runtime override files they use. Its
 # second client is the quick-settings overlay (tsx-overlay, also user kiosk):
-# brightness-offset, als, blank, reload-page.
+# brightness-offset, als, blank, reload-page, setup (the "Setup" button,
+# docs/rootfs.md "Setup page").
 #
 # WHY THIS EXISTS: the voice satellite (tsx-voice / linux-voice-assistant)
 # runs as user kiosk (group kiosk, + audio), not root -- an always-on process that both talks to
@@ -144,6 +145,14 @@ handle() {
 		if [ -z "$a1$a2$a3$a4$rest" ]; then
 			log "update-install requested"; "$UPDATE_BIN" now &
 		else reject "update-install $a1 $a2 $a3 $a4 $rest"; fi;;
+	setup)
+		# the quick-settings overlay's "Setup" button (tsx-overlay.c):
+		# reopen the on-panel setup page for one ~15 min window even on
+		# an already-configured panel, same as `tsx-config setup` over
+		# ssh (docs/rootfs.md "Setup page").
+		if [ -z "$a1$a2$a3$a4$rest" ]; then
+			log "setup requested"; "$CONFIG" setup
+		else reject "setup $a1 $a2 $a3 $a4 $rest"; fi;;
 	'') ;;
 	*) reject "$cmd $a1 $a2 $a3 $a4 $rest";;
 	esac

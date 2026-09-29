@@ -1,0 +1,170 @@
+#!/bin/sh
+# tsx-setup-helper: the ONLY privileged surface for tsx-setupd (the
+# unprivileged on-panel/LAN setup page, docs/rootfs.md "Setup page"). Runs
+# as root, reads fixed, whitelisted commands from a FIFO group-writable by
+# "tsx-setup" (tsx-setupd's own, unprivileged, user -- deliberately NOT
+# "kiosk": the setup page is a different, smaller trust boundary than the
+# always-unsandboxed browser tsx-panelctl already has to assume is hostile),
+# and runs them with tsx-config or chpasswd. tsx-setupd itself never reads
+# or writes panel.conf (mode 600, root-owned -- see docs/rootfs.md "Panel
+# configuration") and never runs a shell built from what a form submits;
+# every value here is still only ever handed to tsx-config/chpasswd as a
+# separate argv element or over stdin, never interpolated into a command
+# string.
+#
+# Protocol: one line per request on the REQ fifo, "CMD REST" (read -r cmd
+# rest: REST is everything after the first space, spaces included, never
+# re-split); one line per reply on the RESP fifo, "ok[ TEXT]" or
+# "err MESSAGE". Commands (the fixed, whitelisted set; anything else is
+# logged -- name sanitized/capped the same way tsx-panelctl logs a rejected
+# line -- and refused):
+#
+#   show                 tsx-config show (secrets already masked there)
+#   set KEY VALUE         tsx-config set KEY VALUE (VALUE may be empty, or
+#                          contain anything including shell metacharacters
+#                          -- tsx-config's own per-key regex is what accepts
+#                          or refuses it, same as any other caller; KEY/VALUE
+#                          validity is NOT re-checked here -- tsx-setupd
+#                          already calls the unprivileged `tsx-config
+#                          validate` first, which needs no root at all)
+#   unset KEY             tsx-config unset KEY
+#   apply                 tsx-config apply
+#   setup                 tsx-config setup (reopen the window)
+#   kiosk-restart          rc-service kiosk restart, only if it is running
+#                          (a save loads the freshly-configured URL now)
+#   clear-setup-open       rm -f $TSX_RUN_DIR/setup-open (a save turns the
+#                          reopened window off again, same as it expiring)
+#   rootpw PASSWORD       chpasswd (PASSWORD over its stdin, never argv),
+#                          then mirrors the resulting /etc/shadow hash into
+#                          ROOT_PASSWORD_HASH the same way tsx-config apply
+#                          already does for that key
+#
+# Env overrides for tests: TSX_RUN_DIR, TSX_SETUP_HELPER_REQ,
+# TSX_SETUP_HELPER_RESP, TSX_CONFIG_BIN, TSX_CHPASSWD_BIN, TSX_SHADOW_FILE,
+# TSX_RCSERVICE_BIN, TSX_SETUP_HELPER_ONESHOT=1 (handle exactly one request
+# then exit; tests only), TSX_APPLY_ALLOW_NONROOT (passed through to
+# tsx-config, tests only).
+set -u
+R=${TSX_RUN_DIR:-/run/tsx}
+REQ=${TSX_SETUP_HELPER_REQ:-$R/setup-helper}
+RESP=${TSX_SETUP_HELPER_RESP:-$R/setup-helper.resp}
+CONFIG=${TSX_CONFIG_BIN:-tsx-config}
+CHPASSWD=${TSX_CHPASSWD_BIN:-chpasswd}
+SHADOW=${TSX_SHADOW_FILE:-/etc/shadow}
+RCSERVICE=${TSX_RCSERVICE_BIN:-rc-service}
+ONESHOT=${TSX_SETUP_HELPER_ONESHOT:-0}
+
+log() { echo "$(date '+%F %T') tsx-setup-helper: $*"; }
+# only for logging a hostile/malformed COMMAND NAME (never applied to a
+# reply payload -- tsx-config's own output legitimately contains the \1
+# line separator "show" below uses, which this would otherwise strip).
+safe() { printf '%s' "$1" | tr -d '\000-\010\013-\037\177' | cut -c1-200; }
+
+# One reply per request, always -- a caller blocked reading RESP must never
+# be left hanging because a branch below forgot to answer. Written to fd 4,
+# our OWN permanent read+write handle on RESP (opened below): that makes
+# every write here complete at once (a FIFO write only blocks when NO
+# process has it open for reading, and we always do), so a tsx-setupd that
+# crashed or timed out mid-transaction can never hang this loop for the
+# next, unrelated request -- the worst case is one stale reply sitting in
+# the pipe for tsx-setupd's NEXT transaction to discard (it drains RESP
+# before every request it sends, see the client side). Reply content is
+# never sanitized: always this script's own trusted output (tsx-config's
+# stdout/stderr, or a fixed message), sent back over a FIFO only tsx-setupd
+# (this same machine) reads -- secrets are masked by tsx-config show itself,
+# before this ever sees them.
+reply_ok() { printf 'ok%s\n' "${1:+ $1}" >&4; }
+reply_err() { printf 'err %s\n' "$1" >&4; }
+
+handle() {
+	cmd=$1; rest=$2
+	case "$cmd" in
+	show)
+		[ -z "$rest" ] || { reply_err "show takes no arguments"; return; }
+		# one RESP line: tsx-config show's newlines become \1 (never
+		# produced by tsx-config itself), decoded back by tsx-setupd.
+		out=$("$CONFIG" show 2>&1) && reply_ok "$(printf '%s' "$out" | tr '\n' '\1')" \
+			|| reply_err "tsx-config show failed"
+		;;
+	set)
+		key=${rest%% *}
+		case "$rest" in *" "*) val=${rest#* };; *) val=;; esac
+		[ -n "$key" ] || { reply_err "set: missing key"; return; }
+		log "set $key"
+		if out=$("$CONFIG" set "$key" "$val" 2>&1); then reply_ok
+		else reply_err "$out"; fi
+		;;
+	unset)
+		key=$rest
+		case "$key" in *" "*|"") reply_err "unset: bad key"; return;; esac
+		log "unset $key"
+		if out=$("$CONFIG" unset "$key" 2>&1); then reply_ok
+		else reply_err "$out"; fi
+		;;
+	apply)
+		[ -z "$rest" ] || { reply_err "apply takes no arguments"; return; }
+		log "apply"
+		if out=$("$CONFIG" apply 2>&1); then reply_ok
+		else reply_err "$out"; fi
+		;;
+	setup)
+		[ -z "$rest" ] || { reply_err "setup takes no arguments"; return; }
+		log "setup"
+		if out=$("$CONFIG" setup 2>&1); then reply_ok
+		else reply_err "$out"; fi
+		;;
+	kiosk-restart)
+		[ -z "$rest" ] || { reply_err "kiosk-restart takes no arguments"; return; }
+		log "kiosk-restart"
+		if command -v "$RCSERVICE" >/dev/null 2>&1 && "$RCSERVICE" kiosk status >/dev/null 2>&1; then
+			if "$RCSERVICE" kiosk restart >/dev/null 2>&1; then reply_ok
+			else reply_err "kiosk restart failed"; fi
+		else
+			reply_ok "kiosk not running"
+		fi
+		;;
+	clear-setup-open)
+		[ -z "$rest" ] || { reply_err "clear-setup-open takes no arguments"; return; }
+		rm -f "$R/setup-open"
+		reply_ok
+		;;
+	rootpw)
+		# the password is never logged, never put in $out on failure
+		# either (chpasswd's own stderr does not echo its stdin back, but
+		# be defensive: report a fixed message, not chpasswd's output).
+		pw=$rest
+		if [ -z "$pw" ] || [ "${#pw}" -lt 8 ]; then reply_err "root password must be at least 8 characters"; return; fi
+		log "rootpw"
+		if ! printf 'root:%s\n' "$pw" | "$CHPASSWD" >/dev/null 2>&1; then
+			reply_err "chpasswd failed"; return
+		fi
+		hash=$(awk -F: '$1=="root"{print $2}' "$SHADOW" 2>/dev/null)
+		if [ -n "$hash" ]; then
+			"$CONFIG" set ROOT_PASSWORD_HASH "$hash" >/dev/null 2>&1 \
+				|| log "warning: root password changed, but could not mirror the hash into panel.conf"
+		fi
+		reply_ok
+		;;
+	'') ;;
+	*) reject="$(safe "$cmd $rest")"; log "rejected: $reject"; reply_err "unknown command";;
+	esac
+}
+
+mkdir -p "$R"
+for p in "$REQ" "$RESP"; do
+	if [ ! -p "$p" ]; then rm -f "$p"; mkfifo "$p" || { log "mkfifo $p failed"; exit 1; }; fi
+	chown root:tsx-setup "$p" 2>/dev/null || true
+	chmod 660 "$p"
+done
+
+# <> (read+write) on both: on REQ so a transient writer (tsx-setupd opens,
+# writes one line, closes) never makes our read see EOF (same reasoning as
+# tsx-panelctl); on RESP so OUR writes (replies) never block on a reader
+# being present (see reply_ok/reply_err above).
+exec 3<>"$REQ" 4<>"$RESP"
+log "listening on $REQ"
+while IFS=' ' read -r cmd rest <&3; do
+	handle "$cmd" "$rest"
+	[ "$ONESHOT" = 1 ] && break
+done
+log "REQ closed, exiting"

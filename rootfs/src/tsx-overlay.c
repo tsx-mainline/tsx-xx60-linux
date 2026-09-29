@@ -17,7 +17,9 @@
  * /run/tsx/als.state) and hands every action to tsx-panelctl (FIFO
  * /run/tsx/panelctl, group kiosk, a fixed command list): brightness-offset N
  * (the slider: the local manual setting is an offset on top of ALS / the
- * day/night schedule), als auto on|off, blank on, reload-page. It runs as the
+ * day/night schedule), als auto on|off, blank on, reload-page, setup (brings
+ * the on-panel setup page back up for about 15 minutes even on an
+ * already-configured panel, docs/rootfs.md "Setup page"). It runs as the
  * kiosk user, never as root.
  *
  * Why C + cairo on wl_shm: it stays resident so the slider appears on the
@@ -50,7 +52,7 @@
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 
 enum mode { HIDDEN, SLIDER, FULL };
-enum { B_NONE = -1, B_SLIDER, B_AUTO, B_BLANK, B_RELOAD, B_CLOSE, NBTN };
+enum { B_NONE = -1, B_SLIDER, B_AUTO, B_BLANK, B_RELOAD, B_SETUP, B_CLOSE, NBTN };
 
 struct rect { int x, y, w, h; };
 struct buffer { struct wl_buffer *wb; void *data; size_t size; int busy, w, h; cairo_surface_t *cs; };
@@ -82,11 +84,16 @@ static long long drag_hold;              /* ...shown until tsx-idled reports it 
 static int pressed = B_NONE, press_inside, touch_id = -1, ptr_down;
 static double ptr_x, ptr_y;
 
-/* layout (surface coordinates; the panel is 1280x800 at scale 1) */
+/*
+ * layout (surface coordinates, scale 1). The surface spans the output height
+ * minus a top and a bottom margin, so it fits either panel: 1280x800 (10-inch:
+ * slider 600, full 720 px high) and 1024x600 (7-inch: slider 400, full 520).
+ */
 #define SLIDER_W 150
-#define SLIDER_H 600
+#define SLIDER_MARGIN_V 100
 #define FULL_W 440
-#define FULL_H 720
+#define FULL_MARGIN_V 40
+#define FULL_BTN_H 150
 #define MARGIN_R 16
 static struct rect r_track, r_btn[NBTN];
 
@@ -208,13 +215,16 @@ static void sun(cairo_t *c, double cx, double cy, double r)
 static void layout(void)
 {
 	memset(r_btn, 0, sizeof r_btn);
+	int h = surf_h > 0 ? surf_h : 600;
 	if (mode == SLIDER) {
-		r_track = (struct rect){ 40, 90, 70, SLIDER_H - 200 };
-		r_btn[B_SLIDER] = (struct rect){ 0, 60, SLIDER_W, SLIDER_H - 100 };
+		r_track = (struct rect){ 40, 90, 70, h - 200 };
+		r_btn[B_SLIDER] = (struct rect){ 0, 60, SLIDER_W, h - 100 };
 	} else {
-		r_track = (struct rect){ 45, 110, 80, FULL_H - 200 };
-		r_btn[B_SLIDER] = (struct rect){ 0, 70, 170, FULL_H - 120 };
-		int bx = 190, bw = FULL_W - bx - 24, bh = 150, gap = 20, by = 24;
+		int bx = 190, bw = FULL_W - bx - 24, gap = 20, by = 24;
+		int bh = (h - 2 * by - (NBTN - B_AUTO - 1) * gap) / (NBTN - B_AUTO);
+		if (bh > FULL_BTN_H) bh = FULL_BTN_H;
+		r_track = (struct rect){ 45, 110, 80, h - 200 };
+		r_btn[B_SLIDER] = (struct rect){ 0, 70, 170, h - 120 };
 		for (int i = B_AUTO; i < NBTN; i++) r_btn[i] = (struct rect){ bx, by + (i - B_AUTO) * (bh + gap), bw, bh };
 	}
 }
@@ -261,7 +271,7 @@ static void draw(cairo_t *c, int w, int h)
 	text_center(c, s, cx, t.y + t.h + 66, 18, 0);
 
 	if (mode != FULL) return;
-	static const char *label[NBTN] = { "", "Auto brightness", "Screen off", "Reload page", "Close" };
+	static const char *label[NBTN] = { "", "Auto brightness", "Screen off", "Reload page", "Setup", "Close" };
 	for (int i = B_AUTO; i < NBTN; i++) {
 		struct rect b = r_btn[i];
 		int on = i == B_AUTO && als_auto == 1, dis = i == B_AUTO && als_auto < 0;
@@ -339,6 +349,7 @@ static void layer_configure(void *data, struct zwlr_layer_surface_v1 *l, uint32_
 	zwlr_layer_surface_v1_ack_configure(l, serial);
 	if (w) surf_w = w;
 	if (h) surf_h = h;
+	layout();       /* the height comes from the output */
 	configured = 1;
 	redraw();
 }
@@ -364,24 +375,27 @@ static void surface_destroy(void)
 
 static void show(enum mode m)
 {
-	int w = m == FULL ? FULL_W : SLIDER_W, h = m == FULL ? FULL_H : SLIDER_H;
+	int w = m == FULL ? FULL_W : SLIDER_W, mv = m == FULL ? FULL_MARGIN_V : SLIDER_MARGIN_V;
 	read_state();
 	if (m == mode && surface) return;
 	mode = m;
+	surf_w = w;
+	if (!surface) surf_h = 0; /* the configure event brings the height */
 	layout();
-	surf_w = w; surf_h = h;
 	if (!surface) {
 		surface = wl_compositor_create_surface(compositor);
 		layer = zwlr_layer_shell_v1_get_layer_surface(layer_shell, surface, NULL,
 			ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "tsx-overlay");
 		zwlr_layer_surface_v1_add_listener(layer, &layer_listener, NULL);
-		zwlr_layer_surface_v1_set_anchor(layer, ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
-		zwlr_layer_surface_v1_set_margin(layer, 0, MARGIN_R, 0, 0);
+		zwlr_layer_surface_v1_set_anchor(layer, ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |
+			ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);
 		zwlr_layer_surface_v1_set_exclusive_zone(layer, -1);   /* never moves the page */
 		zwlr_layer_surface_v1_set_keyboard_interactivity(layer, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
 		configured = 0;
 	}
-	zwlr_layer_surface_v1_set_size(layer, w, h);
+	/* height 0 + top/bottom anchors: the compositor sizes it to the output */
+	zwlr_layer_surface_v1_set_margin(layer, mv, MARGIN_R, mv, 0);
+	zwlr_layer_surface_v1_set_size(layer, w, 0);
 	wl_surface_commit(surface);     /* -> configure -> redraw */
 	if (verbose) logm("show %s", m == FULL ? "full" : "slider");
 }
@@ -441,6 +455,7 @@ static void press_up(void)
 		keep_open(); redraw(); break;
 	case B_BLANK: panelctl_send("blank on"); hide(); break;
 	case B_RELOAD: panelctl_send("reload-page"); hide(); break;
+	case B_SETUP: panelctl_send("setup"); hide(); break;
 	case B_CLOSE: hide(); break;
 	}
 }
