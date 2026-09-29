@@ -187,6 +187,16 @@ say "eMMC root grown to fill p8"
 set_state "configuring the new root"
 MNT=$RUN/newroot; mkdir -p "$MNT"
 mount -t ext4 -o rw "$EROOT" "$MNT" || die "cannot mount $EROOT"
+# Always re-stamp kernel_flavor onto the root we just wrote (fresh install
+# AND reinstall alike) with THIS bundle's own manifest FLAVOR -- the flavor
+# actually on the boot partition now -- rather than trust whatever
+# mk-tsxroot-emmc.sh baked into the root image at payload-build time. See
+# tsx_rootinfo_set_flavor in tsx-rescue.sh for why: a mismatch there (root
+# image built with one --flavor, bundled under a different one) is what left
+# a fresh --kernel stable install with kernel_flavor=lts on disk, silently
+# steering the next kernel package upgrade onto the wrong flavor.
+tsx_rootinfo_set_flavor "$MNT/etc/tsx/emmc-root.info" "$FLAVOR"
+say "  emmc-root.info: kernel_flavor=${FLAVOR:-unchanged}"
 if [ -d "$B/tfa" ]; then
 	for v in "$B"/tfa/*/; do
 		[ -d "$v" ] || continue

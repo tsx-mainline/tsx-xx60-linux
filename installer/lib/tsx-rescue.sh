@@ -10,9 +10,10 @@
 # at /usr/share/tsx/tsx-lib.sh, part of the base initramfs; nothing here duplicates it).
 #
 # Nothing in this file writes anything by itself except the functions whose
-# names say so (tsx_env_apply, tsx_mbr_fold, tsx_mkfs_tsxdata, tsx_conf_set_flavor); every write is
-# read back and verified before returning success, the same discipline as
-# tsx-boot-ok and installer/emmc/tsx-usb-recovery.
+# names say so (tsx_env_apply, tsx_mbr_fold, tsx_mkfs_tsxdata, tsx_conf_set_flavor,
+# tsx_rootinfo_set_flavor); every write is read back and verified before
+# returning success, the same discipline as tsx-boot-ok and
+# installer/emmc/tsx-usb-recovery.
 
 # ---------------------------------------------------------------- pr_dd -----
 # Live progress for a background dd (BusyBox dd has no status=progress).
@@ -172,6 +173,30 @@ tsx_conf_set_flavor() {
 		sed -i "s/^KERNEL_FLAVOR=.*/KERNEL_FLAVOR=\"$v\"/" "$f"
 	else
 		printf 'KERNEL_FLAVOR="%s"\n' "$v" >> "$f"
+	fi
+}
+
+# tsx_rootinfo_set_flavor FILE FLAVOR: set kernel_flavor= in a NEW root's
+# /etc/tsx/emmc-root.info (mk-tsxroot-emmc.sh's own key=value format, no
+# quotes) to FLAVOR -- the flavor this install bundle's own manifest names
+# (installer/emmc/mk-v2-bundle.sh), i.e. the boot image actually being
+# written to the boot partition right now. This is always run, fresh install
+# or reinstall: emmc-root.info's kernel_flavor= otherwise only reflects
+# whatever --flavor mk-tsxroot-emmc.sh happened to be given when the root
+# image was built at payload time, which can drift from the flavor actually
+# selected/installed if the wrong image was ever paired into a bundle (the
+# tsx-kernel-flavor package hook falls back to this field when panel.conf's
+# own KERNEL_FLAVOR is unset, so a stale/wrong value here silently steers the
+# next kernel package upgrade onto the wrong flavor). A no-op for anything
+# but lts/stable; creates etc/tsx/ if the image is somehow missing it.
+tsx_rootinfo_set_flavor() {
+	local f=$1 v=$2
+	case "$v" in lts|stable) ;; *) return 0;; esac
+	mkdir -p "$(dirname "$f")"
+	if [ -f "$f" ] && grep -q '^kernel_flavor=' "$f"; then
+		sed -i "s/^kernel_flavor=.*/kernel_flavor=$v/" "$f"
+	else
+		echo "kernel_flavor=$v" >> "$f"
 	fi
 }
 

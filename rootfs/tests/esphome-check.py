@@ -34,6 +34,7 @@ async def main(args) -> int:
             "ledbar", "keypad", "screen", "backlight", "kiosk_url",
             "reload_page", "reboot", "cpu_temp", "uptime", "ip_address",
             "touched_recently", "key_power", "key_home", "update", "blank_timeout",
+            "verbose_boot",
         }
         if args.voice:
             want |= {"mute", "thinking_sound", "linux_voice_assistant_media_player"}
@@ -80,6 +81,14 @@ async def main(args) -> int:
         bt_state = states.get(by_id["blank_timeout"].key)
         assert bt_state is not None and bt_state.state == 600.0, bt_state
         print("OK: blank timeout reported (120 s) and set (600 s; test-esphome.sh checks tsx-config)")
+
+        vb_state = states.get(by_id["verbose_boot"].key)
+        assert vb_state is not None and not vb_state.state, vb_state
+        client.switch_command(key=by_id["verbose_boot"].key, state=True)
+        await asyncio.sleep(0.5)
+        vb_state = states.get(by_id["verbose_boot"].key)
+        assert vb_state is not None and vb_state.state, vb_state
+        print("OK: verbose boot switch reported off, then set on (test-esphome.sh checks tsx-config)")
 
         touched = states.get(by_id["touched_recently"].key)
         assert touched is not None and touched.state, touched

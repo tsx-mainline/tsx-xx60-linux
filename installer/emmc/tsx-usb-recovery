@@ -30,6 +30,15 @@
 #   TSX_RUN        scratch dir for the fw_env.config file (default /run)
 #   TSX_ENV_DEV    skip disk discovery and the block-device check entirely; use this
 #                  file/device directly (a bare 64 KiB env fixture, for host tests)
+#
+# Every fw_printenv/fw_setenv call is bounded by `timeout -s KILL` (default 10 s,
+# override with TSX_FWENV_TIMEOUT; skipped only if `timeout` is not on PATH).
+# u-boot-tools' fw_env.c has a read loop that spins at 100% CPU forever instead
+# of erroring out when the configured env size does not match the real size of
+# the backing device/file (a short read hits EOF, read() keeps returning 0, and
+# the loop never advances) -- confirmed in both uboot-tools 2026.07 and Alpine's
+# 2026.04. A real card should never be short, but this bounds the failure mode
+# instead of trusting that.
 set -eu
 MODE=${1:-}
 case "$MODE" in
@@ -67,10 +76,12 @@ fi
 
 FWP=$(command -v fw_printenv 2>/dev/null || echo /system/bin/fw_printenv); [ -x "$FWP" ] || die "no fw_printenv in PATH or at /system/bin"
 FWS=$(command -v fw_setenv 2>/dev/null || echo /system/bin/fw_setenv); [ -x "$FWS" ] || die "no fw_setenv in PATH or at /system/bin"
+FWTO=${TSX_FWENV_TIMEOUT:-10}
+TO=; command -v timeout >/dev/null 2>&1 && TO="timeout -s KILL $FWTO"
 CFG=$RUN/tsx-usb-recovery.cfg
 OFF=0x100000; [ -n "${TSX_ENV_DEV:-}" ] && OFF=0x0   # TSX_ENV_DEV fixtures are a bare 64 KiB block, not a whole disk
 echo "$DEV $OFF 0x10000" > "$CFG"
-CUR=$("$FWP" -c "$CFG" -l "$RUN" 2>&1) || die "fw_printenv failed: $CUR"
+CUR=$($TO "$FWP" -c "$CFG" -l "$RUN" 2>&1) || die "fw_printenv failed or timed out after ${FWTO}s: $CUR"
 echo "$CUR" | grep -qi 'bad crc' && die "env CRC bad at $DEV 0x100000: refusing to touch it"
 CURSW=$(echo "$CUR" | sed -n 's/^switch_bootmode=//p')
 
@@ -97,7 +108,7 @@ esac
 if [ "$MODE" = enable ]; then NEW="$PREFIX$CURSW"
 else NEW=${CURSW#"$PREFIX"}
 fi
-"$FWS" -c "$CFG" -l "$RUN" switch_bootmode "$NEW" || die "fw_setenv failed"
-GOT=$("$FWP" -c "$CFG" -l "$RUN" -n switch_bootmode 2>/dev/null) || die "fw_printenv readback failed"
+$TO "$FWS" -c "$CFG" -l "$RUN" switch_bootmode "$NEW" || die "fw_setenv failed or timed out after ${FWTO}s"
+GOT=$($TO "$FWP" -c "$CFG" -l "$RUN" -n switch_bootmode 2>/dev/null) || die "fw_printenv readback failed or timed out after ${FWTO}s"
 [ "$GOT" = "$NEW" ] || die "readback mismatch after the write: got '$GOT', wanted '$NEW' (env may now be inconsistent: re-run 'status')"
 echo "tsx-usb-recovery: $MODE done and verified on $DEV (switch_bootmode=$NEW)"

@@ -62,6 +62,7 @@ class PanelDevice:
     als_auto: Optional[SwitchEntity]
     illuminance: Optional[SensorEntity]
     volume: Optional[NumberEntity]
+    verbose_boot: SwitchEntity
     kiosk_url: TextEntity
     reload_button: ButtonEntity
     reboot_button: ButtonEntity
@@ -171,6 +172,13 @@ def build_entities(server, backend: PanelBackend, key_base: int = 0) -> PanelDev
         )
         entities.append(volume)
 
+    # ---- verbose boot (BOOT_VERBOSE, panel.conf) ------------------------------
+    verbose_boot = SwitchEntity(
+        server, next_key(), "Verbose boot", "verbose_boot",
+        get_state=backend.get_verbose_boot, set_state=backend.set_verbose_boot, icon="mdi:console-line",
+    )
+    entities.append(verbose_boot)
+
     # ---- kiosk: URL (persists through tsx-config), reload, reboot -------------
     kiosk_url = TextEntity(
         server, next_key(), "Kiosk URL", "kiosk_url",
@@ -224,7 +232,7 @@ def build_entities(server, backend: PanelBackend, key_base: int = 0) -> PanelDev
     return PanelDevice(
         backend=backend, entities=entities, ledbar=ledbar, keypad=keypad, screen=screen,
         backlight=backlight, blank_timeout=blank_timeout, als_auto=als_auto, illuminance=illuminance, volume=volume,
-        kiosk_url=kiosk_url, reload_button=reload_button, reboot_button=reboot_button,
+        verbose_boot=verbose_boot, kiosk_url=kiosk_url, reload_button=reload_button, reboot_button=reboot_button,
         cpu_temp=cpu_temp, uptime=uptime, ip_address=ip_address, touched_recently=touched_recently,
         update=update, keys=keys, _pulse_since=time.time(),
     )
@@ -270,8 +278,8 @@ def poll(device: PanelDevice, broadcast: Callable[[list], None]) -> None:
         msgs.append(device.keypad._state_response())  # pylint: disable=protected-access
 
     for entity in (device.screen, device.backlight, device.blank_timeout, device.als_auto, device.illuminance,
-                   device.volume, device.cpu_temp, device.uptime, device.ip_address, device.touched_recently,
-                   device.update):
+                   device.volume, device.verbose_boot, device.cpu_temp, device.uptime, device.ip_address,
+                   device.touched_recently, device.update):
         if entity is None:
             continue
         before = getattr(entity, "_state", None)

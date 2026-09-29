@@ -137,6 +137,15 @@ handle() {
 			else reject "config-url $a1 (extra args)"; fi;;
 		*) reject "config-url $a1 $a2 $a3 $a4 $rest";;
 		esac;;
+	verbose-boot)
+		# BOOT_VERBOSE: kernel/boot text on the LCD from the next boot on
+		# (persisted in panel.conf, applied by tsx-config apply); state is
+		# read back from the /etc/tsx/boot-verbose flag file it leaves,
+		# same shape as blank-timeout/config-url above.
+		if { [ "$a1" = on ] || [ "$a1" = off ]; } && [ -z "$a2$a3$a4$rest" ]; then
+			v=0; [ "$a1" = on ] && v=1
+			log "verbose-boot $a1"; "$CONFIG" set BOOT_VERBOSE "$v" && "$CONFIG" apply
+		else reject "verbose-boot $a1 $a2 $a3 $a4 $rest"; fi;;
 	reboot)
 		if [ -z "$a1$a2$a3$a4$rest" ]; then
 			log "reboot requested"; "$REBOOT_BIN"

@@ -10,6 +10,8 @@
 #   3. a tsxdata ext4 with an inconsistency  -> 2 (repair, then ask again);
 #      after e2fsck -fp it is 0 again
 #   4. tsx_conf_set_flavor replaces or appends KERNEL_FLAVOR, keeps the rest
+#   5. tsx_rootinfo_set_flavor replaces or appends kernel_flavor= in a fresh
+#      root's etc/tsx/emmc-root.info (tsx-rescue-install step 3)
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 LIB="$HERE/lib/tsx-rescue.sh"
@@ -66,6 +68,28 @@ busybox sh -c '. "$1"; tsx_conf_set_flavor "$2" lts' sh "$LIB" "$W/b.conf"
 cp "$W/b.conf" "$W/c.conf"
 busybox sh -c '. "$1"; tsx_conf_set_flavor "$2" beta' sh "$LIB" "$W/c.conf"
 cmp -s "$W/b.conf" "$W/c.conf" && ok "an unknown flavor changes nothing" || bad "unknown flavor changed the file"
+
+echo "== 5. tsx_rootinfo_set_flavor"
+mkdir -p "$W/root5/etc/tsx"
+printf 'root=emmc\nkernel_flavor=lts\nkernel_modules_ver=x\n' > "$W/root5/etc/tsx/emmc-root.info"
+busybox sh -c '. "$1"; tsx_rootinfo_set_flavor "$2" stable' sh "$LIB" "$W/root5/etc/tsx/emmc-root.info"
+[ "$(grep -c '^kernel_flavor=stable$' "$W/root5/etc/tsx/emmc-root.info")" = 1 ] && ok "kernel_flavor replaced" || bad "replace: $(cat "$W/root5/etc/tsx/emmc-root.info")"
+grep -q '^root=emmc$' "$W/root5/etc/tsx/emmc-root.info" && grep -q '^kernel_modules_ver=x$' "$W/root5/etc/tsx/emmc-root.info" \
+	&& ok "other lines unchanged" || bad "other lines changed: $(cat "$W/root5/etc/tsx/emmc-root.info")"
+# no kernel_flavor= line yet (e.g. migrate-to-emmc.sh's own emmc-root.info, or
+# a root image built before this field existed): appended, not left missing
+mkdir -p "$W/root6/etc/tsx"
+printf 'root=emmc\n' > "$W/root6/etc/tsx/emmc-root.info"
+busybox sh -c '. "$1"; tsx_rootinfo_set_flavor "$2" lts' sh "$LIB" "$W/root6/etc/tsx/emmc-root.info"
+[ "$(tail -n 1 "$W/root6/etc/tsx/emmc-root.info")" = 'kernel_flavor=lts' ] && ok "kernel_flavor appended" || bad "append: $(cat "$W/root6/etc/tsx/emmc-root.info")"
+# no etc/tsx/ directory at all yet: created
+rm -rf "$W/root7"
+busybox sh -c '. "$1"; tsx_rootinfo_set_flavor "$2" stable' sh "$LIB" "$W/root7/etc/tsx/emmc-root.info"
+[ "$(cat "$W/root7/etc/tsx/emmc-root.info" 2>/dev/null)" = 'kernel_flavor=stable' ] && ok "etc/tsx/ created, file written" || bad "missing dir: $(cat "$W/root7/etc/tsx/emmc-root.info" 2>/dev/null)"
+# an unknown flavor changes nothing (same contract as tsx_conf_set_flavor)
+cp "$W/root6/etc/tsx/emmc-root.info" "$W/root6.before"
+busybox sh -c '. "$1"; tsx_rootinfo_set_flavor "$2" beta' sh "$LIB" "$W/root6/etc/tsx/emmc-root.info"
+cmp -s "$W/root6.before" "$W/root6/etc/tsx/emmc-root.info" && ok "an unknown flavor changes nothing" || bad "unknown flavor changed the file"
 
 echo "== $N ok, $F failed"
 [ $F = 0 ] && echo PASS test-tsxdata-keep || echo FAIL test-tsxdata-keep

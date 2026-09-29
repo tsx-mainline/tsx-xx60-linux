@@ -67,6 +67,8 @@ send "reboot"
 send "update-install"
 send "reload-page"
 send "blank-timeout 600"
+send "verbose-boot on"
+send "verbose-boot off"
 send "setup"
 echo 12 > "$T/run/brightness"
 send "brightness-offset -3"
@@ -77,7 +79,8 @@ for want in \
 	'tsx-blank on' 'tsx-blank off' 'tsx-als auto on' \
 	'tsx-config set KIOSK_URL https://ha.example.org/lovelace/0' 'tsx-config apply' \
 	'amixer -q -c TSW1060 sset Master 42%' 'reboot' 'tsx-autoupdate now' \
-	'tsx-keypad page reload' 'tsx-config set BLANK_TIMEOUT 600' 'tsx-config setup'
+	'tsx-keypad page reload' 'tsx-config set BLANK_TIMEOUT 600' 'tsx-config setup' \
+	'tsx-config set BOOT_VERBOSE 1' 'tsx-config set BOOT_VERBOSE 0'
 do
 	grep -qxF "$want" "$T/cmds.log" 2>/dev/null && ok "ran: $want" || bad "missing: $want"
 done
@@ -109,10 +112,12 @@ send "blank-timeout 86401"
 send "blank-timeout -5"
 send "reload-page now"
 send "setup now"
+send "verbose-boot maybe"
+send "verbose-boot on extra"
 
 [ ! -s "$T/cmds.log" ] && ok "no fake CLI was ever run for any hostile line" || { bad "a hostile line reached a CLI"; cat "$T/cmds.log"; }
 rejected=$(grep -c 'rejected:' "$T/panelctl.log")
-[ "$rejected" -ge 19 ] && ok "all 19 hostile lines were logged as rejected ($rejected)" || bad "expected >=19 rejections, got $rejected"
+[ "$rejected" -ge 21 ] && ok "all 21 hostile lines were logged as rejected ($rejected)" || bad "expected >=21 rejections, got $rejected"
 kill -0 "$PID" 2>/dev/null && ok "daemon is still alive after the hostile batch" || bad "daemon died"
 
 echo "== $N ok, $F failed =="

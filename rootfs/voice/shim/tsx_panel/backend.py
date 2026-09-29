@@ -28,7 +28,10 @@ Env overrides (all also read by tsx-mqtt; new ones only for this module):
   TSX_ASOUND_DIR (/proc/asound), TSX_BACKLIGHT_DIR (/sys/class/backlight),
   TSX_THERMAL_ZONE (/sys/class/thermal/thermal_zone0/temp),
   TSX_DEVTOOLS (127.0.0.1:9222, as buttons.conf's DEVTOOLS=),
-  TSX_PANELCTL (/run/tsx/panelctl), TSX_PANEL_DIRECT=1 (tests only: run
+  TSX_PANELCTL (/run/tsx/panelctl), TSX_BOOT_VERBOSE_FLAG (/etc/tsx/
+  boot-verbose, the flag file `tsx-config apply` leaves for BOOT_VERBOSE=1;
+  the initramfs reads the same file, see tsx-config's own comment),
+  TSX_PANEL_DIRECT=1 (tests only: run
   privileged commands directly even when not root),
   TSX_LEDBAR/TSX_KEYPAD/TSX_BLANK/TSX_ALS_BIN/TSX_CONFIG_BIN/TSX_REBOOT_BIN/
   TSX_AMIXER/TSX_UPDATE_BIN (binary names, for test fixtures on $PATH).
@@ -84,6 +87,7 @@ class PanelBackend:
         self.thermal_zone = Path(_env("TSX_THERMAL_ZONE", "/sys/class/thermal/thermal_zone0/temp"))
         self.devtools = _env("TSX_DEVTOOLS", "127.0.0.1:9222")
         self.panelctl = Path(_env("TSX_PANELCTL", str(self.run_dir / "panelctl")))
+        self.boot_verbose_flag = Path(_env("TSX_BOOT_VERBOSE_FLAG", "/etc/tsx/boot-verbose"))
         self.ledbar_bin = _env("TSX_LEDBAR", "tsx-ledbar")
         self.keypad_bin = _env("TSX_KEYPAD", "tsx-keypad")
         self.blank_bin = _env("TSX_BLANK", "tsx-blank")
@@ -94,6 +98,7 @@ class PanelBackend:
         self.update_bin = _env("TSX_UPDATE_BIN", "tsx-autoupdate")
         self._last_key: Optional[Tuple[str, str]] = None
         self._blank_timeout_pending: Optional[Tuple[int, float]] = None
+        self._verbose_boot_pending: Optional[Tuple[bool, float]] = None
 
     # ---- privilege boundary -------------------------------------------------
     def _privileged(self) -> bool:
@@ -164,6 +169,9 @@ class PanelBackend:
             self._run(self.amixer_bin, "-q", "-c", self.card, "sset", "Master", rest[0] + "%")
         elif cmd == "config-url":
             self._run(self.config_bin, "set", "KIOSK_URL", rest[0])
+            self._run(self.config_bin, "apply")
+        elif cmd == "verbose-boot":
+            self._run(self.config_bin, "set", "BOOT_VERBOSE", "1" if rest[0] == "on" else "0")
             self._run(self.config_bin, "apply")
         elif cmd == "reboot":
             self._run(self.reboot_bin)
@@ -270,6 +278,29 @@ class PanelBackend:
 
     def set_als_auto(self, on: bool) -> None:
         self._ctl("als", "auto", "on" if on else "off")
+
+    # ---- verbose boot (BOOT_VERBOSE, panel.conf) ------------------------------
+    def get_verbose_boot(self) -> bool:
+        """Read back from the flag file `tsx-config apply` leaves for
+        BOOT_VERBOSE=1 (the initramfs reads the same file; it cannot read
+        panel.conf under /data), not panel.conf itself: panel.conf is
+        root-only (mode 600), so the voice satellite's plugin (user kiosk)
+        could not read it -- same reasoning as _configured_kiosk_url above.
+        A value just set is reported until `apply` has written the flag file
+        (same short pending window as get_blank_timeout, for the same reason:
+        the voice satellite's path goes through the tsx-panelctl FIFO, not a
+        synchronous call).
+        """
+        value = self.boot_verbose_flag.exists()
+        pending = self._verbose_boot_pending
+        if pending and pending[0] != value and time.monotonic() - pending[1] < 10:
+            return pending[0]
+        self._verbose_boot_pending = None
+        return value
+
+    def set_verbose_boot(self, on: bool) -> None:
+        self._verbose_boot_pending = (on, time.monotonic())
+        self._ctl("verbose-boot", "on" if on else "off")
 
     # ---- volume ------------------------------------------------------------
     def sound_card_present(self) -> bool:

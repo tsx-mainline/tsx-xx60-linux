@@ -104,6 +104,7 @@ start_server() {
 	TSX_BUTTONS_CONF="$F/etc/tsx/buttons.conf" TSX_KIOSK_CONF="$F/etc/kiosk.conf" \
 	TSX_ALS_CONF="$F/etc/tsx/als.conf.missing" TSX_ASOUND_DIR="$F/proc/asound" \
 	TSX_THERMAL_ZONE="$F/sys/thermal/temp" TSX_DEVTOOLS="127.0.0.1:$DT_HTTP" \
+	TSX_BOOT_VERBOSE_FLAG="$F/etc/tsx/boot-verbose" \
 	TSX_PANEL_DIRECT=1 TSX_HA_TRANSPORT=esphome \
 	TSX_ESPHOME_RUN_CONF="$F/run/tsx/esphome.conf.missing" TSX_ESPHOME_KEY_FILE="$F/run/tsx/esphome.key.missing" \
 	TSX_PANEL_NAME="$pname" \
@@ -144,7 +145,7 @@ print("OK: PANEL_NAME -> lowercase name + PANEL_NAME friendly name; fallback tsx
 full_check() {
 	local title=$1 port=$2; shift 2
 	echo "== $title =="
-	: > "$F/cmds.log"; rm -f "$F/run/tsx/brightness"
+	: > "$F/cmds.log"; rm -f "$F/run/tsx/brightness" "$F/etc/tsx/boot-verbose"
 	echo 120 > "$F/run/tsx/blank-timeout"      # tsx-config apply's file (panel.conf BLANK_TIMEOUT)
 	date +%s > "$F/run/tsx/last-input"        # tsx-idled: a touch just now
 	printf 'led 128 unknown\nlast power short\n' > "$F/run/tsx/buttons.state"
@@ -160,6 +161,8 @@ full_check() {
 	[ "$(cat "$F/run/tsx/brightness" 2>/dev/null)" = 5 ] && echo "OK: backlight written as an integer (5)" || { echo "FAIL: brightness file is '$(cat "$F/run/tsx/brightness" 2>/dev/null)', want 5"; rc=1; }
 	grep -q '^tsx-config set BLANK_TIMEOUT 600$' "$F/cmds.log" 2>/dev/null && grep -q '^tsx-config apply$' "$F/cmds.log" \
 		&& echo "OK: blank timeout persisted through tsx-config (set + apply)" || { echo "FAIL: tsx-config set BLANK_TIMEOUT 600 missing"; rc=1; }
+	grep -q '^tsx-config set BOOT_VERBOSE 1$' "$F/cmds.log" 2>/dev/null \
+		&& echo "OK: verbose boot persisted through tsx-config (set BOOT_VERBOSE 1 + apply)" || { echo "FAIL: tsx-config set BOOT_VERBOSE 1 missing"; rc=1; }
 	grep -q '^tsx-autoupdate now$' "$F/cmds.log" 2>/dev/null && echo "OK: update entity Install ran tsx-autoupdate now" || { echo "FAIL: tsx-autoupdate now missing"; rc=1; }
 }
 noise_check() {  # noise_check PORT MODE [KEY]

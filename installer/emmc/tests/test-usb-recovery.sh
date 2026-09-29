@@ -10,7 +10,16 @@ TOOL="$HERE/tsx-usb-recovery"
 STOCK_SWITCH='usb start 0;if fatexist usb 0 jabil.txt; then run jabil_factory; else   fi;'
 FALLBACK_HOOK="${STOCK_SWITCH}if itest \${boot_retry} -lt 6; then run tsx_boot; fi"
 ONCE_HOOK="${STOCK_SWITCH}if itest \${tsx_once} -eq 1; then setenv tsx_once 0; saveenv; run tsx_boot; fi"
-W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
+# Bound every fw_printenv/fw_setenv call the tool makes (see tsx-usb-recovery's
+# TSX_FWENV_TIMEOUT): a config whose declared env size doesn't match the real
+# file size makes u-boot-tools' read loop spin at 100% CPU forever instead of
+# erroring out (confirmed on both uboot-tools 2026.07 and Alpine's 2026.04).
+# Keep it short here since every fixture below is well-formed and should
+# return immediately; a long run means something regressed.
+export TSX_FWENV_TIMEOUT=3
+W=$(mktemp -d)
+cleanup() { jobs -p | xargs -r kill -9 2>/dev/null; rm -rf "$W"; }
+trap cleanup EXIT INT TERM HUP
 N=0 F=0
 ok() { echo "  ok: $*"; N=$((N+1)); }
 bad() { echo "  FAIL: $*"; F=$((F+1)); }
@@ -99,6 +108,14 @@ echo "== 9. a foreign switch_bootmode is refused"
 E4=$W/env4.bin; mkenv "$E4" "run something_else"
 TSX_ENV_DEV="$E4" TSX_RUN="$W" "$TOOL" enable >"$W/e4.txt" 2>&1 && bad "foreign switch_bootmode accepted" || ok "foreign switch_bootmode refused"
 TSX_ENV_DEV="$E4" TSX_RUN="$W" "$TOOL" status >"$W/e4s.txt" 2>&1 || true; grep -q foreign "$W/e4s.txt" && ok "status reports foreign"
+
+echo "== 10. a short/truncated env file fails fast, it does not hang (regression for the fw_printenv CPU spin)"
+E5=$W/env5.bin; mkenv "$E5" "$STOCK_SWITCH"; truncate -s 32768 "$E5"   # half the declared 0x10000
+T0=$(date +%s)
+TSX_ENV_DEV="$E5" TSX_RUN="$W" "$TOOL" status >"$W/e5.txt" 2>&1 && bad "short env file accepted" || ok "short env file refused (not silently accepted)"
+T1=$(date +%s)
+[ $((T1 - T0)) -le $((TSX_FWENV_TIMEOUT + 5)) ] && ok "short env file failed within the bounded timeout (${T1}-${T0}=$((T1-T0))s), no CPU-spin hang" || bad "took $((T1-T0))s: the timeout bound did not hold"
+grep -qi "timed out\|failed" "$W/e5.txt" && ok "error message names the failure"
 
 echo "== $N ok, $F failed"
 [ $F = 0 ] && echo PASS test-usb-recovery || echo FAIL test-usb-recovery
