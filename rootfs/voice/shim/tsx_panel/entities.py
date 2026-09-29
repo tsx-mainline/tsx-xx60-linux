@@ -4,7 +4,8 @@ linux_voice_assistant.entity already has Light, Switch (as two fixed
 entities), Number/Select (as one fixed entity), Event and MediaPlayer classes
 tied to voice-satellite specifics. These are the same shapes but generic and
 reusable, plus the three read-only "diagnostic" types (sensor, binary_sensor,
-text_sensor) and the two LVA does not need at all (button, text).
+text_sensor) and the two LVA does not need at all (button, text), and a
+generic select (screen orientation).
 
 Each entity is deliberately dumb: it stores get()/set() callables and only
 knows how to answer ListEntitiesRequest / SubscribeHomeAssistantStatesRequest
@@ -38,6 +39,7 @@ from aioesphomeapi.api_pb2 import (
     ListEntitiesEventResponse,
     ListEntitiesNumberResponse,
     ListEntitiesRequest,
+    ListEntitiesSelectResponse,
     ListEntitiesSensorResponse,
     ListEntitiesSwitchResponse,
     ListEntitiesTextResponse,
@@ -45,6 +47,8 @@ from aioesphomeapi.api_pb2 import (
     ListEntitiesUpdateResponse,
     NumberCommandRequest,
     NumberStateResponse,
+    SelectCommandRequest,
+    SelectStateResponse,
     SensorStateResponse,
     SubscribeHomeAssistantStatesRequest,
     SwitchCommandRequest,
@@ -182,6 +186,51 @@ class TextEntity(ESPHomeEntity):
         except Exception:  # noqa: BLE001
             _LOGGER.debug("%s: read failed", self.name, exc_info=True)
         return TextStateResponse(key=self.key, state=self._state)
+
+    def poll(self):
+        return self._state_msg()
+
+
+class SelectEntity(ESPHomeEntity):
+    """A generic choice from a fixed list (screen orientation). A value
+    outside `options` is refused (logged, the state is re-sent)."""
+
+    def __init__(self, server, key, name, object_id, options, get_state, set_state, icon=""):
+        ESPHomeEntity.__init__(self, server)
+        self.key, self.name, self.object_id = key, name, object_id
+        self.options = list(options)
+        self._get_state, self._set_state, self.icon = get_state, set_state, icon
+        self._state = self.options[0] if self.options else ""
+        try:
+            self._state = str(get_state())
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("%s: initial read failed", name, exc_info=True)
+
+    def handle_message(self, msg: message.Message) -> Iterable[message.Message]:
+        if isinstance(msg, SelectCommandRequest) and msg.key == self.key:
+            if msg.state in self.options:
+                self._state = str(msg.state)
+                try:
+                    self._set_state(self._state)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.warning("%s: set failed", self.name, exc_info=True)
+            else:
+                _LOGGER.warning("%s: %r is not one of %s", self.name, msg.state, self.options)
+            yield SelectStateResponse(key=self.key, state=self._state)
+        elif isinstance(msg, ListEntitiesRequest):
+            yield ListEntitiesSelectResponse(
+                object_id=self.object_id, key=self.key, name=self.name, icon=self.icon,
+                options=self.options,
+            )
+        elif isinstance(msg, SubscribeHomeAssistantStatesRequest):
+            yield self._state_msg()
+
+    def _state_msg(self):
+        try:
+            self._state = str(self._get_state())
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("%s: read failed", self.name, exc_info=True)
+        return SelectStateResponse(key=self.key, state=self._state)
 
     def poll(self):
         return self._state_msg()

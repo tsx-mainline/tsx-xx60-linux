@@ -512,7 +512,7 @@ PAIRING = Pairing()
 # side choice, "form", that is not a real panel.conf value).
 SIMPLE_KEYS = ["PANEL_NAME", "TZ_NAME", "VOICE", "WAKE_WORD", "MQTT_HOST",
                "MQTT_PORT", "MQTT_USER", "MQTT_PASSWORD", "SSH_AUTHORIZED_KEY",
-               "KERNEL_FLAVOR", "BLANK_TIMEOUT"]
+               "KERNEL_FLAVOR", "BLANK_TIMEOUT", "ORIENTATION"]
 CLEARABLE_BLANK = {"MQTT_HOST", "MQTT_PORT", "MQTT_USER", "MQTT_PASSWORD"}
 
 
@@ -894,6 +894,14 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
       <input id="f-name" name="PANEL_NAME" type="text" placeholder="(default: model-MAC)" maxlength="63">
       <label for="f-tz">Time zone</label>
       <select id="f-tz" name="TZ_NAME"></select>
+      <label for="f-orient">Screen orientation</label>
+      <select id="f-orient" name="ORIENTATION">
+        <option value="landscape">Landscape (keys right of the screen)</option>
+        <option value="portrait">Portrait (keys below the screen)</option>
+        <option value="landscape-flipped">Landscape, flipped (keys left)</option>
+        <option value="portrait-flipped">Portrait, flipped (keys above)</option>
+      </select>
+      <div class="hint">How the panel hangs on the wall. The screen turns as soon as you save.</div>
       <div class="toggle" style="margin-top:14px">
         <input id="f-voice" name="VOICE" type="checkbox">
         <label for="f-voice" style="margin:0">Voice assistant</label>
@@ -994,6 +1002,7 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
     fields = fields || {};
     if (fields.KIOSK_URL) $("f-url").value = fields.KIOSK_URL;
     if (fields.PANEL_NAME) $("f-name").value = fields.PANEL_NAME;
+    if (fields.ORIENTATION) $("f-orient").value = fields.ORIENTATION;
     if (fields.VOICE === "on") { $("f-voice").checked = true; $("wake-wrap").style.display = "block"; }
     if (fields.WAKE_WORD) $("f-wake").value = fields.WAKE_WORD;
     if (fields.MQTT_HOST) $("f-mqtt-host").value = fields.MQTT_HOST;
@@ -1089,6 +1098,7 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
       HA_TOKEN: $("f-token").value,
       PANEL_NAME: $("f-name").value.trim(),
       TZ_NAME: $("f-tz").value,
+      ORIENTATION: $("f-orient").value,
       VOICE: $("f-voice").checked ? "on" : "off",
       WAKE_WORD: $("f-wake").value.trim(),
       MQTT_HOST: $("f-mqtt-host").value.trim(),

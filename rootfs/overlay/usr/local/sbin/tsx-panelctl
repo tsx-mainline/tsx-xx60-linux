@@ -121,6 +121,16 @@ handle() {
 		if in_range "$a1" 0 86400 && [ -z "$a2$a3$a4$rest" ]; then
 			log "blank-timeout $a1"; "$CONFIG" set BLANK_TIMEOUT "$a1" && "$CONFIG" apply
 		else reject "blank-timeout $a1 $a2 $a3 $a4 $rest"; fi;;
+	orientation)
+		# screen orientation (panel.conf ORIENTATION); apply turns the
+		# running kiosk (tsx-orientation apply). Fixed names only.
+		case "$a1" in
+		landscape|portrait|landscape-flipped|portrait-flipped)
+			if [ -z "$a2$a3$a4$rest" ]; then
+				log "orientation $a1"; "$CONFIG" set ORIENTATION "$a1" && "$CONFIG" apply
+			else reject "orientation $a1 (extra args)"; fi;;
+		*) reject "orientation $a1 $a2 $a3 $a4 $rest";;
+		esac;;
 	reload-page)
 		if [ -z "$a1$a2$a3$a4$rest" ]; then
 			log "reload-page"; "$KEYPAD" page reload

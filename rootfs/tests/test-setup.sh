@@ -324,6 +324,10 @@ out=$(call POST /setup/api/submit --data '{"KIOSK_URL":"https://ha.example.org",
 body=$(body_of "$out")
 [ "$(jget errors.TZ_NAME <<<"$body")" != "" ] && ok "malformed TZ_NAME rejected" || bad "malformed TZ_NAME accepted: $out"
 
+out=$(call POST /setup/api/submit --data '{"KIOSK_URL":"https://ha.example.org","HA_LOGIN_METHOD":"form","ORIENTATION":"sideways"}')
+body=$(body_of "$out")
+[ "$(jget errors.ORIENTATION <<<"$body")" != "" ] && ok "unknown ORIENTATION rejected" || bad "ORIENTATION sideways accepted: $out"
+
 # shell metacharacters: MQTT_PASSWORD has no character restriction in
 # tsx-config's own val_ok, so this must be accepted -- and, critically,
 # stored and passed through literally, never executed (subprocess argv
@@ -355,6 +359,7 @@ print(json.dumps({
 	'KIOSK_URL': 'https://ha.example.org/lovelace/0',
 	'HA_LOGIN_METHOD': 'token', 'HA_TOKEN': '$TOKEN_VAL',
 	'PANEL_NAME': 'test-panel-1', 'TZ_NAME': 'America/Denver', 'VOICE': 'on', 'WAKE_WORD': 'okay_nabu',
+	'ORIENTATION': 'portrait',
 	'ROOT_PASSWORD': '$ROOTPW', 'SSH_AUTHORIZED_KEY': '$SSHKEY'
 }))
 ")
@@ -362,6 +367,8 @@ out=$(call POST /setup/api/submit --data "$SUBMIT")
 [ "$(status_of "$out")" = 200 ] && ok "full submit accepted" || { bad "full submit failed: $out"; }
 grep -q '^KIOSK_URL="https://ha.example.org/lovelace/0"$' "$CONF" && ok "KIOSK_URL landed in the temp panel.conf" || bad "KIOSK_URL missing from $CONF"
 grep -q '^PANEL_NAME="test-panel-1"$' "$CONF" && ok "PANEL_NAME landed in panel.conf" || bad "PANEL_NAME missing"
+grep -q '^ORIENTATION="portrait"$' "$CONF" && ok "ORIENTATION landed in panel.conf" || bad "ORIENTATION missing"
+[ "$(cat "$T/prefix/etc/tsx/orientation" 2>/dev/null)" = portrait ] && ok "apply left /etc/tsx/orientation (portrait) in the prefix" || bad "no orientation file after apply"
 grep -q '^HA_TOKEN=' "$CONF" && ok "HA_TOKEN was written" || bad "HA_TOKEN missing"
 [ -s "$FAKE_CHPASSWD_LOG" ] && grep -qF "root:$ROOTPW" "$FAKE_CHPASSWD_LOG" && ok "chpasswd received the new root password over stdin" || bad "chpasswd did not get the password"
 grep -q '^ROOT_PASSWORD_HASH=' "$CONF" && ok "the resulting hash was mirrored into panel.conf (ROOT_PASSWORD_HASH)" || bad "ROOT_PASSWORD_HASH missing from panel.conf"

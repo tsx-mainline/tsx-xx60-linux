@@ -15,6 +15,9 @@
 #                  (the file is removed so the next boot is normal again).
 #                  /etc/tsx/boot-verbose (panel.conf BOOT_VERBOSE=1, tsx-config
 #                  apply) -> like tsx.verbose, from the root mount on.
+#                  /etc/tsx/orientation (panel.conf ORIENTATION) -> the splash
+#                  and the text console turn with it from the root mount on
+#                  (before it: landscape; the rescue: always landscape).
 # Screen: the kernel keeps the text console off the LCD (fbcon=map:1 on the
 # command line) and tsx-splash draws the boot splash on /dev/fb0. Every way
 # into the rescue system, and BOOT_VERBOSE, first gives the screen back to the
@@ -27,6 +30,9 @@ mkdir -p /dev/pts /run /tmp /newroot; mount -t devpts devpts /dev/pts
 
 msg() { echo "tsx-initramfs: $*" > /dev/kmsg 2>/dev/null; echo "tsx-initramfs: $*" > /dev/tty0 2>/dev/null; }
 verbose=
+# screen orientation: unknown (landscape) until the root file system is
+# mounted (the file lives there; tsx-orientation holds the table)
+orient=landscape fbrot=0
 # The splash needs the real display driver: fb0 is simpledrm on U-Boot's
 # framebuffer until the meson DRM driver has probed, which can be a moment
 # after /init starts, and that driver switches U-Boot's plane off when it
@@ -39,11 +45,17 @@ wait_drm_fb() {
 	done
 }
 # the text console binds to fb0 too: to the DRM driver's, not simpledrm's;
-# then a Terminus font sized for the LCD (80x25 or more; tsx-confont)
-text_console() { verbose=1; wait_drm_fb; /usr/sbin/tsx-splash console 2>/dev/null; /usr/sbin/tsx-confont 2>/dev/null; }
+# turned to the orientation (fbcon rotate_all; needs the console bound), then
+# a Terminus font sized for the LCD (80x25 or more; tsx-confont)
+text_console() {
+	verbose=1; wait_drm_fb; /usr/sbin/tsx-splash console 2>/dev/null
+	echo "$fbrot" > /sys/class/graphics/fbcon/rotate_all 2>/dev/null
+	/usr/sbin/tsx-confont 2>/dev/null
+}
 # splash TEXT PERCENT [show]: status line + progress bar (no-op when verbose)
-splash() { [ -n "$verbose" ] || /usr/sbin/tsx-splash -s "$1" -p "$2" "${3:-status}" 2>/dev/null; }
+splash() { [ -n "$verbose" ] || /usr/sbin/tsx-splash -o "$orient" -s "$1" -p "$2" "${3:-status}" 2>/dev/null; }
 rescue() {
+	fbrot=0   # the rescue screen is always landscape
 	text_console
 	msg "RESCUE: $*"
 	echo "$*" > /run/rescue-reason
@@ -135,6 +147,16 @@ for cand in $candidates; do
 	if ! mount -t ext4 -o rw,noatime "$d" /newroot; then
 		msg "$cand on $d unusable (mount failed), trying next"
 		continue
+	fi
+	# ORIENTATION: from here on the splash (its next status redraws the whole
+	# frame turned) and the text console (turned now if it has the screen)
+	if [ -x /usr/sbin/tsx-orientation ]; then
+		eval "$(/usr/sbin/tsx-orientation -f /newroot/etc/tsx/orientation info 2>/dev/null)"
+		if [ "${ORIENTATION:-landscape}" != "$orient" ]; then
+			orient=$ORIENTATION fbrot=$FBCON_ROTATE
+			msg "orientation $orient"
+			[ -n "$verbose" ] && text_console
+		fi
 	fi
 	[ -e /newroot/etc/tsx/boot-verbose ] && [ -z "$verbose" ] && text_console
 	if [ -e /newroot/etc/tsx/force-rescue ]; then

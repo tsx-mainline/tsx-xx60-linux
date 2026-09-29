@@ -26,6 +26,7 @@ from .entities import (
     ButtonEntity,
     KeyEventEntity,
     NumberEntity,
+    SelectEntity,
     SensorEntity,
     SwitchEntity,
     TextEntity,
@@ -59,6 +60,7 @@ class PanelDevice:
     screen: SwitchEntity
     backlight: NumberEntity
     blank_timeout: NumberEntity
+    orientation: SelectEntity
     als_auto: Optional[SwitchEntity]
     illuminance: Optional[SensorEntity]
     volume: Optional[NumberEntity]
@@ -147,6 +149,13 @@ def build_entities(server, backend: PanelBackend, key_base: int = 0) -> PanelDev
         min_value=0, max_value=86400, step=10, unit="s", icon="mdi:timer-outline", mode=1,
     )
     entities.append(blank_timeout)
+    # screen orientation (panel.conf ORIENTATION): the kiosk turns at once,
+    # the boot splash from the next boot on
+    orientation = SelectEntity(
+        server, next_key(), "Orientation", "orientation", options=backend.ORIENTATIONS,
+        get_state=backend.get_orientation, set_state=backend.set_orientation, icon="mdi:screen-rotation",
+    )
+    entities.append(orientation)
 
     # ---- ambient light / auto-brightness (only with als.conf, like tsx-mqtt) --
     als_auto = illuminance = None
@@ -234,7 +243,7 @@ def build_entities(server, backend: PanelBackend, key_base: int = 0) -> PanelDev
         backlight=backlight, blank_timeout=blank_timeout, als_auto=als_auto, illuminance=illuminance, volume=volume,
         verbose_boot=verbose_boot, kiosk_url=kiosk_url, reload_button=reload_button, reboot_button=reboot_button,
         cpu_temp=cpu_temp, uptime=uptime, ip_address=ip_address, touched_recently=touched_recently,
-        update=update, keys=keys, _pulse_since=time.time(),
+        update=update, keys=keys, orientation=orientation, _pulse_since=time.time(),
     )
 
 
@@ -286,6 +295,11 @@ def poll(device: PanelDevice, broadcast: Callable[[list], None]) -> None:
         msg = entity.poll()
         if getattr(entity, "_state", None) != before:
             msgs.append(msg)
+
+    before = device.orientation._state  # pylint: disable=protected-access
+    msg = device.orientation.poll()
+    if device.orientation._state != before:  # pylint: disable=protected-access
+        msgs.append(msg)
 
     event = backend.poll_key_event()
     if event:

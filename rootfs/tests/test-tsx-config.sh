@@ -74,6 +74,18 @@ run set HA_API_KEY "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB=" >/dev/null 2>&
 run set HA_API_KEY "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-_=" >/dev/null 2>&1 && bad "url-safe base64 accepted" || ok "url-safe base64 alphabet rejected (ESPHome uses standard base64)"
 run set HA_API_KEY "$K" >/dev/null
 
+echo "== ORIENTATION: the four names of tsx-orientation, nothing else =="
+ORI="$HERE/overlay/usr/local/bin/tsx-orientation"
+for v in landscape portrait landscape-flipped portrait-flipped; do
+	run set ORIENTATION "$v" && [ "$(run get ORIENTATION)" = "$v" ] && busybox sh "$ORI" check "$v" \
+		&& ok "ORIENTATION $v accepted (and by tsx-orientation)" || bad "ORIENTATION $v"
+done
+for v in sideways Portrait 90 "portrait " "" "landscape;reboot"; do
+	run set ORIENTATION "$v" >/dev/null 2>&1 && bad "ORIENTATION '$v' accepted" || ok "ORIENTATION '$v' rejected"
+	busybox sh "$ORI" check "$v" && bad "tsx-orientation check '$v' accepted" || true
+done
+run validate ORIENTATION portrait && ok "validate ORIENTATION portrait (the setup page's check)" || bad "validate ORIENTATION portrait"
+
 echo "== a value containing a literal newline is rejected =="
 V=$(printf 'line1\nline2')
 run set MQTT_USER "$V" >/dev/null 2>&1 && bad "embedded newline accepted" || ok "embedded newline rejected"

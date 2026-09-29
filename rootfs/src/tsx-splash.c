@@ -15,21 +15,35 @@
  *   tsx-splash console                      give the screen to the text console
  *                                           (bind fbcon to fb0: boot failures,
  *                                           the rescue, BOOT_VERBOSE)
- *   tsx-splash size                         print WIDTHxHEIGHT
+ *   tsx-splash size                         print WIDTHxHEIGHT (of the frame: the
+ *                                           framebuffer turned to the orientation)
+ *   tsx-splash [-s TEXT] [-p PCT] fbpng FILE  the frame as it lands on the
+ *                                           framebuffer (native landscape LCD
+ *                                           orientation), as a PNG: tests
  *
  * Options: -d DIR (default /usr/share/tsx/splash): splash-WxH.ppm (binary
  * PPM, one per panel size; another size is centred on black) and
  * font-16.psf / font-24.psf (PSF1 or PSF2 console fonts, 24 on screens at
  * least 720 lines high); -f FB (default /dev/fb0); -p -1 = no bar;
- * -g WxH: frame size for "png" and "size" without opening the framebuffer.
+ * -g WxH: framebuffer size for "png", "fbpng" and "size" without opening the
+ * framebuffer; -o ORIENTATION: landscape | portrait | landscape-flipped |
+ * portrait-flipped (default: the name in /etc/tsx/orientation, env
+ * TSX_ORIENTATION_FILE, else landscape; docs/rootfs.md "Orientation"). The
+ * frame is composed upright for the viewer (800x1280 on the 1280x800 LCD in
+ * portrait, from splash-800x1280.ppm) and turned onto the framebuffer: ROTATE
+ * quarter turns clockwise (portrait 3, portrait-flipped 1, landscape-flipped
+ * 2; the table is tsx-orientation's). "png" writes the upright frame (the
+ * compositor turns its output itself).
  * The background of the artwork is black; the status band is redrawn on
  * black, so "status" needs no image. "show" and "status" do nothing while the
  * text console owns the screen (fbcon bound: the rescue, BOOT_VERBOSE, an
  * older kernel without fbcon=map:1), so they never draw over boot text.
  * "show" records the framebuffer driver (fix.id) in /run/tsx-splash.fb; when
  * "status" finds another driver on fb0 (the DRM driver replaced simpledrm on
- * U-Boot's framebuffer after "show", and switched that plane off), it does a
- * full "show" instead, so the splash comes back rather than a lone status band.
+ * U-Boot's framebuffer after "show", and switched that plane off), or another
+ * orientation (the initramfs knows it only once the root file system is
+ * mounted), it does a full "show" instead, so the splash comes back rather
+ * than a lone status band.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -45,8 +59,69 @@
 
 static const char *dir = "/usr/share/tsx/splash", *fbdev = "/dev/fb0";
 static const char *fbid_file = "/run/tsx-splash.fb";
-static int W, H;            /* frame size */
+static int W, H;            /* frame size (upright for the viewer) */
+static int PW, PH;          /* framebuffer size (native LCD orientation) */
+static int rot;             /* quarter turns clockwise of the frame on the framebuffer */
 static uint8_t *rgb;        /* frame, 3 bytes per pixel */
+
+/* orientation name -> quarter turns clockwise on the LCD (tsx-orientation's
+ * table: the panel turned clockwise shows the picture turned counter-
+ * clockwise); -1 = not a name */
+static int orient_rot(const char *o)
+{
+	if (!strcmp(o, "landscape")) return 0;
+	if (!strcmp(o, "portrait")) return 3;
+	if (!strcmp(o, "landscape-flipped")) return 2;
+	if (!strcmp(o, "portrait-flipped")) return 1;
+	return -1;
+}
+
+/* the configured orientation (first line of the file; missing/invalid =
+ * landscape) */
+static int orient_file_rot(void)
+{
+	const char *path = getenv("TSX_ORIENTATION_FILE") ? getenv("TSX_ORIENTATION_FILE") : "/etc/tsx/orientation";
+	char b[64] = "";
+	FILE *f = fopen(path, "r");
+	int r;
+	if (!f) return 0;
+	if (!fgets(b, sizeof b, f)) b[0] = 0;
+	fclose(f);
+	b[strcspn(b, "\r\n")] = 0;
+	return (r = orient_rot(b)) < 0 ? 0 : r;
+}
+
+/* the framebuffer size is known: the frame is the same turned by rot */
+static void set_size(int pw, int ph)
+{
+	PW = pw; PH = ph;
+	W = rot & 1 ? ph : pw;
+	H = rot & 1 ? pw : ph;
+}
+
+/* frame pixel shown at framebuffer pixel (px, py) */
+static const uint8_t *frame_at(int px, int py)
+{
+	int lx, ly;
+	switch (rot) {
+	case 1: lx = py; ly = PW - 1 - px; break;
+	case 2: lx = PW - 1 - px; ly = PH - 1 - py; break;
+	case 3: lx = PH - 1 - py; ly = px; break;
+	default: lx = px; ly = py; break;
+	}
+	return rgb + ((size_t)ly * W + lx) * 3;
+}
+
+/* framebuffer position of frame pixel (lx, ly) */
+static void to_fb(int lx, int ly, int *px, int *py)
+{
+	switch (rot) {
+	case 1: *px = PW - 1 - ly; *py = lx; break;
+	case 2: *px = PW - 1 - lx; *py = PH - 1 - ly; break;
+	case 3: *px = ly; *py = PH - 1 - lx; break;
+	default: *px = lx; *py = ly; break;
+	}
+}
 
 struct font { int w, h, n, stride; const uint8_t *g; uint8_t *mem; };
 
@@ -200,7 +275,7 @@ static int fb_open(struct fb_var_screeninfo *var, struct fb_fix_screeninfo *fix)
 	int fd = open(fbdev, O_RDWR | O_CLOEXEC);
 	if (fd < 0) die(fbdev);
 	if (ioctl(fd, FBIOGET_VSCREENINFO, var) || ioctl(fd, FBIOGET_FSCREENINFO, fix)) die("FBIOGET_*SCREENINFO");
-	W = var->xres; H = var->yres;
+	set_size(var->xres, var->yres);
 	return fd;
 }
 
@@ -209,23 +284,29 @@ static uint32_t chan(unsigned v, const struct fb_bitfield *b)
 	return b->length ? ((uint32_t)v >> (8 - (b->length > 8 ? 8 : b->length))) << b->offset : 0;
 }
 
-/* write rows [y0, y1) of the frame to the framebuffer in its pixel format */
-static void fb_write(int fd, const struct fb_var_screeninfo *var, const struct fb_fix_screeninfo *fix, int y0, int y1)
+/* write the framebuffer rectangle [x0, x1) x [y0, y1) from the (turned) frame
+ * in the framebuffer's pixel format */
+static void fb_write(int fd, const struct fb_var_screeninfo *var, const struct fb_fix_screeninfo *fix,
+		     int x0, int y0, int x1, int y1)
 {
 	int bpp = (var->bits_per_pixel + 7) / 8;
 	uint8_t *row = malloc(fix->line_length);
 	if (!row) die("malloc");
 	if (bpp < 2 || bpp > 4) { errno = EINVAL; die("unsupported pixel depth"); }
-	for (int y = y0; y < y1 && y < H; y++) {
-		memset(row, 0, fix->line_length);
-		for (int x = 0; x < W; x++) {
-			const uint8_t *p = rgb + ((size_t)y * W + x) * 3;
+	if (x0 < 0) x0 = 0;
+	if (y0 < 0) y0 = 0;
+	if (x1 > PW) x1 = PW;
+	if (y1 > PH) y1 = PH;
+	if ((size_t)x1 * bpp > fix->line_length) x1 = fix->line_length / bpp;
+	for (int y = y0; y < y1; y++) {
+		for (int x = x0; x < x1; x++) {
+			const uint8_t *p = frame_at(x, y);
 			uint32_t px = chan(p[0], &var->red) | chan(p[1], &var->green) | chan(p[2], &var->blue);
 			if (var->transp.length) px |= ((1u << var->transp.length) - 1) << var->transp.offset;
-			memcpy(row + (size_t)x * bpp, &px, bpp);      /* little endian */
+			memcpy(row + (size_t)(x - x0) * bpp, &px, bpp);      /* little endian */
 		}
-		off_t off = (off_t)(y + var->yoffset) * fix->line_length + (off_t)var->xoffset * bpp;
-		if (pwrite(fd, row, fix->line_length, off) < 0) die("write");
+		off_t off = (off_t)(y + var->yoffset) * fix->line_length + (off_t)(x0 + var->xoffset) * bpp;
+		if (x1 > x0 && pwrite(fd, row, (size_t)(x1 - x0) * bpp, off) < 0) die("write");
 	}
 	free(row);
 }
@@ -253,9 +334,9 @@ static void chunk(FILE *f, const char *type, const uint8_t *d, size_t n)
 	fwrite(h, 1, 8, f); fwrite(d, 1, n, f);
 	be32(h, c); fwrite(h, 1, 4, f);
 }
-static int png_write(const char *path)
+static int png_write(const char *path, const uint8_t *img, int iw, int ih)
 {
-	size_t rowlen = (size_t)W * 3 + 1, raw = rowlen * H, nblk = (raw + 65534) / 65535;
+	size_t rowlen = (size_t)iw * 3 + 1, raw = rowlen * ih, nblk = (raw + 65534) / 65535;
 	size_t zlen = 2 + raw + nblk * 5 + 4, o = 0;
 	uint8_t *z = malloc(zlen), ihdr[13];
 	uint32_t a = 1, b2 = 0;
@@ -269,14 +350,14 @@ static int png_write(const char *path)
 		z[o++] = left == n; z[o++] = n; z[o++] = n >> 8; z[o++] = ~n; z[o++] = ~n >> 8;
 		for (size_t i = 0; i < n; i++, pos++) {
 			size_t y = pos / rowlen, x = pos % rowlen;
-			uint8_t v = x ? rgb[y * W * 3 + x - 1] : 0;       /* filter byte 0 = none */
+			uint8_t v = x ? img[y * iw * 3 + x - 1] : 0;       /* filter byte 0 = none */
 			z[o++] = v;
 			a = (a + v) % 65521; b2 = (b2 + a) % 65521;
 		}
 		left -= n;
 	}
 	be32(z + o, (b2 << 16) | a); o += 4;
-	be32(ihdr, W); be32(ihdr + 4, H);
+	be32(ihdr, iw); be32(ihdr + 4, ih);
 	ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = ihdr[11] = ihdr[12] = 0;
 	snprintf(tmp, sizeof tmp, "%s.tmp", path);
 	if (!(f = fopen(tmp, "wb"))) { free(z); return -1; }
@@ -297,7 +378,7 @@ static void compose(const char *status, int pct)
 	snprintf(path, sizeof path, "%s/splash-%dx%d.ppm", dir, W, H);
 	if (ppm_blit(path)) {
 		/* another panel size: the largest image that fits, centred */
-		static const int sz[][2] = { { 1280, 800 }, { 1024, 600 } };
+		static const int sz[][2] = { { 1280, 800 }, { 800, 1280 }, { 1024, 600 }, { 600, 1024 } };
 		for (unsigned i = 0; i < sizeof sz / sizeof sz[0]; i++) {
 			if (sz[i][0] > W || sz[i][1] > H) continue;
 			snprintf(path, sizeof path, "%s/splash-%dx%d.ppm", dir, sz[i][0], sz[i][1]);
@@ -309,7 +390,8 @@ static void compose(const char *status, int pct)
 
 static void usage(void)
 {
-	fputs("usage: tsx-splash [-d DIR] [-f FB] [-s TEXT] [-p PCT] show|status|png FILE|console|size\n", stderr);
+	fputs("usage: tsx-splash [-d DIR] [-f FB] [-g WxH] [-o ORIENTATION] [-s TEXT] [-p PCT]\n"
+	      "                  show|status|png FILE|fbpng FILE|console|size\n", stderr);
 	exit(2);
 }
 
@@ -320,17 +402,20 @@ int main(int argc, char **argv)
 	struct fb_var_screeninfo var;
 	struct fb_fix_screeninfo fix;
 
-	while ((c = getopt(argc, argv, "d:f:s:p:g:")) != -1)
+	rot = -1;
+	while ((c = getopt(argc, argv, "d:f:s:p:g:o:")) != -1)
 		switch (c) {
 		case 'd': dir = optarg; break;
 		case 'f': fbdev = optarg; break;
 		case 's': status = optarg; break;
 		case 'p': pct = atoi(optarg); break;
 		case 'g': if (sscanf(optarg, "%dx%d", &gw, &gh) != 2 || gw < 1 || gh < 1 || gw > 8192 || gh > 8192) usage(); break;
+		case 'o': if ((rot = orient_rot(optarg)) < 0) usage(); break;
 		default: usage();
 		}
 	if (optind >= argc) usage();
 	cmd = argv[optind];
+	if (rot < 0) rot = orient_file_rot();
 
 	if (!strcmp(cmd, "console")) {
 		/* FBIOPUT_CON2FBMAP: the first call takes over all consoles */
@@ -345,9 +430,10 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
-	if (gw && (!strcmp(cmd, "size") || !strcmp(cmd, "png"))) {
-		W = gw; H = gh;
-	} else if (strcmp(cmd, "show") && strcmp(cmd, "status") && strcmp(cmd, "size") && strcmp(cmd, "png")) {
+	int png = !strcmp(cmd, "png"), fbpng = !strcmp(cmd, "fbpng");
+	if (gw && (!strcmp(cmd, "size") || png || fbpng)) {
+		set_size(gw, gh);
+	} else if (strcmp(cmd, "show") && strcmp(cmd, "status") && strcmp(cmd, "size") && !png && !fbpng) {
 		usage();
 	} else {
 		close(fb_open(&var, &fix));
@@ -356,18 +442,29 @@ int main(int argc, char **argv)
 		printf("%dx%d\n", W, H);
 		return 0;
 	}
-	if (!strcmp(cmd, "png")) {
+	if (png || fbpng) {
 		if (optind + 1 >= argc) usage();
 		compose(status, pct);
-		if (png_write(argv[optind + 1])) die(argv[optind + 1]);
+		if (png && png_write(argv[optind + 1], rgb, W, H)) die(argv[optind + 1]);
+		if (fbpng) {
+			uint8_t *fb = malloc((size_t)PW * PH * 3);
+			if (!fb) die("malloc");
+			for (int y = 0; y < PH; y++)
+				for (int x = 0; x < PW; x++)
+					memcpy(fb + ((size_t)y * PW + x) * 3, frame_at(x, y), 3);
+			if (png_write(argv[optind + 1], fb, PW, PH)) die(argv[optind + 1]);
+			free(fb);
+		}
 		return 0;
 	}
 	if (fbcon_bound()) return 0;            /* the text console has the screen */
 	int fd = fb_open(&var, &fix);
-	char id[sizeof fix.id + 1];
+	char id[sizeof fix.id + 8];
 	memcpy(id, fix.id, sizeof fix.id); id[sizeof fix.id] = 0;
+	snprintf(id + strlen(id), 8, " r%d", rot);
 	if (!strcmp(cmd, "status")) {
-		/* another driver than at "show" (or no "show" yet): full redraw */
+		/* another driver or orientation than at "show" (or no "show" yet):
+		 * full redraw */
 		char was[sizeof id] = "";
 		FILE *f = fopen(fbid_file, "r");
 		if (f) { if (!fgets(was, sizeof was, f)) was[0] = 0; fclose(f); }
@@ -383,7 +480,7 @@ int main(int argc, char **argv)
 		var.xoffset = var.yoffset = 0;
 		ioctl(fd, FBIOPUT_VSCREENINFO, &var);
 		ioctl(fd, FBIOGET_VSCREENINFO, &var);
-		fb_write(fd, &var, &fix, 0, H);
+		fb_write(fd, &var, &fix, 0, 0, PW, PH);
 		ioctl(fd, FBIOBLANK, FB_BLANK_UNBLANK);
 		return 0;
 	}
@@ -391,7 +488,13 @@ int main(int argc, char **argv)
 		rgb = calloc((size_t)W * H, 3);
 		if (!rgb) die("calloc");
 		draw_status(status, pct);
-		fb_write(fd, &var, &fix, band_y, band_y + band_h);
+		/* the band (full frame width) on the framebuffer: a column strip
+		 * when the frame is turned a quarter */
+		int ax, ay, bx, by;
+		to_fb(0, band_y, &ax, &ay);
+		to_fb(W - 1, band_y + band_h - 1, &bx, &by);
+		fb_write(fd, &var, &fix, ax < bx ? ax : bx, ay < by ? ay : by,
+			 (ax > bx ? ax : bx) + 1, (ay > by ? ay : by) + 1);
 		return 0;
 	}
 	usage();

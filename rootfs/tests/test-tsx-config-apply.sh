@@ -181,6 +181,27 @@ for v in 2 yes on ''; do
 	set_ BOOT_VERBOSE "$v" >/dev/null 2>&1 && bad "BOOT_VERBOSE '$v' accepted" || ok "BOOT_VERBOSE '$v' rejected"
 done
 
+echo "== ORIENTATION: /etc/tsx/orientation on the root fs, the kiosk turned on a change =="
+printf '#!/bin/sh\necho "tsx-orientation $* $(cat "$TSX_ORIENTATION_FILE" 2>/dev/null)" >> "%s/orient.log"\n' "$W" > "$W/bin/tsx-orientation"
+chmod +x "$W/bin/tsx-orientation"; : > "$W/orient.log"
+applyo() { PATH="$W/bin:$BB:$PATH" apply_ >/dev/null 2>&1; }
+lives() { grep -c '^tsx-orientation apply' "$W/orient.log" 2>/dev/null || true; }
+applyo
+[ ! -e "$FX/etc/tsx/orientation" ] && [ "$(lives)" = 0 ] && ok "unset: no orientation file, kiosk not touched" || bad "unset: file or live apply ($(lives))"
+set_ ORIENTATION portrait >/dev/null; applyo
+[ "$(cat "$FX/etc/tsx/orientation" 2>/dev/null)" = portrait ] && ok "portrait -> /etc/tsx/orientation = portrait" || bad "orientation file: '$(cat "$FX/etc/tsx/orientation" 2>/dev/null)'"
+[ "$(stat -c %a "$FX/etc/tsx/orientation")" = 644 ] && ok "orientation file is world-readable (kiosk, tsx-buttons, the ESPHome plugin)" || bad "orientation file mode $(stat -c %a "$FX/etc/tsx/orientation")"
+[ "$(lives)" = 1 ] && grep -q '^tsx-orientation apply portrait$' "$W/orient.log" && ok "the change turned the running kiosk (tsx-orientation apply, file already written)" || bad "live apply: $(cat "$W/orient.log" 2>/dev/null)"
+touch -d '2000-01-01' "$FX/etc/tsx/orientation"; applyo
+[ "$(stat -c %Y "$FX/etc/tsx/orientation")" = "$(date -d 2000-01-01 +%s)" ] && [ "$(lives)" = 1 ] && ok "unchanged: file not rewritten, kiosk not touched again" || bad "unchanged value rewrote the file or re-applied ($(lives))"
+set_ ORIENTATION portrait-flipped >/dev/null; applyo
+[ "$(cat "$FX/etc/tsx/orientation")" = portrait-flipped ] && [ "$(lives)" = 2 ] && ok "portrait-flipped: file + live apply" || bad "portrait-flipped: $(lives)"
+set_ ORIENTATION landscape >/dev/null; applyo
+[ ! -e "$FX/etc/tsx/orientation" ] && [ "$(lives)" = 3 ] && ok "landscape (the default): file removed, kiosk turned back" || bad "landscape: file left or no live apply ($(lives))"
+set_ ORIENTATION landscape-flipped >/dev/null; applyo
+TSX_CONF="$CFG" busybox sh "$SCRIPT" unset ORIENTATION >/dev/null; applyo
+[ ! -e "$FX/etc/tsx/orientation" ] && [ "$(lives)" = 5 ] && ok "unset again: file removed, kiosk turned back" || bad "unset: $(lives)"
+
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-tsx-config-apply || echo FAIL test-tsx-config-apply
 exit $F

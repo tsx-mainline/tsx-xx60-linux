@@ -25,7 +25,11 @@
  *    coordinates), so a finger sliding along the strip is: key N released,
  *    the next key pressed within SLIDE_GAP_MS. Each such step changes the
  *    brightness offset by SLIDE_STEP (up = brighter) and shows the overlay's
- *    slider. To tell a tap from the start of a slide, a short press of a strip
+ *    slider. The keys are raw touch-controller zones and do not turn with the
+ *    screen: with the panel hung landscape-flipped or portrait-flipped
+ *    (/etc/tsx/orientation, docs/rootfs.md "Orientation") the direction is
+ *    turned around, so up (landscape) or right (portrait) is brighter in
+ *    every orientation. To tell a tap from the start of a slide, a short press of a strip
  *    key fires SLIDE_GAP_MS after its release (unless the next key follows);
  *    keys touched by a slide fire nothing (no short, long or HA event).
  *  - Quick-settings overlay (tsx-overlay, sway only): FIFO /run/tsx/overlay.ctl
@@ -39,7 +43,7 @@
  *    key press on a dark screen only wakes it (no action).
  *
  * Env overrides for tests: TSX_INPUT_DIR, TSX_LED_DIR, TSX_BACKLIGHT_DIR,
- * TSX_RUN_DIR, TSX_IDLED_STATE, TSX_HOSTNAME.
+ * TSX_RUN_DIR, TSX_IDLED_STATE, TSX_HOSTNAME, TSX_ORIENTATION_FILE.
  */
 #define _GNU_SOURCE
 #include <arpa/inet.h>
@@ -92,6 +96,7 @@ static struct cfg C;
 static const char *cfgfile = "/etc/tsx/buttons.conf";
 static const char *indir = "/dev/input", *leddir = "/sys/class/leds", *bldir_base = "/sys/class/backlight";
 static const char *rundir = "/run/tsx", *idled_state = "/run/tsx-idled.state";
+static const char *orient_file = "/etc/tsx/orientation";
 static char hostname_s[64], bldir[PATH_MAX], hdrfile[PATH_MAX], ctlpath[PATH_MAX], statepath[PATH_MAX], ovpath[PATH_MAX];
 static int verbose, have_token;
 static volatile sig_atomic_t sig_hup, sig_term;
@@ -552,11 +557,27 @@ static void do_overlay(const char *btn, const char *evt, const char *arg)
 /* positions come from led=1..5 (top to bottom); 0 = not on the strip */
 static int strip_pos(int bi) { return C.slide_step > 0 && bi >= 0 ? C.btn[bi].led : 0; }
 
+/* the panel hangs upside down (landscape-flipped) or with the keys above the
+ * screen (portrait-flipped): the physical top key is at the bottom / left, so
+ * the slide is turned around (tsx-orientation's SLIDE_INVERT). Read at every
+ * step (a few per slide): an orientation change applies at once. */
+static int slide_inverted(void)
+{
+	char b[64] = "";
+	FILE *f = fopen(orient_file, "r");
+	if (!f) return 0;
+	if (!fgets(b, sizeof b, f)) b[0] = 0;
+	fclose(f);
+	b[strcspn(b, "\r\n")] = 0;
+	return !strcmp(b, "landscape-flipped") || !strcmp(b, "portrait-flipped");
+}
+
 /* a slide step from strip position a to b (|b - a| 1 or 2: a quick finger can
- * skip a key's zone between two touch reports); up = brighter */
+ * skip a key's zone between two touch reports); up = brighter (turned around
+ * when the panel hangs flipped) */
 static void slide_step(int a, int b)
 {
-	int n = a - b, lvl;
+	int n = slide_inverted() ? b - a : a - b, lvl;
 	lvl = brightness_rel(n * C.slide_step);
 	if (lvl > 0) slide_want = lvl;
 	if (verbose) logm("slide %d -> %d: brightness %d", a, b, lvl);
@@ -1122,7 +1143,7 @@ int main(int argc, char **argv)
 	}
 #define ENV(v, n) if (getenv(n)) v = getenv(n)
 	ENV(indir, "TSX_INPUT_DIR"); ENV(leddir, "TSX_LED_DIR"); ENV(bldir_base, "TSX_BACKLIGHT_DIR");
-	ENV(rundir, "TSX_RUN_DIR"); ENV(idled_state, "TSX_IDLED_STATE");
+	ENV(rundir, "TSX_RUN_DIR"); ENV(idled_state, "TSX_IDLED_STATE"); ENV(orient_file, "TSX_ORIENTATION_FILE");
 #undef ENV
 	if (getenv("TSX_HOSTNAME")) snprintf(hostname_s, sizeof hostname_s, "%s", getenv("TSX_HOSTNAME"));
 	else if (gethostname(hostname_s, sizeof hostname_s)) strcpy(hostname_s, "tsx");

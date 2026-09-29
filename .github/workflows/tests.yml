@@ -54,6 +54,8 @@ jobs:
         run: sh rootfs/tests/test-splash.sh
       - name: rootfs/tests/test-confont.sh - console font by screen size, TSX - LINUX banners
         run: sh rootfs/tests/test-confont.sh
+      - name: rootfs/tests/test-orientation.sh - screen orientation (table, sway/touch, turned splash, overlay layout)
+        run: sh rootfs/tests/test-orientation.sh
       - name: rootfs/tests/test-tsx-config.sh
         run: rootfs/tests/test-tsx-config.sh
       - name: rootfs/tests/test-tsx-config-apply.sh

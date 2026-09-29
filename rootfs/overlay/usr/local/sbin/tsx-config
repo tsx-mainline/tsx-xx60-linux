@@ -53,8 +53,11 @@
 # Home Assistant "Blank timeout" number), BOOT_VERBOSE (1 = kernel and boot
 # text on the LCD instead of the boot splash, from the next boot on; apply
 # keeps the flag file /etc/tsx/boot-verbose on the root file system, which the
-# initramfs reads -- it cannot read /data), ROOT_PASSWORD_HASH,
-# SSH_AUTHORIZED_KEY. See installer/panel.conf.example
+# initramfs reads -- it cannot read /data), ORIENTATION (landscape |
+# portrait | landscape-flipped | portrait-flipped: how the panel hangs, see
+# tsx-orientation; apply keeps /etc/tsx/orientation on the root file system
+# for the initramfs, the splash, the kiosk and tsx-buttons, and turns the
+# running kiosk at once), ROOT_PASSWORD_HASH, SSH_AUTHORIZED_KEY. See installer/panel.conf.example
 # and docs/rootfs.md "Panel configuration" for what each one does.
 set -eu
 TSX_CONF=${TSX_CONF:-/data/tsx/panel.conf}
@@ -67,7 +70,7 @@ SEED=${TSX_CONF_SEED:-/etc/tsx/panel.conf.seed}
 # fixture tree at it; empty (the panel default) leaves the paths absolute.
 PREFIX=${TSX_APPLY_PREFIX:-}
 
-KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT BOOT_VERBOSE ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
+KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT BOOT_VERBOSE ORIENTATION ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 SECRET_KEYS="HA_TOKEN HA_API_KEY MQTT_PASSWORD ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 
 usage() { sed -n '2,26p' "$0" >&2; exit 2; }
@@ -156,6 +159,7 @@ val_ok() {
 	# seconds, 0 = never, at most a day
 	BLANK_TIMEOUT) printf '%s' "$v" | grep -Eq '^[0-9]{1,5}$' && [ "$v" -le 86400 ];;
 	BOOT_VERBOSE) case "$v" in 0|1) return 0;; esac; return 1;;
+	ORIENTATION) case "$v" in landscape|portrait|landscape-flipped|portrait-flipped) return 0;; esac; return 1;;
 	ROOT_PASSWORD_HASH) printf '%s' "$v" | grep -Eq '^\$[0-9A-Za-z$./]{10,}$';;
 	SSH_AUTHORIZED_KEY) printf '%s' "$v" | grep -Eq '^(ssh-[a-z0-9]+|ecdsa-sha2-[a-z0-9-]+) [A-Za-z0-9+/]+=*([[:space:]].*)?$';;
 	*) return 1;;
@@ -452,6 +456,27 @@ apply() {
 		fi
 	elif [ -e "$PREFIX/etc/tsx/boot-verbose" ]; then
 		rm -f "$PREFIX/etc/tsx/boot-verbose" && log "BOOT_VERBOSE off: boot splash from the next boot on"
+	fi
+
+	# ORIENTATION: /etc/tsx/orientation on the root file system (read by the
+	# initramfs, tsx-splash, kiosk-session and tsx-buttons; absent =
+	# landscape). Only written when it changes; a change turns the running
+	# kiosk at once (tsx-orientation apply: sway transform + touch mapping).
+	or=$(cfg_get ORIENTATION) || or=
+	[ "$or" = landscape ] && or=
+	orf=$PREFIX/etc/tsx/orientation
+	orcur=$(cat "$orf" 2>/dev/null) || orcur=
+	if [ "$or" != "$orcur" ]; then
+		if [ -n "$or" ]; then
+			mkdir -p "$PREFIX/etc/tsx" && printf '%s\n' "$or" > "$orf.tmp.$$" \
+				&& chmod 644 "$orf.tmp.$$" && mv "$orf.tmp.$$" "$orf"
+		else
+			rm -f "$orf"
+		fi
+		log "ORIENTATION=${or:-landscape}: the kiosk now, the boot splash and boot text from the next boot on"
+		if command -v "${TSX_ORIENTATION_BIN:-tsx-orientation}" >/dev/null 2>&1; then
+			TSX_ORIENTATION_FILE=$orf "${TSX_ORIENTATION_BIN:-tsx-orientation}" apply || true
+		fi
 	fi
 
 	method=$(cfg_get HA_LOGIN_METHOD) || method=

@@ -2,7 +2,9 @@
  * tsx-overlay: local quick settings for the xx60 kiosk (sway session only).
  *
  * A wlr-layer-shell surface on the OVERLAY layer at the right edge of the
- * screen, next to the front-key strip. Hidden (no surface at all) until
+ * screen, next to the front-key strip (landscape; with the panel hung in
+ * portrait it stays at the right edge, at most as high as on the 10-inch
+ * landscape panel and centred: tsx-overlay-layout.h). Hidden (no surface at all) until
  * tsx-buttons asks for it over /run/tsx/overlay.ctl:
  *   slider   compact brightness bar, shown while a finger slides along the
  *            key strip; hides OVERLAY_SLIDER_MS after the last step
@@ -50,11 +52,10 @@
 #include <cairo.h>
 #include <wayland-client.h>
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
+#include "tsx-overlay-layout.h"
 
 enum mode { HIDDEN, SLIDER, FULL };
-enum { B_NONE = -1, B_SLIDER, B_AUTO, B_BLANK, B_RELOAD, B_SETUP, B_CLOSE, NBTN };
 
-struct rect { int x, y, w, h; };
 struct buffer { struct wl_buffer *wb; void *data; size_t size; int busy, w, h; cairo_surface_t *cs; };
 
 static struct wl_display *dpy;
@@ -75,6 +76,7 @@ static volatile sig_atomic_t sig_term;
 
 static enum mode mode = HIDDEN, want_mode = HIDDEN;
 static int configured, surf_w, surf_h;
+static int cur_mv, out_h;                /* the surface's top/bottom margin; the output height */
 static long long hide_at;
 
 /* shown state */
@@ -85,16 +87,12 @@ static int pressed = B_NONE, press_inside, touch_id = -1, ptr_down;
 static double ptr_x, ptr_y;
 
 /*
- * layout (surface coordinates, scale 1). The surface spans the output height
- * minus a top and a bottom margin, so it fits either panel: 1280x800 (10-inch:
- * slider 600, full 720 px high) and 1024x600 (7-inch: slider 400, full 520).
+ * layout (surface coordinates, scale 1; tsx-overlay-layout.h). The surface
+ * spans the output height minus a top and a bottom margin, so it fits either
+ * panel: 1280x800 (10-inch: slider 600, full 720 px high) and 1024x600
+ * (7-inch: slider 400, full 520); on a portrait output the margins grow so
+ * it is no higher than that.
  */
-#define SLIDER_W 150
-#define SLIDER_MARGIN_V 100
-#define FULL_W 440
-#define FULL_MARGIN_V 40
-#define FULL_BTN_H 150
-#define MARGIN_R 16
 static struct rect r_track, r_btn[NBTN];
 
 static void logm(const char *fmt, ...)
@@ -214,19 +212,7 @@ static void sun(cairo_t *c, double cx, double cy, double r)
 
 static void layout(void)
 {
-	memset(r_btn, 0, sizeof r_btn);
-	int h = surf_h > 0 ? surf_h : 600;
-	if (mode == SLIDER) {
-		r_track = (struct rect){ 40, 90, 70, h - 200 };
-		r_btn[B_SLIDER] = (struct rect){ 0, 60, SLIDER_W, h - 100 };
-	} else {
-		int bx = 190, bw = FULL_W - bx - 24, gap = 20, by = 24;
-		int bh = (h - 2 * by - (NBTN - B_AUTO - 1) * gap) / (NBTN - B_AUTO);
-		if (bh > FULL_BTN_H) bh = FULL_BTN_H;
-		r_track = (struct rect){ 45, 110, 80, h - 200 };
-		r_btn[B_SLIDER] = (struct rect){ 0, 70, 170, h - 120 };
-		for (int i = B_AUTO; i < NBTN; i++) r_btn[i] = (struct rect){ bx, by + (i - B_AUTO) * (bh + gap), bw, bh };
-	}
+	overlay_layout(mode != SLIDER, surf_h, &r_track, r_btn);
 }
 
 static void draw(cairo_t *c, int w, int h)
@@ -348,7 +334,19 @@ static void layer_configure(void *data, struct zwlr_layer_surface_v1 *l, uint32_
 	(void)data;
 	zwlr_layer_surface_v1_ack_configure(l, serial);
 	if (w) surf_w = w;
-	if (h) surf_h = h;
+	if (h) {
+		/* the output height (it changes when the screen is turned, too):
+		 * with another margin due, set it and wait for the next configure */
+		out_h = (int)h + 2 * cur_mv;
+		int mv = overlay_margin_v(mode == FULL, out_h);
+		if (mv != cur_mv) {
+			cur_mv = mv;
+			zwlr_layer_surface_v1_set_margin(l, mv, MARGIN_R, mv, 0);
+			wl_surface_commit(surface);
+			return;
+		}
+		surf_h = h;
+	}
 	layout();       /* the height comes from the output */
 	configured = 1;
 	redraw();
@@ -375,7 +373,7 @@ static void surface_destroy(void)
 
 static void show(enum mode m)
 {
-	int w = m == FULL ? FULL_W : SLIDER_W, mv = m == FULL ? FULL_MARGIN_V : SLIDER_MARGIN_V;
+	int w = m == FULL ? FULL_W : SLIDER_W, mv = overlay_margin_v(m == FULL, out_h);
 	read_state();
 	if (m == mode && surface) return;
 	mode = m;
@@ -394,6 +392,7 @@ static void show(enum mode m)
 		configured = 0;
 	}
 	/* height 0 + top/bottom anchors: the compositor sizes it to the output */
+	cur_mv = mv;
 	zwlr_layer_surface_v1_set_margin(layer, mv, MARGIN_R, mv, 0);
 	zwlr_layer_surface_v1_set_size(layer, w, 0);
 	wl_surface_commit(surface);     /* -> configure -> redraw */

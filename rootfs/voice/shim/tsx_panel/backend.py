@@ -35,6 +35,9 @@ Env overrides (all also read by tsx-mqtt; new ones only for this module):
   privileged commands directly even when not root),
   TSX_LEDBAR/TSX_KEYPAD/TSX_BLANK/TSX_ALS_BIN/TSX_CONFIG_BIN/TSX_REBOOT_BIN/
   TSX_AMIXER/TSX_UPDATE_BIN (binary names, for test fixtures on $PATH).
+  TSX_ORIENTATION_FILE (/etc/tsx/orientation: the screen orientation as
+  `tsx-config apply` leaves it for the initramfs and the kiosk; absent =
+  landscape).
 """
 
 import json
@@ -83,6 +86,7 @@ class PanelBackend:
         self.als_conf = Path(_env("TSX_ALS_CONF", "/etc/tsx/als.conf"))
         self.card = _env("TSX_SOUND_CARD", "TSW1060")
         self.asound_dir = Path(_env("TSX_ASOUND_DIR", "/proc/asound"))
+        self.orientation_file = Path(_env("TSX_ORIENTATION_FILE", "/etc/tsx/orientation"))
         self.backlight_dir = Path(_env("TSX_BACKLIGHT_DIR", "/sys/class/backlight"))
         self.thermal_zone = Path(_env("TSX_THERMAL_ZONE", "/sys/class/thermal/thermal_zone0/temp"))
         self.devtools = _env("TSX_DEVTOOLS", "127.0.0.1:9222")
@@ -96,6 +100,7 @@ class PanelBackend:
         self.reboot_bin = _env("TSX_REBOOT_BIN", "reboot")
         self.amixer_bin = _env("TSX_AMIXER", "amixer")
         self.update_bin = _env("TSX_UPDATE_BIN", "tsx-autoupdate")
+        self._orientation_pending: Optional[Tuple[str, float]] = None
         self._last_key: Optional[Tuple[str, str]] = None
         self._blank_timeout_pending: Optional[Tuple[int, float]] = None
         self._verbose_boot_pending: Optional[Tuple[bool, float]] = None
@@ -164,6 +169,10 @@ class PanelBackend:
             # persisted in panel.conf; `apply` writes /run/tsx/blank-timeout,
             # which tsx-idled watches (same as tsx-panelctl's blank-timeout)
             self._run(self.config_bin, "set", "BLANK_TIMEOUT", rest[0])
+            self._run(self.config_bin, "apply")
+        elif cmd == "orientation":
+            # persisted in panel.conf; `apply` turns the running kiosk
+            self._run(self.config_bin, "set", "ORIENTATION", rest[0])
             self._run(self.config_bin, "apply")
         elif cmd == "volume":
             self._run(self.amixer_bin, "-q", "-c", self.card, "sset", "Master", rest[0] + "%")
@@ -412,6 +421,30 @@ class PanelBackend:
         seconds = max(0, min(86400, int(round(seconds))))
         self._blank_timeout_pending = (seconds, time.monotonic())
         self._ctl("blank-timeout", str(seconds))
+
+    # ---- screen orientation (ORIENTATION, panel.conf) -----------------------
+    ORIENTATIONS = ("landscape", "portrait", "landscape-flipped", "portrait-flipped")
+
+    def get_orientation(self) -> str:
+        """Read back from the file `tsx-config apply` leaves on the root file
+        system (world-readable; panel.conf itself is root-only, so the voice
+        satellite's plugin could not read it). A value just set is reported
+        until apply has written it (as get_blank_timeout)."""
+        value = (_read_first_line(self.orientation_file) or "").strip()
+        if value not in self.ORIENTATIONS:
+            value = "landscape"
+        pending = self._orientation_pending
+        if pending and pending[0] != value and time.monotonic() - pending[1] < 10:
+            return pending[0]
+        self._orientation_pending = None
+        return value
+
+    def set_orientation(self, name: str) -> None:
+        if name not in self.ORIENTATIONS:
+            _LOGGER.warning("orientation %r refused", name)
+            return
+        self._orientation_pending = (name, time.monotonic())
+        self._ctl("orientation", name)
 
     # ---- front keys --------------------------------------------------------
     def key_names(self):

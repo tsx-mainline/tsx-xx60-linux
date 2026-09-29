@@ -120,6 +120,20 @@ rejected=$(grep -c 'rejected:' "$T/panelctl.log")
 [ "$rejected" -ge 21 ] && ok "all 21 hostile lines were logged as rejected ($rejected)" || bad "expected >=21 rejections, got $rejected"
 kill -0 "$PID" 2>/dev/null && ok "daemon is still alive after the hostile batch" || bad "daemon died"
 
+echo "== orientation: the four names, nothing else =="
+: > "$T/cmds.log"
+send "orientation portrait-flipped"
+grep -qxF 'tsx-config set ORIENTATION portrait-flipped' "$T/cmds.log" && grep -qxF 'tsx-config apply' "$T/cmds.log" \
+	&& ok "orientation portrait-flipped -> tsx-config set ORIENTATION + apply" || bad "orientation: $(cat "$T/cmds.log" 2>/dev/null)"
+: > "$T/cmds.log"; r0=$(grep -c 'rejected:' "$T/panelctl.log")
+send "orientation sideways"
+send "orientation portrait extra"
+send "orientation"
+send "orientation -portrait"
+send "orientation landscape*"
+[ ! -s "$T/cmds.log" ] && [ "$(grep -c 'rejected:' "$T/panelctl.log")" = $((r0 + 5)) ] \
+	&& ok "5 bad orientation lines rejected, nothing run" || bad "bad orientation lines: $(cat "$T/cmds.log" 2>/dev/null)"
+
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-panelctl || echo FAIL test-panelctl
 exit $F

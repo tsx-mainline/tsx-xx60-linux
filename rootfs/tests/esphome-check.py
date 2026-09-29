@@ -74,6 +74,21 @@ async def main(args) -> int:
         await asyncio.sleep(0.5)
         print("OK: backlight number sent (5.0; test-esphome.sh checks the brightness file)")
 
+        orient = by_id.get("orientation")
+        assert orient is not None, "no orientation select"
+        assert list(orient.options) == ["landscape", "portrait", "landscape-flipped", "portrait-flipped"], orient.options
+        o_state = states.get(orient.key)
+        assert o_state is not None and o_state.state == "landscape", o_state
+        client.select_command(orient.key, "portrait")
+        await asyncio.sleep(0.5)
+        o_state = states.get(orient.key)
+        assert o_state is not None and o_state.state == "portrait", o_state
+        client.select_command(orient.key, "sideways")
+        await asyncio.sleep(0.5)
+        o_state = states.get(orient.key)
+        assert o_state is not None and o_state.state == "portrait", o_state
+        print("OK: orientation select: four options, reported landscape, set portrait, 'sideways' refused")
+
         bt_state = states.get(by_id["blank_timeout"].key)
         assert bt_state is not None and bt_state.state == 120.0, bt_state
         client.number_command(by_id["blank_timeout"].key, 600.0)

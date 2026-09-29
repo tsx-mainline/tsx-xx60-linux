@@ -59,7 +59,7 @@ TSX_INPUT_DIR=$T/idled-input TSX_BACKLIGHT_DIR=$T/bl TSX_STATE_FILE=$T/idled.sta
 	$T/tsx-idled -c $T/kiosk.conf -v 2>$T/idled.log & PIDS="$PIDS $!"
 sleep 0.5
 TSX_INPUT_DIR=$T/input TSX_LED_DIR=$T/leds TSX_BACKLIGHT_DIR=$T/bl TSX_RUN_DIR=$T/run \
-	TSX_IDLED_STATE=$T/idled.state TSX_HOSTNAME=testpanel \
+	TSX_IDLED_STATE=$T/idled.state TSX_HOSTNAME=testpanel TSX_ORIENTATION_FILE=$T/orientation \
 	$T/tsx-buttons -c $T/buttons.conf -v 2>$T/buttons.log & BPID=$!; PIDS="$PIDS $BPID"
 exec 7<>$T/input/event0
 key() { python3 -c 'import struct,sys,time; t=time.time(); sys.stdout.buffer.write(struct.pack("llHHi",int(t),0,1,int(sys.argv[1]),int(sys.argv[2]))+struct.pack("llHHi",int(t),0,0,0,0))' "$@" >&7; }
@@ -126,6 +126,23 @@ nc=$(wc -l < $T/log/cdp.log)
 press $F14 0.06; sleep 0.05; press $F17 0.06; sleep 0.6
 [ "$(wc -l < $T/log/cdp.log)" = $((nc + 1)) ] && [ "$(bl)" = 3 ] || fail "keys 2 and 5 are no slide: home must fire, brightness stay ($(bl))"
 ok "two taps three keys apart: no slide, home short fires"
+
+# the panel hung flipped (ORIENTATION landscape-flipped / portrait-flipped):
+# the physical top key is at the bottom / left, so the slide turns around;
+# portrait (keys below, top key on the right) keeps it. Read at every step.
+echo landscape-flipped > $T/orientation
+slide $F14 $F15; sleep 0.6
+[ "$(bl)" = 5 ] || fail "landscape-flipped: physical down slide must be brighter: $(bl), want 5"
+echo portrait-flipped > $T/orientation
+slide $F15 $F14; sleep 0.6
+[ "$(bl)" = 3 ] || fail "portrait-flipped: physical up slide must be darker: $(bl), want 3"
+echo portrait > $T/orientation
+slide $F15 $F14; sleep 0.6
+[ "$(bl)" = 5 ] || fail "portrait: physical up slide (right) must be brighter: $(bl), want 5"
+rm -f $T/orientation
+slide $F14 $F15; sleep 0.6
+[ "$(bl)" = 3 ] || fail "no orientation file: physical down slide must be darker: $(bl), want 3"
+ok "slide direction: turned around for landscape-/portrait-flipped, kept for portrait and landscape"
 
 # overlay FIFO: no reader -> OVERLAY_FALLBACK (blank toggle); a reader -> "full"/"slider"
 [ -p $T/run/overlay.ctl ] || fail "no overlay FIFO $T/run/overlay.ctl"

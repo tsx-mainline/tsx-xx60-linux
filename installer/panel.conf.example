@@ -34,6 +34,13 @@ HA_LOGIN_METHOD=trusted
 # Time zone (a name under /usr/share/zoneinfo).
 TZ_NAME=America/Denver
 
+# How the panel hangs on the wall, seen from the front: landscape (default,
+# the front keys right of the screen), portrait (turned 90 degrees clockwise:
+# keys below), landscape-flipped (keys left), portrait-flipped (keys above).
+# The kiosk turns at once; the boot splash follows from the root mount on.
+# docs/rootfs.md "Orientation".
+#ORIENTATION=landscape
+
 # Home Assistant Assist voice satellite (docs/ha.md): on/off, and the
 # on-device wake word when it is on.
 VOICE=off

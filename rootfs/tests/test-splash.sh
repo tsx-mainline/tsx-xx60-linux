@@ -76,6 +76,44 @@ expect "$W/c.png" 127 400 000000 "outside the smaller image is black"
 expect "$W/c.png" 640 565 000000 "no font: no text"
 expect "$W/c.png" 869 598 3fa7e0 "bar full at 100 %"
 
+echo "== orientation: the frame upright, turned onto the framebuffer =="
+mkdir -p "$W/d2"
+python3 - "$W/d2" <<'PY'
+import struct, sys
+d = sys.argv[1]
+for w, h, cx, cy in ((1024, 600, 512, 300), (600, 1024, 300, 512)):
+    px = bytearray(w * h * 3)
+    for y in range(cy - 5, cy + 5):
+        for x in range(cx - 5, cx + 5):
+            px[(y * w + x) * 3:(y * w + x) * 3 + 3] = b'\xff\xff\xff'
+    open('%s/splash-%dx%d.ppm' % (d, w, h), 'wb').write(b'P6\n%d %d\n255\n' % (w, h) + bytes(px))
+for n, gw, gh in ((16, 8, 16), (24, 12, 24)):
+    open('%s/font-%d.psf' % (d, n), 'wb').write(struct.pack('<8I', 0x864ab572, 0, 32, 0, 256, gh * ((gw + 7) // 8), gh, gw) + b'\xff' * gh * ((gw + 7) // 8) * 256)
+PY
+[ "$("$W/tsx-splash" -g 1024x600 -o portrait size)" = 600x1024 ] && ok "size: portrait frame 600x1024" || bad "size -o portrait"
+echo portrait-flipped > "$W/orient"
+[ "$(TSX_ORIENTATION_FILE="$W/orient" "$W/tsx-splash" -g 1280x800 size)" = 800x1280 ] && ok "orientation from TSX_ORIENTATION_FILE" || bad "orientation file not read"
+echo junk > "$W/orient"
+[ "$(TSX_ORIENTATION_FILE="$W/orient" "$W/tsx-splash" -g 1280x800 size)" = 1280x800 ] && ok "junk orientation file: landscape" || bad "junk orientation file"
+"$W/tsx-splash" -d "$W/d2" -g 1024x600 -o portrait -s AB -p 50 png "$W/p.png"
+expect "$W/p.png" 300 512 ffffff "portrait png: the 600x1024 frame, image centred"
+expect "$W/p.png" 295 720 9aa3ad "portrait png: status text (24 px font) at 70 % of 1024"
+expect "$W/p.png" 250 754 3fa7e0 "portrait png: bar filled"
+expect "$W/p.png" 350 754 1c2329 "portrait png: bar track"
+"$W/tsx-splash" -d "$W/d2" -g 1024x600 -o portrait -s AB -p 50 fbpng "$W/pf.png"
+expect "$W/pf.png" 512 299 ffffff "portrait on the LCD: image (3 quarter turns clockwise)"
+expect "$W/pf.png" 720 304 9aa3ad "portrait on the LCD: text"
+expect "$W/pf.png" 754 349 3fa7e0 "portrait on the LCD: bar"
+"$W/tsx-splash" -d "$W/d2" -g 1024x600 -o portrait-flipped -s AB -p 50 fbpng "$W/qf.png"
+expect "$W/qf.png" 303 295 9aa3ad "portrait-flipped on the LCD: text (1 quarter turn)"
+expect "$W/qf.png" 269 250 3fa7e0 "portrait-flipped on the LCD: bar"
+"$W/tsx-splash" -d "$W/d" -g 1024x600 -o landscape-flipped -s AB -p 50 fbpng "$W/lf.png"
+expect "$W/lf.png" 518 174 9aa3ad "landscape-flipped on the LCD: text (half a turn)"
+expect "$W/lf.png" 623 154 3fa7e0 "landscape-flipped on the LCD: bar filled part"
+"$W/tsx-splash" -d "$W/d" -g 1024x600 -o landscape -s AB -p 50 fbpng "$W/l.png"
+cmp -s "$W/l.png" "$W/a.png" && ok "landscape fbpng == png (no turn)" || bad "landscape fbpng differs from png"
+"$W/tsx-splash" -o sideways -g 1024x600 size 2>/dev/null && bad "-o sideways accepted" || ok "-o sideways rejected"
+
 echo "== bad usage =="
 "$W/tsx-splash" -g 0x0 png "$W/x.png" 2>/dev/null && bad "-g 0x0 accepted" || ok "-g 0x0 rejected"
 "$W/tsx-splash" frobnicate 2>/dev/null && bad "unknown command accepted" || ok "unknown command rejected"

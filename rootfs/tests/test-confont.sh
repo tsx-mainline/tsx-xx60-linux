@@ -42,6 +42,15 @@ fakesys v1024 "" "1024,600";    expect v1024 "ter-124b 85x25"
 fakesys s800 "U:800x480p-0";    expect s800 "ter-118b 80x26"
 fakesys s600 "U:600x400p-0";    expect s600 "default"
 fakesys nofb;                   expect nofb "default"
+# ORIENTATION portrait / portrait-flipped: /init turns the console a quarter
+# (fbcon rotate 3 / 1) before tsx-confont, which then sees the width and
+# height swapped; landscape-flipped (2) keeps them
+rotsys() { fakesys "$1" "$2"; mkdir -p "$T/$1/class/graphics/fbcon"; echo "$3" > "$T/$1/class/graphics/fbcon/rotate"; }
+rotsys p1280 "U:1280x800p-0" 3; expect p1280 "ter-120b 80x64"
+rotsys q1280 "U:1280x800p-0" 1; expect q1280 "ter-120b 80x64"
+rotsys p1024 "U:1024x600p-0" 3; expect p1024 "default"
+rotsys f1280 "U:1280x800p-0" 2; expect f1280 "ter-132b 80x25"
+rotsys z1024 "U:1024x600p-0" 0; expect z1024 "ter-124b 85x25"
 mkdir -p "$T/few"; echo x > "$T/few/ter-116b.psf"
 got=$(pick s1280 "$T/few"); [ "$got" = "ter-116b 160x50" ] && ok "only ter-116b shipped -> $got" || bad "few fonts: got '$got'"
 got=$(pick s1280 "$T/none"); [ "$got" = "default" ] && ok "no font dir -> default" || bad "no font dir: got '$got'"
@@ -63,7 +72,9 @@ TSX_SETFONT=$T/bin/setfont TSX_SYSFS=$T/nofb TSX_CONFONT_DIR=$T/fonts sh "$CF" &
 [ "$rc" = 0 ] && [ ! -e "$T/setfont.args" ] && ok "no framebuffer -> no setfont, exit 0" || bad "no fb: rc $rc, setfont called: $(cat "$T/setfont.args" 2>/dev/null)"
 
 echo "== every text-console path loads the font =="
-grep -q '^text_console() {.*tsx-splash console.*/usr/sbin/tsx-confont' "$HERE/rootfs/initramfs/overlay/init" && ok "/init text_console" || bad "/init text_console does not run tsx-confont"
+sed -n '/^text_console() {/,/^}/p' "$HERE/rootfs/initramfs/overlay/init" | tr '\n' ' ' > "$T/tc"
+grep -q 'tsx-splash console.*rotate_all.*/usr/sbin/tsx-confont' "$T/tc" && ok "/init text_console: bind, turn (fbcon rotate_all), then the font" || bad "/init text_console does not bind + rotate + run tsx-confont in that order"
+grep -q '^rescue() {' "$HERE/rootfs/initramfs/overlay/init" && sed -n '/^rescue() {/,/^}/p' "$HERE/rootfs/initramfs/overlay/init" | tr '\n' ' ' | grep -q 'fbrot=0.*text_console' && ok "/init rescue(): landscape text console" || bad "/init rescue() does not reset the console orientation"
 for f in "$HERE/installer/initramfs/tsx-autoinstall" "$HERE/rootfs/initramfs/overlay/usr/sbin/tsx-autoinstall"; do
 	grep -q 'tsx-splash console.*/usr/sbin/tsx-confont' "$f" && ok "${f#"$HERE"/}" || bad "${f#"$HERE"/} binds the console without tsx-confont"
 done

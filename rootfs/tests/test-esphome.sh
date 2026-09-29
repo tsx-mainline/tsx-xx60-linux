@@ -108,6 +108,7 @@ start_server() {
 	TSX_PANEL_DIRECT=1 TSX_HA_TRANSPORT=esphome \
 	TSX_ESPHOME_RUN_CONF="$F/run/tsx/esphome.conf.missing" TSX_ESPHOME_KEY_FILE="$F/run/tsx/esphome.key.missing" \
 	TSX_PANEL_NAME="$pname" \
+	TSX_ORIENTATION_FILE="$F/etc/tsx/orientation.missing" \
 	"$@" \
 	"$T/venv/bin/python3" "${cmd[@]}" > "$log" 2>&1 &
 	PIDS="$PIDS $!"
@@ -164,6 +165,8 @@ full_check() {
 	grep -q '^tsx-config set BOOT_VERBOSE 1$' "$F/cmds.log" 2>/dev/null \
 		&& echo "OK: verbose boot persisted through tsx-config (set BOOT_VERBOSE 1 + apply)" || { echo "FAIL: tsx-config set BOOT_VERBOSE 1 missing"; rc=1; }
 	grep -q '^tsx-autoupdate now$' "$F/cmds.log" 2>/dev/null && echo "OK: update entity Install ran tsx-autoupdate now" || { echo "FAIL: tsx-autoupdate now missing"; rc=1; }
+	grep -q '^tsx-config set ORIENTATION portrait$' "$F/cmds.log" 2>/dev/null && ! grep -q 'ORIENTATION sideways' "$F/cmds.log" \
+		&& echo "OK: orientation persisted through tsx-config (portrait; the bad option never reached it)" || { echo "FAIL: tsx-config set ORIENTATION portrait missing"; rc=1; }
 }
 noise_check() {  # noise_check PORT MODE [KEY]
 	"$T/venv/bin/python3" "$HERE/esphome-noise-check.py" "$@" || rc=1
