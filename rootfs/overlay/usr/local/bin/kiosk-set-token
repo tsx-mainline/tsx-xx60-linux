@@ -28,7 +28,7 @@ case "${1:-}" in
 --show) mode=show;;
 --clear) mode=clear;;
 --file) tok=$(tr -d ' \r\n' < "$2");;
-""|-h|--help) sed -n '2,17p' "$0"; exit 2;;
+""|-h|--help) sed -n '2,16p' "$0"; exit 2;;
 *) tok=$1;;
 esac
 if [ $mode = set ]; then

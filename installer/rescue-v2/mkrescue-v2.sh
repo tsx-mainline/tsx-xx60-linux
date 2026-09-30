@@ -15,7 +15,7 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INSTALLER_DIR=$(cd "$HERE/.." && pwd)
 BASE= FLAVOR=unknown OUT=
-while [ $# -gt 0 ]; do case $1 in --base) BASE=$2; shift;; --flavor) FLAVOR=$2; shift;; --out) OUT=$2; shift;; *) sed -n '2,20p' "$0"; exit 2;; esac; shift; done
+while [ $# -gt 0 ]; do case $1 in --base) BASE=$2; shift;; --flavor) FLAVOR=$2; shift;; --out) OUT=$2; shift;; *) sed -n '2,14p' "$0"; exit 2;; esac; shift; done
 [ -n "$BASE" ] && [ -f "$BASE" ] || { echo "mkrescue-v2.sh: --base RESCUE_IMG required (installer/rescue/mkrescue.sh output)" >&2; exit 2; }
 OUT=${OUT:-$HERE/out/tsx-rescue-v2-$(basename "${BASE%.img}").img}
 mkdir -p "$(dirname "$OUT")"

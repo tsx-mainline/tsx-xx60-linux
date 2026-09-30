@@ -73,8 +73,8 @@ while [ $# -gt 0 ]; do case $1 in
 	--out) OUT=$2; shift;; --puf-sha256) PUFSHA=$2; shift;; --emmc-sha256) RAWSHA=$2; shift;; --boot0-sha256) B0SHA=$2; shift;;
 	--root-ssh) ROOTSSH=1; case ${2:-} in ""|--*) ;; *) SSHSHELL=$2; shift;; esac;;   # old form: --root-ssh FILE
 	--sshshell) ROOTSSH=1; SSHSHELL=$2; shift;; --stock-sshshell) ROOTSSH=; SSHSHELL=;;
-	*) sed -n '2,61p' "$0" >&2; exit 2;; esac; shift; done
-[ -n "$PUF" ] && [ -n "$ENVSRC" ] && [ -n "$OUT" ] || { sed -n '2,61p' "$0" >&2; exit 2; }
+	*) sed -n '2,64p' "$0" >&2; exit 2;; esac; shift; done
+[ -n "$PUF" ] && [ -n "$ENVSRC" ] && [ -n "$OUT" ] || { sed -n '2,64p' "$0" >&2; exit 2; }
 [ -n "$RAW" ] && [ -n "$BOOT0" ] && BACKUP=1 || BACKUP=0
 [ -z "$RAW$BOOT0" ] || [ $BACKUP = 1 ] || die "--emmc-raw and --boot0 go together"
 for f in "$PUF" "$ENVSRC" $RAW $BOOT0 $SSHSHELL; do [ -f "$f" ] || die "$f: no such file"; done

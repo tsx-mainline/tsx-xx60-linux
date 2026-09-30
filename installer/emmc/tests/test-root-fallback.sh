@@ -35,7 +35,9 @@ mke2fs -q -F -L tsxroot-emmc -d "$W/withinit" "$W/emmc-valid.img" 16M
 mke2fs -q -F -L tsxroot       -d "$W/noinit"   "$W/card-noinit.img" 16M
 mke2fs -q -F -L tsxroot       -d "$W/withinit" "$W/card-valid.img" 16M
 
+. "$(dirname "$0")/../../../ci/loopcheck.sh"; loop_mark "$W/loops0"
 docker run --rm --privileged --platform linux/amd64 -v "$W:/w:rw" alpine:3.24 sh -c '
+trap '"'"'[ -n "${le:-}" ] && losetup -d "$le" 2>/dev/null; [ -n "${lc:-}" ] && losetup -d "$lc" 2>/dev/null'"'"' EXIT
 apk add -q --no-cache e2fsprogs util-linux blkid busybox-extras >/dev/null 2>&1
 for i in $(seq 0 31); do [ -b /dev/loop$i ] || mknod /dev/loop$i b 7 $i; done
 mkdir -p /newroot
@@ -86,6 +88,9 @@ run_case "valid tsxroot-emmc -> used directly, card never needed" \
 run_case "neither candidate has /sbin/init -> RESCUE" \
 	emmc-stale.img card-noinit.img RESCUE
 ' | tee "$W/docker.txt"
+leak=$(loop_new "$W/loops0")
+[ -z "$leak" ] || { echo "FAIL: loop devices left attached: $leak"; exit 1; }
+echo "  ok: no loop device left attached"
 
 N=$(grep -c "^PASS" "$W/docker.txt")
 F=$(grep -c "^FAIL" "$W/docker.txt")

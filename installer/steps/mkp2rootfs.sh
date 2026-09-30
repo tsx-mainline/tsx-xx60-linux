@@ -18,7 +18,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INSTALLER_DIR=$(cd "$HERE/.." && pwd); ROOTFS_DIR=$(cd "$INSTALLER_DIR/../rootfs" && pwd)
 SRC=$ROOTFS_DIR/out/rootfs.ext4 OUT=$INSTALLER_DIR/out/rootfs-p2.ext4 URL= TOKEN= CONF=
 while [ $# -gt 0 ]; do case $1 in --rootfs-ext4) SRC=$2; shift;; --out) OUT=$2; shift;; --url) URL=$2; shift;;
-	--token-file) TOKEN=$2; shift;; --config-file) CONF=$2; shift;; *) sed -n '2,17p' "$0"; exit 2;; esac; shift; done
+	--token-file) TOKEN=$2; shift;; --config-file) CONF=$2; shift;; *) sed -n '2,16p' "$0"; exit 2;; esac; shift; done
 P2BYTES=$((1638400 * 512))
 W=$(mktemp -d "${TMPDIR:-/var/tmp}/mkp2.XXXX"); trap 'rm -rf "$W"' EXIT
 # resize2fs cannot shrink the 1492 MiB build below ~1240 MiB (inode tables). So

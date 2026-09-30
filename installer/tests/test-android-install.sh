@@ -56,6 +56,8 @@ TOKEN=$W/token.txt; echo "eyJ0ZXN0IjoxfQ.token" > "$TOKEN"
 "$INSTALLER_DIR/payload/mkpayload" --out "$W/stick" --rootfs "$W/rootfs.tar.gz" --bootimg-tsw1060 "$W/tsxboot.img" \
 	--rescue-tsw1060 "$W/rescue.img" --rootfs-p2 "$W/p2.ext4" --url https://ha.test/lovelace/0 --token-file "$TOKEN" 2>&1 | sed 's/^/  host: /'
 
+. "$(dirname "$0")/../../ci/loopcheck.sh"; loop_mark "$W/loops0"
+rc=0
 docker run --rm --privileged --platform linux/amd64 -v "$INSTALLER_DIR:/installer:ro" -v "$ROOTFS_DIR:/rootfs:ro" -v "$W:/w" \
 	-e P2SHA="$P2SHA" alpine:3.24 sh -euc '
 apk add -q --no-cache sfdisk e2fsprogs e2fsprogs-extra dosfstools blkid util-linux-misc losetup u-boot-tools bash python3 mtools coreutils >/dev/null
@@ -64,7 +66,17 @@ truncate -s $((7774208 * 512)) /w/disk.img
 sfdisk -q /w/disk.img < /rootfs/tests/crestron-mbr.sfdisk
 L=$(losetup -P -f --show /w/disk.img); n=${L#/dev/}
 S=$(losetup -f --show /w/stick.img 2>/dev/null || true)
-cleanup() { rm -rf /w/disk.img.sha256; umount /mnt/media_rw/udisk0 /mnt/sdcard/x /mnt/extsd /mnt/sdcard 2>/dev/null || true; umount /mnt/media_rw/udisk0 2>/dev/null || true; losetup -d $L; [ -n "${SL:-}" ] && losetup -d $SL; true; }
+cleanup() {
+	rm -rf /w/disk.img.sha256
+	# Unmount every file system on the card and the stick, deepest first.
+	# Then detach the card ($L) and the stick ($SL; $S stays empty when stick.img
+	# does not exist yet).
+	pat="^/dev/${n}p"; for x in ${S:-} ${SL:-}; do pat="$pat|^$x "; done
+	for m in $(grep -E "$pat" /proc/mounts | cut -d" " -f2 | sort -r); do umount "$m" 2>/dev/null || true; done
+	losetup -d "$L" 2>/dev/null || true
+	for x in ${S:-} ${SL:-}; do losetup -d "$x" 2>/dev/null; done
+	true
+}
 trap cleanup EXIT
 sleep 1
 for p in /sys/block/$n/${n}p*; do b=${p##*/}; [ -b /dev/$b ] || mknod /dev/$b b $(cut -d: -f1 $p/dev) $(cut -d: -f2 $p/dev); done
@@ -300,7 +312,11 @@ umount /mnt/sdcard 2>/dev/null || true
 rm -rf /w/extstick   # a plain dir bind-mounted from the host: remove it here as root, or the
                      # host-side cleanup trap (unprivileged) cannot remove these root-owned files
 echo "PASS test-android-install"
-' | tee "$W/out.txt"
+' | tee "$W/out.txt" || rc=$?
+leak=$(loop_new "$W/loops0")
+[ -z "$leak" ] || { echo "FAIL: loop devices left attached: $leak"; exit 1; }
+echo "  ok: no loop device left attached"
+[ $rc = 0 ] || exit $rc
 N=$(grep -c "  ok: " "$W/out.txt")
 echo "ok checks: $N"
 [ "$N" -gt 0 ] && grep -q "^PASS" "$W/out.txt" || { echo "FAIL: a check was skipped or failed"; exit 1; }

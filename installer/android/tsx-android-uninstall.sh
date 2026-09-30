@@ -31,7 +31,7 @@ while [ $# -gt 0 ]; do
 	--disable) MODE=disable;;
 	--restore-env) MODE=restore-env; ENVFILE=$2; shift;;
 	--yes) YES=1;;
-	*) sed -n '2,21p' "$0"; exit 2;;
+	*) sed -n '2,19p' "$0"; exit 2;;
 	esac; shift
 done
 [ "$(id -u)" = 0 ] || die "not root"

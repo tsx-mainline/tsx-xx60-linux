@@ -23,7 +23,7 @@ UC="$SERIALDIR/uc.sh"
 ROOTSH="$INSTALLER/steps/rootsh"
 . "$INSTALLER/lib/tsx-rescue.sh"   # is_crestron_sshd: never try a root/password login on the Crestron sshd
 CRESTRONADMIN="$INSTALLER/steps/crestron-admin"
-usage() { sed -n '2,21p' "$0" >&2; }
+usage() { sed -n '2,18p' "$0" >&2; }
 PANEL= UART_OPT=auto SSHSHELL= PORT=8079 WSIP= RESULTS= DRYRUN=0
 while [ $# -gt 0 ]; do case "$1" in
 	--uart) UART_OPT=$2; shift 2;; --sshshell) SSHSHELL=$2; shift 2;; --port) PORT=$2; shift 2;;

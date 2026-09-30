@@ -193,14 +193,17 @@ else echo "  (skipped: FACT_IMG not set or not readable)"; fi
 
 echo "== 7. block device: loop device in a privileged container"
 cp --sparse=always "$BASE" "$W/loopcard.img"; truncate -s $((CARD - 1048576)) "$W/loopsmall.img"
+. "$(dirname "$0")/../../ci/loopcheck.sh"; loop_mark "$W/loops0"
 docker run --rm --privileged --platform linux/amd64 -v "$INSTALLER_DIR:/installer:ro" -v "$W:/w" -v "$I:/img/card.img:ro" -v "$W/out/card-tsw1060.manifest:/img/card.manifest:ro" alpine:3.24 sh -c '
 apk add -q --no-cache bash python3 mtools coreutils util-linux losetup lsblk gzip >/dev/null 2>&1
 for i in $(seq 0 31); do [ -b /dev/loop$i ] || mknod /dev/loop$i b 7 $i; done
 L=$(losetup -f --show /w/loopcard.img); S=$(losetup -f --show /w/loopsmall.img)
+trap 'losetup -d $L $S 2>/dev/null' EXIT
 /installer/sdcard/flash-card.sh --image /img/card.img --device $S --backup-dir /w/bkl --yes >/w/lsmall.txt 2>&1 && echo "SMALL ACCEPTED" || echo "small refused"
 /installer/sdcard/flash-card.sh --image /img/card.img --device $L --backup-dir /w/bkl --yes --force-device >/w/l.txt 2>&1 && echo "loop flashed" || { echo "loop FAILED"; tail -5 /w/l.txt; }
 losetup -d $L $S; chown -R '"$(id -u):$(id -g)"' /w' > "$W/docker.txt" 2>&1
 cat "$W/docker.txt" | sed 's/^/     /'
+leak=$(loop_new "$W/loops0"); [ -z "$leak" ] && ok "loop device: none left attached" || bad "loop devices left attached: $leak"
 t "loop device: smaller card refused" grep -q "small refused" "$W/docker.txt"
 t "loop device: update flash + verify ok" grep -q "loop flashed" "$W/docker.txt"
 t "loop device result: only p1, p5, env changed" test "$(diffregions "$BASE" "$W/loopcard.img")" = "env p1 p5"

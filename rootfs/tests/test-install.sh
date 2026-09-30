@@ -7,13 +7,16 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 W=${TMPDIR:-/tmp}/tsx-install-test; rm -rf "$W"; mkdir -p "$W"
 trap 'rm -rf "$W"' EXIT
+[ -f "$HERE/out/rootfs.tar.gz" ] || { echo "SKIPPED: needs a built rootfs (rootfs/out/rootfs.tar.gz)"; exit 0; }
+. "$(dirname "$0")/../../ci/loopcheck.sh"; loop_mark "$W/loops0"
+rc=0
 docker run --rm --privileged --platform linux/amd64 -v "$HERE:/rootfs:ro" -v "$W:/w" alpine:3.24 sh -euc '
 apk add -q --no-cache sfdisk e2fsprogs e2fsprogs-extra dosfstools blkid util-linux-misc losetup >/dev/null
 for i in $(seq 0 63); do [ -b /dev/loop$i ] || mknod /dev/loop$i b 7 $i; done
 truncate -s $((7774208 * 512)) /w/disk.img
 sfdisk -q /w/disk.img < /rootfs/tests/crestron-mbr.sfdisk
 L=$(losetup -P -f --show /w/disk.img); n=${L#/dev/}
-trap "umount /mnt/p1 /mnt/tsxroot 2>/dev/null; losetup -d $L" EXIT
+trap "umount /mnt/p1 /mnt/tsxroot 2>/dev/null || true; losetup -d $L" EXIT   # || true: set -e would stop the trap
 sleep 1
 for p in /sys/block/$n/${n}p*; do b=${p##*/}; [ -b /dev/$b ] || mknod /dev/$b b $(cut -d: -f1 $p/dev) $(cut -d: -f2 $p/dev); done
 mkfs.vfat -F 16 /dev/${n}p1 >/dev/null
@@ -71,4 +74,8 @@ dd if=/dev/zero of=/w/p5full.img bs=512 count=0 seek=3055616 2>/dev/null; dd if=
 $U --p5-image /w/p5full.img
 [ "$(dd if=/dev/${n}p5 bs=1M count=1 2>/dev/null | sha256sum | cut -d" " -f1)" = $P5SHA ] && ok "p5 restored byte-exact (head)"
 echo "PASS install/uninstall"
-'
+' || rc=$?
+leak=$(loop_new "$W/loops0")
+[ -z "$leak" ] || { echo "FAIL: loop devices left attached: $leak"; exit 1; }
+echo "  ok: no loop device left attached"
+exit $rc

@@ -14,5 +14,5 @@ kernel)      shift; exec "$HERE/tools/build/kbuild.sh" "$@";;
 rootfs)      shift; exec "$HERE/rootfs/build-rootfs.sh" "$@";;
 virt-kernel) shift; exec "$HERE/rootfs/build-virt-kernel.sh" "$@";;
 image)       shift; exec "$HERE/rootfs/mkbootimg.sh" "$@";;
-*) sed -n '2,8p' "$0"; exit 2;;
+*) sed -n '2,9p' "$0"; exit 2;;
 esac

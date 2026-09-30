@@ -80,7 +80,7 @@ while [ $# -gt 0 ]; do
 	*) echo "unknown option $1" >&2; exit 2;;
 	esac; shift
 done
-case "$CMD" in preflight|install|status) ;; *) sed -n '2,53p' "$0"; exit 2;; esac
+case "$CMD" in preflight|install|status) ;; *) sed -n '2,54p' "$0"; exit 2;; esac
 case "$GUARD" in fallback) WANT_SWITCH=$TSX_SWITCH_FALLBACK;; nogolden) WANT_SWITCH=$TSX_SWITCH_NOGOLDEN;; *) die "--guard fallback|nogolden";; esac
 
 W=${TSX_WORKDIR:-/dev/tsx-inst}          # /dev is a tmpfs on Android (RAM, gone after a reboot)

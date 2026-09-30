@@ -71,5 +71,5 @@ hold)
 	say "1 kHz $db dBFS, $n x 1 s on hw:TSW1060,0 (softvol bypassed), start $(date +%T)"
 	i=0; while [ $i -lt "$n" ]; do aplay -q -D plughw:TSW1060,0 /tmp/tone-1k-m${db#-}dB.wav 2>/dev/null & sleep 0.5; [ $((i % 2)) = 0 ] && tfa; wait; i=$((i + 1)); done
 	echo "done $(date +%T)";;
-*) sed -n '2,12p' "$0"; exit 1;;
+*) sed -n '2,11p' "$0"; exit 1;;
 esac

@@ -44,7 +44,7 @@ while [ $# -gt 0 ]; do case $1 in
 	--rootfs-tar) TAR=$2; shift;; --modules-ver) MVER=$2; shift;; --bytes) BYTES=$2; shift;;
 	--out) OUT=$2; shift;; --url) URL=$2; shift;; --flavor) FLAVOR=$2; shift;;
 	--list-versions) LIST=$2; shift;;
-	*) sed -n '2,37p' "$0"; exit 2;;
+	*) sed -n '2,39p' "$0"; exit 2;;
 esac; shift; done
 if [ -n "$LIST" ]; then
 	tar tzf "$LIST" | sed -n 's#^\./lib/modules/\([^/]*\)/.*#\1#p' | sort -u

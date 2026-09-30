@@ -128,6 +128,6 @@ lr) lr;;
 rec) rec;;
 raw) raw;;
 all-quiet) info; spk_en; rec;;
-*) sed -n '2,30p' "$0"; exit 1;;
+*) sed -n '2,25p' "$0"; exit 1;;
 esac
 echo; echo "log: $LOG"

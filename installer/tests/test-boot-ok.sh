@@ -24,6 +24,8 @@ ROOTFS_DIR=$(cd "$INSTALLER_DIR/../rootfs" && pwd)
 W0=${TMPDIR:-/tmp}/tsx-bootok-eof-test; rm -rf "$W0"; mkdir -p "$W0"
 trap 'rm -rf "$W0"' EXIT
 cp "$ROOTFS_DIR/overlay/usr/local/sbin/tsx-boot-ok" "$ROOTFS_DIR/overlay/etc/tsx/uboot-env.conf" "$W0/"
+. "$(dirname "$0")/../../ci/loopcheck.sh"; loop_mark "$W0/loops0"
+rc=0
 docker run --rm --privileged -v "$W0:/w" alpine:latest sh -euc '
 apk add -q --no-cache u-boot-tools losetup coreutils >/dev/null
 for i in $(seq 0 7); do [ -b /dev/loop$i ] || mknod /dev/loop$i b 7 $i; done
@@ -40,7 +42,11 @@ T1=$(date +%s)
 [ $((T1 - T0)) -le 8 ] && echo "  ok: short env disk failed within the bounded timeout ($((T1-T0))s), no CPU-spin hang" || { echo "  FAIL: took $((T1-T0))s: the timeout bound did not hold"; exit 1; }
 grep -qi "timed out\|failed" /tmp/o && echo "  ok: error message names the failure" || { echo "  FAIL: message: $(cat /tmp/o)"; exit 1; }
 echo "PASS test-boot-ok-eof"
-'
+' || rc=$?
+leak=$(loop_new "$W0/loops0")
+[ -z "$leak" ] || { echo "FAIL: loop devices left attached: $leak"; exit 1; }
+echo "  ok: no loop device left attached"
+[ $rc = 0 ] || exit $rc
 
 CAPTURES=${CAPTURES_DIR:-}
 BFILE=$CAPTURES/tsw-1060-unitB/backup/tsw1060B-mmcblk0-20260926.img
@@ -55,6 +61,8 @@ dd if="$BFILE" of="$W/envB.bin" bs=65536 skip=16 count=1 status=none
 dd if="$AFILE" of="$W/envA.bin" bs=65536 count=1 status=none
 cp "$ROOTFS_DIR/overlay/usr/local/sbin/tsx-boot-ok" "$ROOTFS_DIR/overlay/etc/tsx/uboot-env.conf" "$W/"
 
+loop_mark "$W/loops0"
+rc=0
 docker run --rm --privileged --platform linux/arm/v7 -v "$W:/w" alpine:3.24 sh -euc '
 apk add -q --no-cache u-boot-tools losetup >/dev/null
 echo "== $(uname -m), $(apk info -e -v u-boot-tools), /bin/sh = $(readlink -f /bin/sh)"
@@ -151,6 +159,10 @@ fw_setenv -c /w/fw.cfg DataRecoveryDone; : > /w/setenv.calls
 $BOK > /tmp/o 2>&1 || { cat /tmp/o; fail "absent"; }
 [ "$(v DataRecoveryDone)" = 1 ] && [ "$(calls)" = 1 ] && ok "DataRecoveryDone missing from the env: added (golden treats missing as != 1)"
 echo "PASS test-boot-ok"
-' | tee "$W/out.txt"
+' | tee "$W/out.txt" || rc=$?
+leak=$(loop_new "$W/loops0")
+[ -z "$leak" ] || { echo "FAIL: loop devices left attached: $leak"; exit 1; }
+echo "  ok: no loop device left attached"
+[ $rc = 0 ] || exit $rc
 N=$(grep -c "  ok: " "$W/out.txt" || true); echo "ok checks: $N (expected 22)"
 [ "$N" = 22 ] && grep -q "^PASS" "$W/out.txt" || { echo "FAIL: a check was skipped or failed"; exit 1; }

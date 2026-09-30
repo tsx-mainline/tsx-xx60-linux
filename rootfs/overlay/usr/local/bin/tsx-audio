@@ -166,5 +166,5 @@ mute) shift; cmd_mute "$@";;
 speaker) shift; cmd_speaker "$@";;
 enable) cmd_enable add "${2:-}";;
 disable) cmd_enable del "${2:-}";;
-*) sed -n '2,15p' "$0"; exit 1;;
+*) sed -n '2,17p' "$0"; exit 1;;
 esac

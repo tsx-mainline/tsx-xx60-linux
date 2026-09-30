@@ -129,5 +129,5 @@ card)
 	for p in 5 6 7 8; do st=$(echo "$CRESTRON_FS" | awk -v p=$p '$1 == p {print $2}'); crestron_mke2fs $p "$OUT" $((st * 512)) 2>/dev/null || die "mke2fs p$p"; done
 	dd if="$B/env.bin" of="$OUT" bs=65536 seek=16 conv=notrunc status=none
 	say "card image $OUT (factory layout, unit $(sed -n 's/^unit=//p' "$B/factory.manifest"))";;
-*) sed -n '2,40p' "$0"; exit 2;;
+*) sed -n '2,41p' "$0"; exit 2;;
 esac

@@ -53,7 +53,7 @@ set -- "${ARGS[@]}"
 B= OUT= J=$(nproc) WDIR=
 while getopts "f:w:o:d:j:" o; do case $o in
 	f) FLAVOR=$OPTARG;; w) WDIR=$OPTARG;; o) B=$OPTARG;; d) OUT=$OPTARG;; j) J=$OPTARG;;
-	*) sed -n '2,39p' "$0"; exit 1;; esac; done
+	*) sed -n '2,40p' "$0"; exit 1;; esac; done
 shift $((OPTIND-1))
 case $FLAVOR in lts|stable) ;; *) echo "kbuild: --flavor/-f must be lts or stable (got $FLAVOR)"; exit 1;; esac
 

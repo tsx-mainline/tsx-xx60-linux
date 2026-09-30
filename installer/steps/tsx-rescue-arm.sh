@@ -64,7 +64,7 @@ while [ $# -gt 0 ]; do
 	*) echo "unknown option $1" >&2; exit 2;;
 	esac; shift
 done
-case "$CMD" in preflight|install|status) ;; *) sed -n '2,30p' "$0"; exit 2;; esac
+case "$CMD" in preflight|install|status) ;; *) sed -n '2,40p' "$0"; exit 2;; esac
 case "$GUARD" in once) WANT_SWITCH=$TSX_SWITCH_ONCE;; fallback) WANT_SWITCH=$TSX_SWITCH_FALLBACK;; nogolden) WANT_SWITCH=$TSX_SWITCH_NOGOLDEN;; *) die "--guard once|fallback|nogolden";; esac
 # --guard once (the default): the real one-shot is tsx_once, not boot_retry
 # (see TSX_SWITCH_ONCE in installer/android/tsx-lib.sh and docs/boot.md "The

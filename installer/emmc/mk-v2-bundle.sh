@@ -16,8 +16,8 @@
 # although it no longer checks for an exact size match against root_bytes.
 set -euo pipefail
 ROOT= BOOT= FLAVOR= OUT=
-while [ $# -gt 0 ]; do case $1 in --root-img) ROOT=$2; shift;; --boot-img) BOOT=$2; shift;; --flavor) FLAVOR=$2; shift;; --out-dir) OUT=$2; shift;; *) sed -n '2,14p' "$0"; exit 2;; esac; shift; done
-[ -f "$ROOT" ] && [ -f "$BOOT" ] && [ -n "$FLAVOR" ] && [ -n "$OUT" ] || { sed -n '2,14p' "$0" >&2; exit 2; }
+while [ $# -gt 0 ]; do case $1 in --root-img) ROOT=$2; shift;; --boot-img) BOOT=$2; shift;; --flavor) FLAVOR=$2; shift;; --out-dir) OUT=$2; shift;; *) sed -n '2,16p' "$0"; exit 2;; esac; shift; done
+[ -f "$ROOT" ] && [ -f "$BOOT" ] && [ -n "$FLAVOR" ] && [ -n "$OUT" ] || { sed -n '2,16p' "$0" >&2; exit 2; }
 mkdir -p "$OUT"
 cp "$ROOT" "$OUT/root.img"; cp "$BOOT" "$OUT/boot.img"
 RSHA=$(sha256sum < "$OUT/root.img" | cut -d' ' -f1); BSHA=$(sha256sum < "$OUT/boot.img" | cut -d' ' -f1)

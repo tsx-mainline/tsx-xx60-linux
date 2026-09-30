@@ -51,7 +51,7 @@ case "$cmd" in
 check) check; say "check OK"; exit 0;;
 backup-p5head) dd if="$P5" bs=1M count=1 2>/dev/null; exit 0;;
 install) ;;
-*) sed -n '2,22p' "$0"; exit 2;;
+*) sed -n '2,23p' "$0"; exit 2;;
 esac
 
 ROOTFS= SHA= P5SHA= URL= TOKF= CONFF= BOOTIMG= BOOTSHA= FORCE_FS=0

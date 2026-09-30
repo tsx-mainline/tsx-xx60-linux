@@ -29,10 +29,10 @@ RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
 say_state() { [ "${CMD:-}" = run ] || return 0; case $1 in DONE*) return 0;; esac; echo "$$ factory restore" > "$RUN/tsx-op" 2>/dev/null; printf '%s\n' "$*" > "$RUN/tsx-install-state" 2>/dev/null; return 0; }
 say() { echo "tsx-emmc-restore: $(date +%T) $*" >&2; say_state "$*"; }
 die() { say "ERROR: $*"; exit 1; }
-CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,20p' "$0"; exit 2; }
+CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,25p' "$0"; exit 2; }
 YES=0
 while [ $# -gt 0 ]; do case "$1" in --yes) YES=1;; *) die "unknown option $1";; esac; shift; done
-case "$CMD" in check|run) ;; *) sed -n '2,20p' "$0"; exit 2;; esac
+case "$CMD" in check|run) ;; *) sed -n '2,25p' "$0"; exit 2;; esac
 M=$B/emmc.manifest
 [ -f "$M" ] && grep -q '^format=tsx-emmc-bundle-1$' "$M" || die "$B has no emmc.manifest (mkbundle.sh)"
 MiB=1048576

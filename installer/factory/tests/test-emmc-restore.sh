@@ -155,6 +155,7 @@ echo "T5_EXIT=$?" >> /w/log-t5.txt
 
 MiB=1048576
 LOOP=$(losetup -f --show /w/emmc-loop.img)
+trap 'losetup -d "$LOOP" 2>/dev/null' EXIT
 echo "LOOP=$LOOP" > /w/log-t6a.txt
 dd if=/dev/zero of="$LOOP" bs=1M seek=684 count=32  conv=notrunc status=none
 dd if=/dev/zero of="$LOOP" bs=1M seek=108 count=512 conv=notrunc status=none
@@ -189,10 +190,12 @@ DOCKEREOF
 	# container onto the loop device itself (kept as pristine stock copy here)
 	cp --sparse=always "$RAW" "$T/emmc-loop.img"
 
+	. "$(dirname "$0")/../../../ci/loopcheck.sh"; loop_mark "$T/loops0"
 	timeout 900 docker run --rm --privileged --platform linux/amd64 \
 		-v "$T":/w -v "$BUNDLE":/b:ro \
 		alpine:3.24 sh /w/dockertest.sh
 	DOCKER_RC=$?
+	leak=$(loop_new "$T/loops0"); [ -z "$leak" ] && ok "no loop device left attached" || fail "loop devices left attached: $leak"
 	[ "$DOCKER_RC" = 0 ] && ok "docker test harness ran to completion (ALL_DONE)" \
 		|| fail "docker test harness exited $DOCKER_RC (see $T/log-*.txt, cleaned up on exit -- rerun to inspect)"
 else
