@@ -40,7 +40,7 @@ from linux_voice_assistant.api_server import APIServer
 from linux_voice_assistant.util import get_default_interface, get_default_ipv4, get_esphome_version, get_version
 from linux_voice_assistant.zeroconf import HomeAssistantZeroconf
 
-from . import naming, security
+from . import bluetooth, naming, security
 from .backend import PanelBackend
 from .device import build_entities, poll
 
@@ -90,6 +90,7 @@ class PanelAPIServer(APIServer):
 
     def connection_lost(self, exc) -> None:
         super().connection_lost(exc)
+        bluetooth.PROXY.unsubscribe(self)
         if self in PanelAPIServer.connections:
             PanelAPIServer.connections.remove(self)
             _LOGGER.info("connection closed: %s (%s)", getattr(self, "_tsx_peer", "?"),
@@ -105,7 +106,8 @@ class PanelAPIServer(APIServer):
 
     def handle_message(self, msg: message.Message) -> Iterable[message.Message]:
         if isinstance(msg, DeviceInfoRequest):
-            yield DeviceInfoResponse(
+            # BT_PROXY=on adds the Bluetooth proxy feature flags (bluetooth.py)
+            yield bluetooth.PROXY.apply_device_info(DeviceInfoResponse(
                 uses_password=False,
                 name=self.name,
                 friendly_name=self.friendly_name,
@@ -115,7 +117,9 @@ class PanelAPIServer(APIServer):
                 mac_address=self.mac_address,
                 manufacturer="Crestron (mainline Linux)",
                 model="xx60 panel",
-            )
+            ))
+            return
+        if bluetooth.handle_message(self, msg):
             return
         if isinstance(msg, SubscribeStatesRequest):
             for entity in self.device.entities:
@@ -146,6 +150,8 @@ async def async_main() -> None:
     parser.add_argument("--network-interface")
     parser.add_argument("--host")
     parser.add_argument("--poll-interval", type=float, default=1.0)
+    parser.add_argument("--no-zeroconf", action="store_true",
+                        help="do not announce the device over mDNS (a test instance that Home Assistant must not discover)")
     args = parser.parse_args()
 
     import socket as _socket
@@ -186,9 +192,13 @@ async def async_main() -> None:
 
     threading.Thread(target=_poll_loop, args=(device, args.poll_interval), daemon=True).start()
 
-    discovery = HomeAssistantZeroconf(port=args.port, name=device_name, mac_address=mac, host_ip_address=host_ip)
-    await discovery.register_server()
+    if args.no_zeroconf:
+        _LOGGER.info("no mDNS announcement (--no-zeroconf)")
+    else:
+        discovery = HomeAssistantZeroconf(port=args.port, name=device_name, mac_address=mac, host_ip_address=host_ip)
+        await discovery.register_server()
 
+    _LOGGER.info("Bluetooth proxy: %s", "on (BT_PROXY)" if bluetooth.PROXY.enabled() else "off")
     _LOGGER.info("tsx-esphome: %s (%s) listening on %s:%s (%d entities, %s)", device_name, friendly_name, host_ip, args.port,
                  len(device.entities), "encrypted" if security.encryption_enabled() else "plaintext")
     await asyncio.Future()  # run forever

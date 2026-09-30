@@ -64,6 +64,12 @@
 #   how the panel hangs, see tsx-orientation. Apply keeps
 #   /etc/tsx/orientation on the root file system for the initramfs, the
 #   splash, the kiosk and tsx-buttons, and turns the running kiosk at once.
+# BT_PROXY (on|off, default off): the passive Bluetooth proxy for Home
+#   Assistant (docs/ha.md "Bluetooth proxy"). Apply writes /run/tsx/bt.conf
+#   (world-readable, no secret) for tsx-bt and both ESPHome front ends, and
+#   starts or stops the tsx-bt service when the value changes.
+# BT_MAC: the Bluetooth address that tsx-bt loads into the chip. Empty = the
+#   eth0 MAC, the same value as the vendor firmware.
 # ROOT_PASSWORD_HASH, SSH_AUTHORIZED_KEY.
 # See installer/panel.conf.example and docs/rootfs.md "Panel configuration"
 # for what each key does.
@@ -79,7 +85,7 @@ SEED=${TSX_CONF_SEED:-/etc/tsx/panel.conf.seed}
 # absolute.
 PREFIX=${TSX_APPLY_PREFIX:-}
 
-KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT BOOT_VERBOSE ORIENTATION ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
+KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT BOOT_VERBOSE ORIENTATION BT_PROXY BT_MAC ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 SECRET_KEYS="HA_TOKEN HA_API_KEY MQTT_PASSWORD ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 
 usage() { sed -n '2,26p' "$0" >&2; exit 2; }
@@ -170,6 +176,10 @@ val_ok() {
 	BLANK_TIMEOUT) printf '%s' "$v" | grep -Eq '^[0-9]{1,5}$' && [ "$v" -le 86400 ];;
 	BOOT_VERBOSE) case "$v" in 0|1) return 0;; esac; return 1;;
 	ORIENTATION) case "$v" in landscape|portrait|landscape-flipped|portrait-flipped) return 0;; esac; return 1;;
+	BT_PROXY) case "$v" in on|off) return 0;; esac; return 1;;
+	# empty = derived from eth0. A unicast address, not all zeros
+	BT_MAC) [ -z "$v" ] && return 0; printf '%s' "$v" | grep -Eq '^[0-9A-Fa-f][02468ACEace](:[0-9A-Fa-f]{2}){5}$' \
+		&& [ "$v" != 00:00:00:00:00:00 ];;
 	ROOT_PASSWORD_HASH) printf '%s' "$v" | grep -Eq '^\$[0-9A-Za-z$./]{10,}$';;
 	SSH_AUTHORIZED_KEY) printf '%s' "$v" | grep -Eq '^(ssh-[a-z0-9]+|ecdsa-sha2-[a-z0-9-]+) [A-Za-z0-9+/]+=*([[:space:]].*)?$';;
 	*) return 1;;
@@ -425,6 +435,34 @@ apply() {
 		printf 'TRANSPORT="%s"\n' "$(shq "$transport")"
 		printf 'ALLOW_FROM="%s"\n' "$(shq "$allow")"
 	} > "$tmp" && mv "$tmp" "$RUN/esphome.conf" && chmod 644 "$RUN/esphome.conf"
+	# BT_PROXY/BT_MAC: /run/tsx/bt.conf, world-readable (no secret). tsx-bt
+	# (root) and the Bluetooth proxy of both ESPHome front ends
+	# (rootfs/voice/shim/tsx_panel/bluetooth.py) read it. The voice satellite
+	# runs as kiosk and cannot read $TSX_CONF.
+	btp=$(cfg_get BT_PROXY) || btp=off
+	btm=$(cfg_get BT_MAC) || btm=
+	tmp="$RUN/bt.conf.tmp.$$"
+	{
+		printf 'PROXY="%s"\n' "$(shq "$btp")"
+		printf 'MAC="%s"\n' "$(shq "$btm")"
+	} > "$tmp" && mv "$tmp" "$RUN/bt.conf" && chmod 644 "$RUN/bt.conf"
+	# The tsx-bt service (the Bluetooth controller and the scanner) follows
+	# BT_PROXY and BT_MAC. At boot this apply runs before tsx-bt starts, and
+	# there is no signature yet: do nothing then. The restart of tsx-bt also
+	# reloads a changed BT_MAC. It runs before the ESPHome restarts below, so
+	# that they find the new /run/tsx/bt.mac.
+	bsig="$btp|$btm"
+	oldbsig=; [ -r "$RUN/.bt-sig" ] && oldbsig=$(cat "$RUN/.bt-sig")
+	printf '%s\n' "$bsig" > "$RUN/.bt-sig"
+	if [ -n "$oldbsig" ] && [ "$bsig" != "$oldbsig" ] && command -v rc-service >/dev/null 2>&1; then
+		if [ "$btp" = on ]; then
+			rc-service tsx-bt restart >/dev/null 2>&1 || true
+		else
+			rc-service tsx-bt stop >/dev/null 2>&1 || true
+		fi
+		log "BT_PROXY=$btp: tsx-bt $([ "$btp" = on ] && echo restarted || echo stopped)"
+	fi
+
 	# The same warning as `show` (docs/ha.md "Security"). Not with HA_TRANSPORT=mqtt.
 	[ "$transport" = mqtt ] || warn_open_api
 
@@ -439,7 +477,7 @@ apply() {
 	# apply` for its Kiosk URL entity. An unconditional restart killed it in
 	# the middle of that command (and dropped the connection of Home Assistant
 	# each time).
-	sig="$(cat "$RUN/esphome.conf" 2>/dev/null)|$name|$voice|$keysum"
+	sig="$(cat "$RUN/esphome.conf" 2>/dev/null)|$name|$voice|$keysum|$btp"
 	oldsig=; [ -r "$RUN/.esphome-sig" ] && oldsig=$(cat "$RUN/.esphome-sig")
 	printf '%s\n' "$sig" > "$RUN/.esphome-sig"
 	if [ "$sig" != "$oldsig" ] && command -v rc-service >/dev/null 2>&1 && rc-service tsx-esphome status >/dev/null 2>&1; then
@@ -450,7 +488,7 @@ apply() {
 	# restart it on the first apply after boot (no signature yet), because that
 	# apply runs before tsx-voice starts. Its kiosk URL entity runs `apply`
 	# through tsx-panelctl, which changes neither, so that never restarts it.
-	vsig="$name|$keysum"
+	vsig="$name|$keysum|$btp"
 	oldvsig=; [ -r "$RUN/.voice-sig" ] && oldvsig=$(cat "$RUN/.voice-sig")
 	printf '%s\n' "$vsig" > "$RUN/.voice-sig"
 	if [ -n "$oldvsig" ] && [ "$vsig" != "$oldvsig" ] && command -v rc-service >/dev/null 2>&1 \

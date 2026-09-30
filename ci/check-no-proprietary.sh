@@ -7,11 +7,13 @@
 # pulls the .puf of Crestron. CI builds always set TFA_VENDOR_FETCH=no and
 # leave TFA_VENDOR_SRC unset, so none should be present. This check looks at
 # the OUTPUT of the build and does not depend on that env var. So a later
-# change to mkrootfs.sh cannot silently add one again.
+# change to mkrootfs.sh cannot silently add one again. The check also looks
+# for the Bluetooth PSR file (PSR-CSR8811.psr, usr/local/share/tsx/csr8811/).
+# Only the installer puts it on a panel, never a build.
 #   ci/check-no-proprietary.sh <rootfs.tar.gz> <rootfs.ext4>
 set -eu
 TAR=$1 IMG=$2
-PATTERN='\.(cnt|puf)$|usr/local/share/tsx/tfa9890/'
+PATTERN='\.(cnt|puf|psr)$|usr/local/share/tsx/(tfa9890|csr8811)/'
 bad=0
 
 echo "== $TAR"
@@ -20,7 +22,8 @@ if tar tzf "$TAR" | grep -E "$PATTERN"; then bad=1; fi
 echo "== $IMG"
 MNT=$(mktemp -d)
 sudo mount -o loop,ro "$IMG" "$MNT"
-HITS=$(find "$MNT" \( -iname '*.cnt' -o -iname '*.puf' -o -path "$MNT/usr/local/share/tsx/tfa9890/*" \) 2>/dev/null || true)
+HITS=$(find "$MNT" \( -iname '*.cnt' -o -iname '*.puf' -o -iname '*.psr' -o -path "$MNT/usr/local/share/tsx/tfa9890/*" \
+	-o -path "$MNT/usr/local/share/tsx/csr8811/*" \) 2>/dev/null || true)
 sudo umount "$MNT"
 rmdir "$MNT"
 if [ -n "$HITS" ]; then echo "$HITS"; bad=1; fi

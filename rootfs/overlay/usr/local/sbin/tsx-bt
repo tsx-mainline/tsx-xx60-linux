@@ -1,0 +1,235 @@
+#!/bin/sh
+# tsx-bt: start and stop the CSR8811 Bluetooth controller of the panel
+# (docs/hardware.md "Bluetooth (CSR8811)"). /etc/init.d/tsx-bt runs it when
+# BT_PROXY=on in panel.conf. You can also run it by hand as root.
+#
+#   tsx-bt up       reset the chip, load the PSR, attach it, bring hciN up
+#   tsx-bt down     take hciN down, stop hciattach, hold the chip in reset
+#   tsx-bt status   print the state file and the hciconfig output
+#   tsx-bt mac      print the Bluetooth address that "up" loads
+#
+# "up" does the same steps as the vendor Android script (bt_init.sh):
+#   1. Block and unblock the "bluetooth" rfkill. This pulses the reset line
+#      (GPIOY_8).
+#   2. Load the PSR over BCSP (csr_psload.py = "bccmd psload -r"). The PSR is
+#      the vendor file (if the installer found one) plus a PSKEY_BDADDR line
+#      with the address below. Without a vendor file, only the address loads,
+#      and the chip runs on its ROM defaults.
+#   3. hciattach -s 115200 TTY bcsp 115200 (BlueZ, package bluez-deprecated).
+#   4. hciconfig hciN up.
+#
+# The Bluetooth address: BT_MAC of panel.conf if set, else the eth0 MAC. The
+# vendor firmware uses the same value (ro.boot.mac_bt = the U-Boot ethaddr).
+# It is unique for each panel and does not change on a reinstall. A passive
+# scan never sends it over the air.
+#
+# Every step logs why it failed. "up" writes $TSX_RUN_DIR/bt.state
+# (state=up|failed|down, reason=, hci=, mac=, psr=) and exits 1 on a failure.
+# The init script never fails the boot on that exit status.
+#
+# Files: /run/tsx/bt.conf (PROXY=, MAC=, written by tsx-config apply),
+# /usr/local/share/tsx/csr8811/PSR-CSR8811.psr (+ SOURCE, from the
+# installer). Test hooks: TSX_RUN_DIR, TSX_SYSFS, TSX_PROC, TSX_BT_TTY, TSX_BT_PSR,
+# TSX_BT_LIB, TSX_BT_SETTLE.
+set -u
+RUN=${TSX_RUN_DIR:-/run/tsx}
+SYS=${TSX_SYSFS:-/sys}
+PROC=${TSX_PROC:-/proc}
+TTY=${TSX_BT_TTY:-/dev/ttyAML1}
+PSR=${TSX_BT_PSR:-/usr/local/share/tsx/csr8811/PSR-CSR8811.psr}
+LIB=${TSX_BT_LIB:-/usr/local/lib/tsx}
+SETTLE=${TSX_BT_SETTLE:-0.3}
+BAUD=115200
+# The sha256 of PSR-CSR8811.psr in the public Crestron firmware
+# tsw-xx60_3.002.1061.001 (system.img, /bin). The same value is in
+# installer/lib/tsx-psr.sh.
+PSR_PINNED=96709f6ca529efb0dc8cf48165ba0c1c1934236794424aa539810376676aa8be
+
+log() { echo "tsx-bt: $*"; logger -t tsx-bt "$*" 2>/dev/null || true; }
+
+# conf_get KEY: a value from $RUN/bt.conf (KEY="value" lines). The file is
+# never sourced.
+conf_get() {
+	sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$RUN/bt.conf" 2>/dev/null | tail -n 1
+}
+
+valid_mac() { printf '%s' "$1" | grep -Eq '^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$'; }
+
+# bt_mac: print the Bluetooth address in upper case. Return 1 if there is none.
+bt_mac() {
+	m=$(conf_get MAC)
+	if [ -n "$m" ]; then
+		valid_mac "$m" || { log "BT_MAC '$m' is not a MAC address"; return 1; }
+		printf '%s\n' "$m" | tr 'a-f' 'A-F'
+		return 0
+	fi
+	eth=
+	for f in "$SYS/class/net/eth0/address" "$SYS"/class/net/*/address; do
+		[ -r "$f" ] || continue
+		case "$f" in */lo/address) continue;; esac
+		a=$(cat "$f" 2>/dev/null)
+		valid_mac "$a" || continue
+		[ "$a" = 00:00:00:00:00:00 ] && continue
+		eth=$a; break
+	done
+	[ -n "$eth" ] || { log "no network MAC to use as the Bluetooth address (set BT_MAC)"; return 1; }
+	printf '%s\n' "$eth" | tr 'a-f' 'A-F'
+}
+
+# bdaddr_line MAC: PSKEY_BDADDR (&0001) as the vendor bt_getprop_mac.sh
+# writes it: "&0001 = 00m4 m5m6 00m3 m1m2".
+bdaddr_line() {
+	IFS=: read -r m1 m2 m3 m4 m5 m6 <<EOF
+$1
+EOF
+	echo "&0001 = 00$m4 $m5$m6 00$m3 $m1$m2" | tr 'A-F' 'a-f'
+}
+
+state() {  # state STATE REASON
+	mkdir -p "$RUN"
+	{
+		echo "state=$1"
+		echo "reason=$2"
+		echo "hci=${HCI:-}"
+		echo "mac=${MAC:-}"
+		echo "psr=${PSRKIND:-}"
+		echo "time=$(date '+%F %T')"
+	} > "$RUN/bt.state.tmp" && mv "$RUN/bt.state.tmp" "$RUN/bt.state"
+}
+
+fail() { log "FAILED: $*"; state failed "$*"; exit 1; }
+
+bt_rfkill() {  # print the sysfs dir of the bluetooth rfkill (the bt-dev one first)
+	best=
+	for d in "$SYS"/class/rfkill/rfkill*; do
+		[ "$(cat "$d/type" 2>/dev/null)" = bluetooth ] || continue
+		[ "$(cat "$d/name" 2>/dev/null)" = bt-dev ] && { echo "$d"; return 0; }
+		[ -n "$best" ] || best=$d
+	done
+	[ -n "$best" ] && echo "$best"
+}
+
+hci_list() { ls -d "$SYS"/class/bluetooth/hci* 2>/dev/null | sed 's#.*/##' | grep -E '^hci[0-9]+$'; }
+
+# attach_pids: the hciattach processes on $TTY (from /proc, not pkill: the
+# match must be exact, and busybox pkill -f matches any substring)
+attach_pids() {
+	for d in "$PROC"/[0-9]*; do
+		[ -r "$d/cmdline" ] || continue
+		set -- $(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
+		case "${1:-}" in hciattach|*/hciattach) ;; *) continue;; esac
+		for a in "$@"; do [ "$a" = "$TTY" ] && { echo "${d##*/}"; break; }; done
+	done
+}
+
+stop_attach() {
+	for h in $(hci_list); do hciconfig "$h" down >/dev/null 2>&1 || true; done
+	pids=$(attach_pids)
+	[ -n "$pids" ] || return 0
+	kill $pids 2>/dev/null
+	i=0
+	while [ $i -lt 20 ] && [ -n "$(attach_pids)" ]; do sleep 0.1; i=$((i + 1)); done
+	log "stopped hciattach ($(echo $pids))"
+}
+
+do_up() {
+	HCI= MAC= PSRKIND=
+	state starting ""
+	MAC=$(bt_mac) || fail "no Bluetooth address"
+	[ -e "$TTY" ] || fail "$TTY does not exist (the kernel has no UART A node)"
+	command -v hciattach >/dev/null 2>&1 || fail "hciattach is missing (apk add bluez-deprecated)"
+	command -v hciconfig >/dev/null 2>&1 || fail "hciconfig is missing (apk add bluez-deprecated)"
+	command -v python3 >/dev/null 2>&1 || fail "python3 is missing"
+	[ -r "$LIB/csr_psload.py" ] || fail "$LIB/csr_psload.py is missing"
+
+	# The PSR: the vendor file if it is there and parses, then our address.
+	mkdir -p "$RUN"
+	set --
+	if [ -r "$PSR" ]; then
+		if python3 "$LIB/csr_psload.py" --check "$PSR" >/dev/null 2>&1; then
+			sum=$(sha256sum < "$PSR" | cut -d' ' -f1)
+			if [ "$sum" = "$PSR_PINNED" ]; then PSRKIND=vendor
+			else PSRKIND=vendor-unpinned; log "WARNING: $PSR has sha256 $sum, not the pinned one. Loading it anyway"
+			fi
+			set -- "$PSR"
+		else
+			log "WARNING: $PSR does not parse as a PSR file. Loading only the Bluetooth address"
+			PSRKIND=bdaddr-only
+		fi
+	else
+		log "no vendor PSR file ($PSR): loading only the Bluetooth address, the chip runs on its ROM defaults"
+		PSRKIND=bdaddr-only
+	fi
+	bdaddr_line "$MAC" > "$RUN/bt-bdaddr.psr"
+	set -- "$@" "$RUN/bt-bdaddr.psr"
+	log "Bluetooth address $MAC, PSR: $PSRKIND"
+
+	stop_attach
+	rf=$(bt_rfkill)
+	if [ -n "$rf" ]; then
+		echo 1 > "$rf/soft" 2>/dev/null || log "WARNING: cannot block $rf"
+		sleep "$SETTLE"
+		echo 0 > "$rf/soft" 2>/dev/null || fail "cannot unblock $rf (the chip stays in reset)"
+		sleep "$SETTLE"
+		log "chip reset through $(basename "$rf") ($(cat "$rf/name" 2>/dev/null))"
+	else
+		log "WARNING: no bluetooth rfkill in $SYS/class/rfkill: no reset pulse (the board DTS has bt-rfkill)"
+	fi
+
+	out=$(python3 "$LIB/csr_psload.py" --device "$TTY" --baud "$BAUD" "$@" 2>&1) || {
+		echo "$out" | sed 's/^/  /'
+		fail "PSR upload: $(echo "$out" | tail -n 1)"
+	}
+	log "PSR upload: $(echo "$out" | tail -n 1)"
+
+	before=$(hci_list)
+	out=$(hciattach -s "$BAUD" "$TTY" bcsp "$BAUD" 2>&1) || {
+		echo "$out" | sed 's/^/  /'
+		fail "hciattach: $(echo "$out" | tail -n 1)"
+	}
+	i=0
+	while [ $i -lt 50 ]; do
+		for h in $(hci_list); do
+			case " $(echo $before) " in *" $h "*) ;; *) HCI=$h;; esac
+		done
+		[ -n "$HCI" ] && break
+		sleep 0.1; i=$((i + 1))
+	done
+	[ -n "$HCI" ] || fail "hciattach ran, but no new hci device showed up"
+
+	# The kernel powers a new controller on by itself and may still be at
+	# it: "already in progress" is not an error. The state after is what counts.
+	hciconfig "$HCI" up >/dev/null 2>&1 || true
+	info=$(hciconfig "$HCI" 2>&1)
+	echo "$info" | grep -q 'UP RUNNING' || { echo "$info" | sed 's/^/  /'; fail "$HCI does not come up"; }
+	got=$(echo "$info" | sed -n 's/.*BD Address: \([0-9A-Fa-f:]*\).*/\1/p' | head -n 1)
+	if [ -n "$got" ] && [ "$got" != "$MAC" ]; then
+		log "WARNING: $HCI reports BD address $got, not $MAC (the PSR address did not apply)"
+	fi
+	printf '%s\n' "$MAC" > "$RUN/bt.mac"
+	state up ""
+	log "$HCI up, BD address ${got:-unknown}"
+	return 0
+}
+
+do_down() {
+	HCI=$(sed -n 's/^hci=//p' "$RUN/bt.state" 2>/dev/null)
+	MAC= PSRKIND=
+	stop_attach
+	rf=$(bt_rfkill)
+	[ -n "$rf" ] && echo 1 > "$rf/soft" 2>/dev/null
+	state down ""
+	log "Bluetooth down (chip held in reset)"
+}
+
+case "${1:-}" in
+up) do_up;;
+down) do_down;;
+status)
+	cat "$RUN/bt.state" 2>/dev/null || echo "state=unknown (tsx-bt has not run)"
+	h=$(sed -n 's/^hci=//p' "$RUN/bt.state" 2>/dev/null)
+	[ -n "$h" ] && hciconfig "$h" 2>/dev/null
+	exit 0;;
+mac) bt_mac;;
+*) sed -n '2,10p' "$0" >&2; exit 2;;
+esac

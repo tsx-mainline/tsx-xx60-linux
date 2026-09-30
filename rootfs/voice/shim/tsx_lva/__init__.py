@@ -218,15 +218,37 @@ def _patch_panel():
     keyed_commands = (LightCommandRequest, SwitchCommandRequest,
                        ButtonCommandRequest, TextCommandRequest, UpdateCommandRequest)
 
+    # The passive Bluetooth proxy (BT_PROXY, tsx_panel/bluetooth.py): its
+    # feature flags go into the own DeviceInfoResponse of the satellite, and
+    # its two subscription messages never reach satellite.py.
+    from aioesphomeapi.api_pb2 import DeviceInfoResponse  # noqa: WPS433
+    from tsx_panel import bluetooth  # noqa: WPS433
+
     def handle_message(self, msg):
         if isinstance(msg, keyed_commands):
             for entity in self.state.entities:
                 if getattr(entity, "key", None) == msg.key:
                     yield from entity.handle_message(msg)
             return
-        yield from orig_handle(self, msg)
+        if bluetooth.handle_message(self, msg):
+            return
+        for out in orig_handle(self, msg):
+            if isinstance(out, DeviceInfoResponse):
+                bluetooth.PROXY.apply_device_info(out)
+            yield out
 
     VoiceSatelliteProtocol.handle_message = handle_message
+
+    orig_lost = VoiceSatelliteProtocol.connection_lost
+
+    def connection_lost(self, exc):
+        bluetooth.PROXY.unsubscribe(self)
+        orig_lost(self, exc)
+
+    VoiceSatelliteProtocol.connection_lost = connection_lost
+    # logging is not configured yet when this runs from _patch()
+    print("tsx_lva: Bluetooth proxy " + ("on (BT_PROXY)" if bluetooth.PROXY.enabled() else "off"),
+          file=sys.stderr, flush=True)
 
 
 def _patch_names():

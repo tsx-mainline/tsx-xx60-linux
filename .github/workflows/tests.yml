@@ -68,8 +68,10 @@ jobs:
         run: rootfs/tests/test-panelctl.sh
       - name: rootfs/tests/test-setup.sh - on-panel setup page, LAN pairing, form validation, secrets never echoed
         run: rootfs/tests/test-setup.sh
-      - name: rootfs/tests/test-esphome.sh - one Home Assistant device over the ESPHome API, plaintext and encrypted, both front ends
+      - name: rootfs/tests/test-esphome.sh - one Home Assistant device over the ESPHome API, plaintext and encrypted, both front ends, Bluetooth proxy
         run: rootfs/tests/test-esphome.sh
+      - name: rootfs/tests/test-bt.sh - Bluetooth bring-up (PSR upload to a fake chip, tsx-bt with fake sysfs, passive scanner with a fake controller)
+        run: rootfs/tests/test-bt.sh
       - name: rootfs/tests/test-build-modules.sh - both flavors' module trees staged
         run: rootfs/tests/test-build-modules.sh
       - name: tools/build/tests/test-push-protect.sh - remote push keeps host-only inputs
@@ -90,6 +92,8 @@ jobs:
         run: installer/tests/test-install-mainline-dryrun.sh
       - name: installer/lib/tests/test-tsx-tfa.sh - TFA9890 DSP files from the panel itself (synthetic boot images/containers)
         run: installer/lib/tests/test-tsx-tfa.sh
+      - name: installer/lib/tests/test-tsx-psr.sh - Bluetooth PSR file from the panel itself (made-up PSR files)
+        run: installer/lib/tests/test-tsx-psr.sh
       - name: installer/tests/test-arm-reboot.sh - the arm step's detached reboot on stock Android, and the host's check
         run: installer/tests/test-arm-reboot.sh
       - name: installer/tests/test-tsxdata-keep.sh - keep /data on a reinstall (file-backed ext4)

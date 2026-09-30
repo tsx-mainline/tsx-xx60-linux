@@ -100,7 +100,7 @@ start_server() {
 	local kind=$1 log=$2 port=$3 pname=$4; shift 4
 	local cmd
 	case $kind in
-	standalone) cmd=(-m tsx_panel.esphome_server --name "$pname-host" --port "$port" --host 127.0.0.1);;
+	standalone) cmd=(-m tsx_panel.esphome_server --name "$pname-host" --port "$port" --host 127.0.0.1 ${TSX_TEST_SERVER_ARGS:-});;
 	voice) cmd=("$HERE/esphome-lva-harness.py" "$port");;
 	esac
 	env PATH="$F/bin:$PATH" \
@@ -223,6 +223,43 @@ full_check "voice satellite, plaintext" "$VPLAIN_PORT" --name voice-plain --frie
 grep -q "api_encryption" "$T/voice-plain.log" && { echo "FAIL: plaintext satellite advertises api_encryption"; rc=1; } || echo "OK: no api_encryption in the plaintext mDNS TXT"
 grep -q 'Unknown message type' "$T/voice-plain.log" && { echo "FAIL: MediaPlayerEntity logged Unknown message type noise (voice-plain.log)"; rc=1; } \
 	|| echo "OK: no Unknown message type noise for panel-entity commands (voice-plain.log)"
+
+# ---- the passive Bluetooth proxy (BT_PROXY, tsx_panel/bluetooth.py) -------
+# A fake controller (bt-fake-hci.py) feeds the real scanner daemon
+# (btscan.py). Both front ends take the advertisements from its socket. A
+# third server has BT_PROXY off. The other servers above have no bt.conf,
+# which also means off.
+echo "== Bluetooth proxy: feature flags, raw advertisements, the off switch =="
+python3 "$HERE/bt-fake-hci.py" "$T/hci.sock" "$T/hci.log" > "$T/fakehci.out" 2>&1 &
+PIDS="$PIDS $!"
+for _ in $(seq 1 50); do [ -S "$T/hci.sock" ] && break; sleep 0.1; done
+TSX_BTSCAN_FAKE_HCI="$T/hci.sock" python3 "$HERE/../overlay/usr/local/lib/tsx/btscan.py" \
+	--socket "$F/run/tsx/bt-adv.sock" --group "" > "$T/btscan.log" 2>&1 &
+PIDS="$PIDS $!"
+printf 'PROXY="on"\nMAC=""\n' > "$F/run/tsx/bt-on.conf"
+printf 'PROXY="off"\nMAC=""\n' > "$F/run/tsx/bt-off.conf"
+echo 02:AA:BB:CC:DD:EE > "$F/run/tsx/bt.mac"
+BT_PORT=$((API_PORT + 50)); VBT_PORT=$((API_PORT + 51)); NOBT_PORT=$((API_PORT + 52))
+start_server standalone "$T/server-bt.log" "$BT_PORT" Bt-Panel TSX_HA_API_KEY= TSX_BT_CONF="$F/run/tsx/bt-on.conf"
+start_server voice "$T/voice-bt.log" "$VBT_PORT" Bt-Voice TSX_HA_API_KEY="$KEY" TSX_BT_CONF="$F/run/tsx/bt-on.conf"
+TSX_TEST_SERVER_ARGS=--no-zeroconf start_server standalone "$T/server-nobt.log" "$NOBT_PORT" NoBt-Panel TSX_HA_API_KEY= TSX_BT_CONF="$F/run/tsx/bt-off.conf"
+wait_listening "$T/server-bt.log" "$T/voice-bt.log" "$T/server-nobt.log"
+grep -q 'no mDNS announcement (--no-zeroconf)' "$T/server-nobt.log" && ! grep -q 'no mDNS announcement' "$T/server-bt.log" \
+	&& echo "OK: --no-zeroconf: a test instance serves without an mDNS announcement" || { echo "FAIL: --no-zeroconf"; rc=1; }
+"$T/venv/bin/python3" "$HERE/esphome-bt-check.py" "$BT_PORT" on || rc=1
+"$T/venv/bin/python3" "$HERE/esphome-bt-check.py" "$VBT_PORT" on --key "$KEY" || rc=1
+grep -q 'tsx_lva: Bluetooth proxy on' "$T/voice-bt.log" && echo "OK: the voice satellite logs the proxy state" || { echo "FAIL: no proxy state line in voice-bt.log"; rc=1; }
+grep -q 'Unknown message type' "$T/voice-bt.log" && { echo "FAIL: Bluetooth messages reached satellite.py (voice-bt.log)"; rc=1; } \
+	|| echo "OK: the Bluetooth messages never reach satellite.py"
+"$T/venv/bin/python3" "$HERE/esphome-bt-check.py" "$NOBT_PORT" off || rc=1
+sleep 1
+python3 - "$T/hci.log" <<'PYEOF' && echo "OK: the scanner ran only while a front end was subscribed (enable/disable pairs, off at the end)" || { echo "FAIL: scan enable/disable"; cat "$T/hci.log"; rc=1; }
+import sys
+en = [l.split()[2] for l in open(sys.argv[1]) if l.startswith("cmd 200c")]
+on = [e for e in en if e == "0100"]
+assert len(on) == 2, en        # two subscribed checks, none for the off one
+assert en[-1] == "0000", en
+PYEOF
 
 # ---- a configured key that cannot be used: refuse to start, never plaintext
 echo "== unusable key file: fail closed =="

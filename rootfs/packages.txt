@@ -103,6 +103,10 @@ mpv-libs
 # rootfs/voice/install-lva.sh regardless of VOICE) plus getmac and
 # aioesphomeapi, which install-lva.sh already vendors into /opt/lva/lib as
 # pinned wheels -- there is nothing here to add.
+# Bluetooth proxy (BT_PROXY, docs/ha.md "Bluetooth proxy"): hciattach (BCSP
+# attach of the CSR8811) and hciconfig. No bluetoothd: tsx-btscan uses a raw
+# HCI socket, and the PSR upload is csr_psload.py (python3, above).
+bluez-deprecated
 # more tools
 u-boot-tools
 i2c-tools

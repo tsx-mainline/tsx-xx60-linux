@@ -10,6 +10,7 @@
 #
 #   tsx-rescue-install check BUNDLE_DIR [--keep-data]
 #   tsx-rescue-install tfa   BUNDLE_DIR
+#   tsx-rescue-install psr   BUNDLE_DIR
 #   tsx-rescue-install run   BUNDLE_DIR [--yes] [--keep-data]
 #
 # tfa (read-only, before run): look for the TFA9890 DSP files on the panel
@@ -18,6 +19,11 @@
 # in BUNDLE_DIR/tfa-panel/ (installer/lib/tsx-tfa.sh, docs/install.md "TFA9890
 # speaker DSP tuning"). If the host takes the files, it moves them to
 # BUNDLE_DIR/tfa/. The files stay on the panel.
+#
+# psr (read-only, before run): look for the CSR8811 Bluetooth PSR file on the
+# panel itself: the current mainline root on eMMC p8, else the stock Android
+# system partition in the same region (installer/lib/tsx-psr.sh). A valid
+# file goes to BUNDLE_DIR/psr/, and "run" deploys it. It stays on the panel.
 #
 # --keep-data (a mainline -> mainline reinstall, docs/install.md "Reinstalling
 # or updating a mainline panel"): if the card is already folded and p4 is a
@@ -43,6 +49,7 @@
 #   tsx-rescue.sh          installer/lib/tsx-rescue.sh (pr_dd, tsx_env_apply, tsx_mbr_fold, tsx_mkfs_tsxdata)
 #   tsx-usb-recovery       installer/emmc/tsx-usb-recovery (copied verbatim, runs standalone)
 #   tsx-tfa.sh             installer/lib/tsx-tfa.sh (the tfa command)
+#   tsx-psr.sh             (optional) installer/lib/tsx-psr.sh (the psr command)
 #   tfa/<variant>/stereo.cnt   (optional) TFA9890 DSP tuning files. The host
 #                          puts them there, from the panel (tfa-panel/, above)
 #                          or pushed from rootfs/vendor-fetch.sh. tfa/SOURCE
@@ -64,10 +71,10 @@ set -eu
 RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
 say() { echo "tsx-rescue-install: $(date +%T 2>/dev/null) $*" >&2; }
 die() { say "ERROR: $*"; set_state "failed: $*"; exit 1; }
-CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,62p' "$0"; exit 2; }
+CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,69p' "$0"; exit 2; }
 YES=0 KEEP_DATA=0
 while [ $# -gt 0 ]; do case "$1" in --yes) YES=1;; --keep-data) KEEP_DATA=1;; *) die "unknown option $1";; esac; shift; done
-case "$CMD" in check|run|tfa) ;; *) sed -n '2,62p' "$0"; exit 2;; esac
+case "$CMD" in check|run|tfa|psr) ;; *) sed -n '2,69p' "$0"; exit 2;; esac
 [ -f "$B/manifest" ] && grep -q '^format=tsx-rescue-install-1$' "$B/manifest" || die "$B is not a v2 install bundle (no manifest)"
 . "$B/tsx-rescue.sh"
 . /usr/share/tsx/tsx-lib.sh   # tsx_find_disk, TSX_MBR_P4_TYPE_OFFSET, TSX_ENV_OFFSET/SIZE (already on the rescue image)
@@ -127,6 +134,17 @@ if [ "$CMD" = tfa ]; then
 	set_state "looking for the speaker DSP files"
 	say "looking for the TFA9890 DSP files on this panel (read-only: $EROOT, then $EBOOT)"
 	tsx_tfa_collect "$B/tfa-panel" "$EBOOT" "$EROOT" "$B/tfa"
+	set_state "checked OK"
+	exit 0
+fi
+
+# ---- psr: the Bluetooth PSR file from the panel itself (read-only) ----------
+if [ "$CMD" = psr ]; then
+	[ -f "$B/tsx-psr.sh" ] || die "$B/tsx-psr.sh missing (bundle too old for the psr command)"
+	. "$B/tsx-psr.sh"
+	set_state "looking for the Bluetooth PSR file"
+	say "looking for the Bluetooth PSR file on this panel (read-only: $EROOT)"
+	tsx_psr_collect "$B/psr" "$EROOT" "$B/psr"
 	set_state "checked OK"
 	exit 0
 fi
@@ -244,6 +262,22 @@ if [ -d "$B/tfa" ]; then
 		&& say "  tfa: source: $(sed -n 's/^source=//p' "$B/tfa/SOURCE"), firmware: $(sed -n 's/^firmware=//p' "$B/tfa/SOURCE")"
 else
 	say "  tfa: no TFA9890 DSP files in the bundle: the speakers run without the vendor tuning"
+fi
+# The Bluetooth PSR file (the psr command above). Never fatal: without it,
+# tsx-bt loads only the Bluetooth address.
+PSRDIR=$MNT/usr/local/share/tsx/csr8811
+if [ -f "$B/psr/PSR-CSR8811.psr" ]; then
+	mkdir -p "$PSRDIR"
+	want=$(sha256sum < "$B/psr/PSR-CSR8811.psr" | cut -d' ' -f1)
+	if cp "$B/psr/PSR-CSR8811.psr" "$PSRDIR/PSR-CSR8811.psr" 2>/dev/null \
+		&& [ "$(sha256sum < "$PSRDIR/PSR-CSR8811.psr" | cut -d' ' -f1)" = "$want" ]; then
+		cp "$B/psr/SOURCE" "$PSRDIR/SOURCE" 2>/dev/null || true
+		say "  psr: PSR-CSR8811.psr deployed ($want, source $(sed -n 's/^source=//p' "$B/psr/SOURCE" 2>/dev/null))"
+	else
+		say "  WARNING: psr: PSR-CSR8811.psr copy failed (non-fatal: Bluetooth loads only its address)"
+	fi
+else
+	say "  psr: no Bluetooth PSR file in the bundle (non-fatal: Bluetooth loads only its address)"
 fi
 if [ -f "$B/kiosk-url.txt" ] && [ -f "$MNT/etc/kiosk.conf" ]; then
 	URL=$(head -n 1 "$B/kiosk-url.txt")

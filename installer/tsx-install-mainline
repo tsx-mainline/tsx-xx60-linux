@@ -75,6 +75,12 @@
 # A missing DSP set never stops the install. The speakers work without the
 # vendor EQ and volume presets.
 #
+# BLUETOOTH PSR FILE (docs/hardware.md "Bluetooth (CSR8811)"), step 3b: the
+# rescue looks for PSR-CSR8811.psr on the panel in the same read-only way
+# (installer/lib/tsx-psr.sh): the current mainline root, else the stock
+# Android system partition. There is no download fallback. Without the file,
+# the Bluetooth proxy loads only its address.
+#
 # Needs: $TSX_ADMIN_PW (the Crestron console and web UI admin password) for
 # step 1, not for a reinstall. The user is $TSX_ADMIN_USER, default admin.
 # Host tools: sshpass ssh python3 curl sha256sum ip. unzip is needed only for
@@ -180,13 +186,14 @@ fi
 if [ "$DRYRUN" = 1 ]; then
 	[ "$KIND" = mainline ] || log "[dry-run] 1: steps/tsx-ensure-root $PANEL --uart $UART_OPT (settle + root over steps/rootsh)"
 	[ "$KIND" = mainline ] || log "[dry-run] 2: record eth0 MAC over rootsh. Push steps/tsx-rescue-arm.sh + android/tsx-lib.sh + lib/tsx-rescue.sh + rescue.img over HTTP+wget. Run 'preflight' then 'install --yes' over rootsh (reboots the panel)"
-	[ "$KIND" = mainline ] || log "[dry-run] 3: wait_for_rescue (kiosk IP first, then a MAC sweep, installer/lib/tsx-rescue.sh). Push a bundle ($KERNEL manifest+boot.img, root-url.txt: root.img is streamed onto p8 in step 4, tsx-rescue.sh, tsx-tfa.sh, tsx-usb-recovery, tsx-rescue-install, kiosk-url.txt, panel.conf if --config or prompts were used) over HTTP+wget+sha256sum -c"
+	[ "$KIND" = mainline ] || log "[dry-run] 3: wait_for_rescue (kiosk IP first, then a MAC sweep, installer/lib/tsx-rescue.sh). Push a bundle ($KERNEL manifest+boot.img, root-url.txt: root.img is streamed onto p8 in step 4, tsx-rescue.sh, tsx-tfa.sh, tsx-psr.sh, tsx-usb-recovery, tsx-rescue-install, kiosk-url.txt, panel.conf if --config or prompts were used) over HTTP+wget+sha256sum -c"
 	case "$TFA_SOURCE" in
 	auto) log "[dry-run] 3: TFA9890 DSP files (--tfa-source auto): tsx-rescue-install tfa /tmp/b (read-only: the current root on eMMC p8, then stock Android's boot image on eMMC p7. The files stay on the panel). Only if that finds no valid set: rootfs/vendor-fetch.sh here (the .puf download) and push its files. Never fatal";;
 	panel) log "[dry-run] 3: TFA9890 DSP files (--tfa-source panel): tsx-rescue-install tfa /tmp/b only (current root, then stock Android's boot image). No .puf download";;
 	puf) log "[dry-run] 3: TFA9890 DSP files (--tfa-source puf): rootfs/vendor-fetch.sh here (the .puf download), push its files to the rescue. The panel is not searched";;
 	none) log "[dry-run] 3: TFA9890 DSP files (--tfa-source none): none. The speakers run without the vendor tuning";;
 	esac
+	log "[dry-run] 3b: Bluetooth PSR file: tsx-rescue-install psr /tmp/b (read-only: the current root on eMMC p8, or stock Android's system partition there. The file stays on the panel). Never fatal"
 	if [ -n "$CONFIG" ]; then log "[dry-run] panel configuration: --config $CONFIG (prompts would be skipped)"
 	elif [ "$YES" = 1 ] && [ "$KIND" = mainline ] && [ "$KEEP_DATA" = 1 ]; then log "[dry-run] panel configuration: --yes with no --config on a reinstall: the panel's own /data/tsx/panel.conf would be kept in place on the kept tsxdata (only KERNEL_FLAVOR updated)"
 	elif [ "$YES" = 1 ] && [ "$KIND" = mainline ]; then log "[dry-run] panel configuration: --yes with no --config on a reinstall: the panel's own /data/tsx/panel.conf would be kept (copied onto the new tsxdata, if it has one)"
@@ -366,7 +373,7 @@ BASEURL2="http://$WSIP:$PORT2"
 cp "$FLAVOR_DIR/manifest" "$FLAVOR_DIR/boot.img" "$STAGE2/"
 mkdir -p "$STAGE2/stream"; ln -s "$(cd "$FLAVOR_DIR" && pwd)/root.img" "$STAGE2/stream/root.img"
 printf '%s\n' "$BASEURL2/stream/root.img" > "$STAGE2/root-url.txt"
-cp "$HERE/lib/tsx-rescue.sh" "$HERE/lib/tsx-tfa.sh" "$HERE/emmc/tsx-usb-recovery" "$HERE/steps/tsx-rescue-install" "$STAGE2/"
+cp "$HERE/lib/tsx-rescue.sh" "$HERE/lib/tsx-tfa.sh" "$HERE/lib/tsx-psr.sh" "$HERE/emmc/tsx-usb-recovery" "$HERE/steps/tsx-rescue-install" "$STAGE2/"
 (cd "$STAGE2" && find . -path ./stream -prune -o -type f ! -name 'SHA256SUMS*' -print | sort | xargs sha256sum > SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS)
 nohup python3 -m http.server "$PORT2" --bind 0.0.0.0 --directory "$STAGE2" >/dev/null 2>&1 &
 echo $! > "$STAGE2/.http.pid"
@@ -428,6 +435,17 @@ puf-or-panel)
 	tfa_puf || { log "  using the panel's partial set instead"; use_panel_set; };;
 none) run_stream_at "$RSSH" "rm -rf /tmp/b/tfa /tmp/b/tfa-panel" || true;;
 esac
+# ------------------------------------------ step 3b: Bluetooth PSR file -----
+# Read-only on the panel, like the DSP files. The file stays on the panel, and
+# there is no download fallback. A failure is never fatal: without the file,
+# the Bluetooth proxy loads only its address (docs/hardware.md).
+log "== step 3b: Bluetooth PSR file: looking on the panel (read-only, the file stays on the panel)"
+if run_stream_at "$RSSH" "sh /tmp/b/tsx-rescue-install psr /tmp/b 2>&1"; then
+	PSR_RES=$(printf '%s\n' "$RS_OUT" | sed -n 's/^PSR-RESULT //p' | tail -n 1)
+	log "  Bluetooth PSR: ${PSR_RES:-no result line}"
+else
+	log "  WARNING: tsx-rescue-install psr failed (see above). Bluetooth will load only its address"
+fi
 if [ "$TFA_USED" = none ]; then
 	log "  TFA9890: no DSP files will be installed: the speakers work, without the vendor EQ/volume presets (later: installer/steps/tsx-deploy-tfa.sh $PANEL)"
 else

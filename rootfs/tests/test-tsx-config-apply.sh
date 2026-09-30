@@ -205,6 +205,25 @@ set_ ORIENTATION landscape >/dev/null; applyo
 set_ ORIENTATION landscape-flipped >/dev/null; applyo
 TSX_CONF="$CFG" busybox sh "$SCRIPT" unset ORIENTATION >/dev/null; applyo
 [ ! -e "$FX/etc/tsx/orientation" ] && [ "$(lives)" = 5 ] && ok "unset again: file removed, kiosk turned back" || bad "unset: $(lives)"
+echo "== BT_PROXY / BT_MAC: /run/tsx/bt.conf, tsx-bt follows the key =="
+btl() { grep -c "tsx-bt $1" "$W/rc.log" 2>/dev/null || true; }
+applyp
+grep -qx 'PROXY="off"' "$FX/run/tsx/bt.conf" 2>/dev/null && grep -qx 'MAC=""' "$FX/run/tsx/bt.conf" \
+	&& ok "bt.conf: PROXY off and an empty MAC by default" || bad "bt.conf default: $(cat "$FX/run/tsx/bt.conf" 2>/dev/null)"
+[ "$(stat -c '%a' "$FX/run/tsx/bt.conf" 2>/dev/null)" = 644 ] && ok "bt.conf is world-readable (the voice satellite reads it)" || bad "bt.conf mode $(stat -c '%a' "$FX/run/tsx/bt.conf" 2>/dev/null)"
+r0=$(restarts); v0=$(vrestarts); s0=$(btl restart)
+set_ BT_PROXY on >/dev/null; applyp
+grep -qx 'PROXY="on"' "$FX/run/tsx/bt.conf" && ok "BT_PROXY=on reaches bt.conf" || bad "bt.conf after BT_PROXY=on: $(cat "$FX/run/tsx/bt.conf")"
+[ "$(btl restart)" = $((s0 + 1)) ] && ok "BT_PROXY=on restarts tsx-bt" || bad "BT_PROXY=on: $(btl restart) tsx-bt restarts (was $s0)"
+[ "$(restarts)/$(vrestarts)" = "$((r0 + 1))/$((v0 + 1))" ] && ok "BT_PROXY=on restarts tsx-esphome and tsx-voice (new feature flags)" || bad "BT_PROXY=on: $(restarts)/$(vrestarts) restarts (was $r0/$v0)"
+awk '/tsx-bt restart/{b=NR} /tsx-esphome restart/{e=NR} END{exit !(b && e && b < e)}' "$W/rc.log" \
+	&& ok "tsx-bt restarts before tsx-esphome (bt.mac is ready)" || bad "restart order: $(tr '\n' ';' < "$W/rc.log")"
+set_ BT_MAC 02:11:22:33:44:55 >/dev/null; applyp
+grep -qx 'MAC="02:11:22:33:44:55"' "$FX/run/tsx/bt.conf" && ok "BT_MAC reaches bt.conf" || bad "bt.conf after BT_MAC: $(cat "$FX/run/tsx/bt.conf")"
+[ "$(btl restart)" = $((s0 + 2)) ] && ok "a BT_MAC change restarts tsx-bt" || bad "BT_MAC change: $(btl restart) tsx-bt restarts"
+applyp; [ "$(btl restart)" = $((s0 + 2)) ] && ok "an unchanged apply leaves tsx-bt alone" || bad "unchanged apply touched tsx-bt"
+set_ BT_PROXY off >/dev/null; applyp
+[ "$(btl stop)" -ge 1 ] && ok "BT_PROXY=off stops tsx-bt" || bad "BT_PROXY=off did not stop tsx-bt"
 echo "== unconfigured panel (no KIOSK_URL, no TZ_NAME): apply runs to the end =="
 CFG2="$W/panel-unconf.conf"; FX2="$W/fx-unconf"; mkdir -p "$FX2/run" "$FX2/etc"
 printf '# header only\nKERNEL_FLAVOR="stable"\n' > "$CFG2"

@@ -1,0 +1,54 @@
+#!/sbin/openrc-run
+# The CSR8811 Bluetooth controller and the passive BLE scanner of the
+# Bluetooth proxy (docs/ha.md "Bluetooth proxy"). It runs only when
+# BT_PROXY=on in panel.conf (default off).
+#
+# start: tsx-bt up (chip reset, PSR upload, hciattach, hciN up), then the
+# scanner daemon (tsx-btscan, /usr/local/lib/tsx/btscan.py). It hands the
+# advertising reports to tsx-esphome or the voice satellite over
+# /run/tsx/bt-adv.sock.
+# A failed bring-up never fails the boot: the service logs why
+# (/var/log/tsx-bt.log, /run/tsx/bt.state) and ends without the scanner.
+description="Bluetooth controller and passive BLE scanner for the Home Assistant Bluetooth proxy"
+LOG=/var/log/tsx-bt.log
+PIDFILE=/run/tsx-btscan.pid
+
+depend() {
+	need localmount
+	after tsx-config tsx-data
+	before tsx-esphome tsx-voice
+}
+
+start() {
+	proxy=$(tsx-config get BT_PROXY 2>/dev/null) || proxy=off
+	if [ "$proxy" != on ]; then
+		einfo "BT_PROXY is off in panel.conf: Bluetooth stays off"
+		return 0
+	fi
+	checkpath -d -m 0755 /run/tsx
+	ebegin "Starting Bluetooth (CSR8811)"
+	if ! /usr/local/sbin/tsx-bt up >>"$LOG" 2>&1; then
+		ewarn "Bluetooth bring-up failed: $(sed -n 's/^reason=//p' /run/tsx/bt.state 2>/dev/null) (see $LOG)"
+		ewarn "The panel runs on without Bluetooth"
+		eend 0
+		return 0
+	fi
+	hci=$(sed -n 's/^hci=//p' /run/tsx/bt.state 2>/dev/null)
+	start-stop-daemon --start --background --make-pidfile --pidfile "$PIDFILE" \
+		--stdout "$LOG" --stderr "$LOG" \
+		--exec /usr/bin/python3 -- /usr/local/lib/tsx/btscan.py --hci "${hci:-hci0}" \
+		|| ewarn "tsx-btscan did not start (see $LOG)"
+	eend 0
+}
+
+stop() {
+	ebegin "Stopping Bluetooth"
+	if [ -e "$PIDFILE" ]; then
+		start-stop-daemon --stop --pidfile "$PIDFILE" --retry TERM/5/KILL/2 >/dev/null 2>&1
+		rm -f "$PIDFILE"
+	fi
+	if [ -e /run/tsx/bt.state ]; then
+		/usr/local/sbin/tsx-bt down >>"$LOG" 2>&1
+	fi
+	eend 0
+}
