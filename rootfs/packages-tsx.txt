@@ -10,6 +10,10 @@ tsx-keys
 # Provides chromium, so packages.txt's chromium=<ver> pin is dropped
 # [chromium=<ver> + the in-place patch, src/chromium-es2/]
 tsx-xx60-chromium
+# Alpine's wlroots0.20 with one fix: the first "power on" after a "power off"
+# failed on Meson8, which has no gamma LUT. Provides wlroots0.20, so
+# packages.txt's wlroots0.20 line is dropped [wlroots0.20]
+tsx-xx60-wlroots0.20
 # both kernel flavors, side by side: /lib/modules/<release>/ of each is owned
 # by its package, and /boot/tsxboot-emmc-<flavor>.img lets tsx-kernel-flavor
 # switch without the network. Only the selected flavor's package writes the

@@ -88,8 +88,9 @@ PKGS=$(grep -v '^#' "$HERE/packages.txt" | tr '\n' ' ')
 if [ $TSXREPO = 1 ]; then
 	TSXPKGS=$(grep -v '^#' "$HERE/packages-tsx.txt" | tr '\n' ' ')
 	log "tsx-aports packages from $TSX_APK_LOCAL: $TSXPKGS"
-	# tsx-xx60-chromium provides chromium, so there is no Alpine chromium pin next to it.
-	PKGS="$(grep -v '^#' "$HERE/packages.txt" | grep -v '^chromium=' | tr '\n' ' ') $TSXPKGS"
+	# tsx-xx60-chromium provides chromium and tsx-xx60-wlroots0.20 provides
+	# wlroots0.20, so the Alpine lines for these two are dropped.
+	PKGS="$(grep -v '^#' "$HERE/packages.txt" | grep -v -e '^chromium=' -e '^wlroots0.20$' | tr '\n' ' ') $TSXPKGS"
 	printf '%s/%s/common\n%s/%s/xx60\n' "$TSX_APK_LOCAL" "$ALPINE" "$TSX_APK_LOCAL" "$ALPINE" > /build/repositories
 fi
 cat /etc/apk/repositories >> /build/repositories
