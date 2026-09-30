@@ -133,11 +133,14 @@ run_stream_at() {  # SSHCMD REMOTECMD: like tsx-restore-factory's run_stream, pa
 }
 WSIP_FOR() { ip route get "$1" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}'; }
 STAGE1= STAGE2= RESCUE_WAIT_S=300
+# temp files next to $RESULTS (panel.conf copies: may hold secrets, mode 600): removed on exit
+TMPFILES=()
 cleanup() {
 	# "|| true": under set -e a failed kill (server already stopped) would end
 	# cleanup early and leave the next server running
 	for s in "$STAGE1" "$STAGE2"; do [ -n "$s" ] && [ -f "$s/.http.pid" ] && kill "$(cat "$s/.http.pid")" 2>/dev/null || true; done
 	rm -rf "$STAGE1" "$STAGE2"
+	[ ${#TMPFILES[@]} = 0 ] || rm -f "${TMPFILES[@]}"
 }
 trap cleanup EXIT
 
@@ -208,14 +211,14 @@ if [ -n "$CONFIG" ]; then
 elif [ "$YES" != 1 ]; then
 	REINSTALL_DEFAULTS=
 	if $MSSH true >/dev/null 2>&1 && is_mainline_kiosk; then
-		REINSTALL_DEFAULTS=$(mktemp "$RESULTS.reinstall-conf.XXXXXX")
+		REINSTALL_DEFAULTS=$(mktemp "$RESULTS.reinstall-conf.XXXXXX"); TMPFILES+=("$REINSTALL_DEFAULTS")
 		if $MSSH 'cat /data/tsx/panel.conf 2>/dev/null' > "$REINSTALL_DEFAULTS" 2>/dev/null && [ -s "$REINSTALL_DEFAULTS" ]; then
 			log "== $PANEL already answers as the mainline kiosk: using its /data/tsx/panel.conf as prompt defaults (reinstall)"
 		else
 			rm -f "$REINSTALL_DEFAULTS"; REINSTALL_DEFAULTS=
 		fi
 	fi
-	CONFIG=$(mktemp "$RESULTS.panel-conf.XXXXXX")
+	CONFIG=$(mktemp "$RESULTS.panel-conf.XXXXXX"); TMPFILES+=("$CONFIG")
 	. "$HERE/lib/tsx-config-prompt.sh"
 	tsx_config_prompt "$CONFIG" "$REINSTALL_DEFAULTS"
 	[ -z "$REINSTALL_DEFAULTS" ] || rm -f "$REINSTALL_DEFAULTS"
@@ -223,7 +226,7 @@ elif [ "$KIND" = mainline ] && [ "$KEEP_DATA" = 1 ]; then
 	log "== panel configuration: --yes with no --config on a reinstall: the panel's own /data/tsx/panel.conf stays in place on the kept tsxdata"
 elif [ "$KIND" = mainline ]; then
 	# --wipe-data formats tsxdata again: carry the panel's own panel.conf over
-	CONFIG=$(mktemp "$RESULTS.panel-conf.XXXXXX")
+	CONFIG=$(mktemp "$RESULTS.panel-conf.XXXXXX"); TMPFILES+=("$CONFIG")
 	if $MSSH 'cat /data/tsx/panel.conf 2>/dev/null' > "$CONFIG" 2>/dev/null && [ -s "$CONFIG" ]; then
 		log "== panel configuration: --yes with no --config on a reinstall: keeping the panel's own /data/tsx/panel.conf"
 	else

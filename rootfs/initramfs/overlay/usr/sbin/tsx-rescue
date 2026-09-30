@@ -1,17 +1,20 @@
 #!/bin/sh
-# tsx-rescue: the mainline rescue system in the golden slot (p1:boot.img).
-# The screen itself is tsx-rescue-status (the base initramfs shares it with its
-# own rescue). This tool has the counters, `done`, and the /etc/motd for ssh
-# logins. U-Boot boots it when boot_retry passes 9: the kiosk failed 5 times in a
-# row (hook guard "fallback"), then the stock eMMC Android failed 4 times. The
-# script only starts the network and dropbear (root / tsx) and shows the IP. It
-# never runs switch_root, never runs the installer and never formats anything.
+# tsx-rescue: the counters, `done`, and the /etc/motd banner for ssh logins of
+# the mainline rescue. The base initramfs ships this script, so both rescues
+# have it: the standalone rescue image in the golden slot (p1:boot.img) and the
+# own rescue of the initramfs (force-rescue, tsx.rescue, no usable root). The
+# screen itself is tsx-rescue-status. U-Boot boots the rescue image when
+# boot_retry passes 9: the kiosk failed 5 times in a row (hook guard
+# "fallback"), then the stock eMMC Android failed 4 times. The rescue only
+# starts the network and dropbear (root / tsx) and shows the IP. It never runs
+# switch_root, never runs the installer and never formats anything.
 #
 #   tsx-rescue status        env counters, card layout, p5 label
 #   tsx-rescue done          reset boot_retry/golden_boot_retry (tsx-boot-ok, verified
 #                            env write): the next boot tries the kiosk again
-#   tsx-rescue banner        (inittab) wait for the IP, put it in /etc/motd and the kernel log
-#                            (not on the LCD: that is tsx-rescue-status)
+#   tsx-rescue banner        (inittab of the rescue image only) wait for the IP, put it
+#                            in /etc/motd and the kernel log (not on the LCD: that is
+#                            tsx-rescue-status)
 # Repair tools here: /usr/share/tsx/install.sh (the installer, rootfs/deploy.sh
 # from the host), tsx-autoinstall (reinstall from a stick with tsx-install/GO),
 # tsx-factory-restore (the whole card back to the factory layout of Crestron, from a
@@ -46,5 +49,5 @@ status)
 	for d in /dev/mmcblk[0-9]p[0-9]*; do [ -b "$d" ] && echo "$d: $(blkid "$d" 2>/dev/null | cut -d: -f2-)"; done
 	;;
 done) /usr/local/sbin/tsx-boot-ok;;
-*) sed -n '2,18p' "$0"; exit 2;;
+*) sed -n '2,21p' "$0"; exit 2;;
 esac

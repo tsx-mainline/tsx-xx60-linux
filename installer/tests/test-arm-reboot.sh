@@ -32,11 +32,18 @@ grep -q "running: false" "$W/trace" && grep -q "false returned rc=1 (still up)" 
 sess=$(cat "$W/sess.pid"); jobsid=$(sed -n 's/.*reboot job pid [0-9]*, sid \([0-9]*\):.*/\1/p' "$W/trace")
 [ -n "$jobsid" ] && [ "$jobsid" != "$sess" ] && ok "the job runs in its own session (sid $jobsid, not $sess)" || bad "job sid '$jobsid'"
 
-echo "== 2. tsx_reboot_detached returns at once"
+echo "== 1b. a hangup of the session right after the call does not stop the job"
+# rootsh: the arm script exits at once, the root shell reads "exit", the pty
+# closes, and the kernel sends SIGHUP to the process group of the session
+(setsid bash -c "BB=$BB TSX_REBOOT_CMD=false TSX_SYSRQ_DIR=$W/proc; . '$HERE/android/tsx-lib.sh'; tsx_reboot_detached '$W/trace1b' 1; kill -HUP 0; sleep 30" &)
+wait_for "$W/trace1b" "sysrq b written" 15 && ok "the job ran to the end after the SIGHUP" || bad "the job did not finish: $(cat "$W/trace1b" 2>/dev/null)"
+
+echo "== 2. tsx_reboot_detached returns as soon as the job runs"
 t0=$(date +%s%N)
 BB=$BB TSX_REBOOT_CMD=true TSX_SYSRQ_DIR=$W/proc bash -c ". '$HERE/android/tsx-lib.sh'; tsx_reboot_detached '$W/trace2' 2"
 dt=$(( ($(date +%s%N) - t0) / 1000000 ))
 [ "$dt" -lt 1500 ] && ok "returned after ${dt} ms" || bad "took ${dt} ms"
+grep -q "reboot job pid" "$W/trace2" && ok "the job had started when the call returned" || bad "no job line at return: $(cat "$W/trace2")"
 wait_for "$W/trace2" "sysrq b written" 15 && ok "second job finished too" || bad "trace2: $(cat "$W/trace2" 2>/dev/null)"
 
 echo "== 3. android_went_down (host)"

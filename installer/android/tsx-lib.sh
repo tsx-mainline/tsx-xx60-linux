@@ -215,14 +215,19 @@ tsx_size() { wc -c < "$1" | tr -d ' '; }
 # session (busybox setsid, when there is one), ignores SIGHUP and has no tty on
 # any fd. The function appends every step to TRACE. Put TRACE on /data. It
 # survives the reboot, and if the reboot never happens, the host can read why.
-# After `busybox reboot -f`, the job waits 5 s and falls back to sysrq b. The
-# function returns at once. It needs $BB (tsx_pick_bb). Test hooks:
+# After `busybox reboot -f`, the job waits 5 s and falls back to sysrq b.
+# The job ignores SIGHUP from the start. The subshell sets SIG_IGN before the
+# exec, and the exec keeps it. On a stock TSW-760, the hangup of the ssh
+# session killed the job before it wrote its first trace line. So the function
+# returns only after the job writes its first trace line, or after 5 s.
+# It needs $BB (tsx_pick_bb). Test hooks:
 # TSX_REBOOT_CMD (instead of "$BB reboot -f") and TSX_SYSRQ_DIR (instead of /proc).
 tsx_reboot_detached() {
-	local trace=$1 delay=${2:-3} setsid=
+	local trace=$1 delay=${2:-3} setsid= n i=0
 	"$BB" setsid true </dev/null >/dev/null 2>&1 && setsid="$BB setsid"
 	echo "$("$BB" date '+%F %T' 2>/dev/null) arming a detached reboot in ${delay}s (setsid: ${setsid:-no}. Parent pid $$)" >> "$trace"
-	$setsid "$BB" sh -c '
+	n=$("$BB" wc -l < "$trace")
+	( trap '' HUP; exec $setsid "$BB" sh -c '
 		BB=$1 T=$2 D=$3 R=$4 Q=$5
 		trap "" HUP
 		now() { "$BB" date "+%F %T" 2>/dev/null; }
@@ -234,8 +239,15 @@ tsx_reboot_detached() {
 		"$BB" sleep 5
 		echo 1 > "$Q/sys/kernel/sysrq"; echo b > "$Q/sysrq-trigger"
 		echo "$(now) sysrq b written rc=$? (still up)" >> "$T"
-	' tsx-reboot "$BB" "$trace" "$delay" "${TSX_REBOOT_CMD:-$BB reboot -f}" "${TSX_SYSRQ_DIR:-/proc}" \
+	' tsx-reboot "$BB" "$trace" "$delay" "${TSX_REBOOT_CMD:-$BB reboot -f}" "${TSX_SYSRQ_DIR:-/proc}" ) \
 		</dev/null >/dev/null 2>&1 &
+	while [ $i -lt 50 ]; do
+		"$BB" tail -n +$((n + 1)) "$trace" 2>/dev/null | "$BB" grep -q "reboot job pid" && return 0
+		"$BB" usleep 100000 2>/dev/null || "$BB" sleep 1
+		i=$((i + 1))
+	done
+	echo "$("$BB" date '+%F %T' 2>/dev/null) the reboot job did not start within 5 s" >> "$trace"
+	return 0
 }
 # tsx_conf KEY FILE: print the value of KEY=... in a plain key=value file (no shell evaluation)
 tsx_conf() { sed -n "s/^$1=//p" "$2" | tail -n 1 | sed 's/^"\(.*\)"$/\1/'; }

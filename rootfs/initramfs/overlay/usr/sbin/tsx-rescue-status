@@ -29,7 +29,8 @@
 #   /run/rescue-reason        why the rescue started. The screen does not show it.
 #                             The shell prints it when it opens, and so does
 #                             `tsx-rescue status`.
-#   /run/tsx-eth0-mac-src     uboot|random (rootfs/initramfs/overlay/etc/init.d/rcS)
+#   /run/tsx-eth0-mac-src     uboot|random (rootfs/initramfs/overlay/etc/init.d/rcS).
+#                             Absent: rcS has not set the MAC yet ("starting").
 #   /etc/tsx/rescue-version   the version line of the rescue image (absent in the initramfs rescue)
 #   the U-Boot env (product_name, ethaddr) through tsx-lib.sh
 # Test hooks: TSX_RUN TSX_STATUS_TTY (output) TSX_STATUS_IN (keyboard tty)
@@ -124,11 +125,12 @@ read_op() {
 
 # ---- one frame (text on stdout) -------------------------------------------
 frame_text() {
-	local ip method mac macsrc rver kver pname punit fw model hint
+	local ip method mac macsrc envmac noaddr rver kver pname punit fw model hint
 	ip=$(ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
 	case " $(cat /proc/cmdline 2>/dev/null) " in *" tsx.ip="*) method=static;; *) method=dhcp;; esac
 	mac=$(cat /sys/class/net/eth0/address 2>/dev/null)
-	macsrc=$(cat "$RUN/tsx-eth0-mac-src" 2>/dev/null || echo unknown)
+	macsrc=$(cat "$RUN/tsx-eth0-mac-src" 2>/dev/null) || macsrc=
+	envmac=
 	rver="initramfs rescue (no rescue image)"; [ -f "$VERFILE" ] && rver=$(head -n 1 "$VERFILE")
 	kver=$(uname -r 2>/dev/null || echo unknown)
 
@@ -141,7 +143,16 @@ frame_text() {
 			tsx_pick_fwenv 2>/dev/null
 			pname=$(tsx_env product_name 2>/dev/null || true)
 			punit=$(tsx_unit_id 2>/dev/null || true)
+			[ -n "$macsrc" ] || envmac=$(tsx_env ethaddr 2>/dev/null || true)
 		fi
+	fi
+	# rcS writes tsx-eth0-mac-src when it has set the MAC. Before that, eth0
+	# still has the random MAC of the kernel and has no address yet. The
+	# screen then shows the MAC from the U-Boot env (or no MAC) and "starting".
+	noaddr="(no address yet)"
+	if [ -z "$macsrc" ]; then
+		noaddr="(starting)"
+		if echo "$envmac" | grep -qiE '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$'; then mac=$envmac macsrc=uboot; else mac=; fi
 	fi
 	# product_name looks like "TSS-10_[v3.002.1061,_#0A1B2C3D]". It has the
 	# model, then the stock firmware version and the tsid. The tsid stays off
@@ -154,7 +165,7 @@ frame_text() {
 	echo "model        : ${model:-unknown}${fw:+   stock fw $fw}${punit:+   unit $punit}"
 	echo "rescue       : $rver"
 	echo "kernel       : $kver"
-	echo "network      : eth0 ${ip:-(no address yet)} ($method, MAC $mac${macsrc:+, $macsrc})"
+	echo "network      : eth0 ${ip:-$noaddr} ($method${mac:+, MAC $mac}${macsrc:+, $macsrc})"
 	if [ -n "$ip" ]; then echo "repair shell : ssh root@$ip   (password: tsx)"
 	else echo "repair shell : ssh root@<ip once DHCP/static assigns one>  (password: tsx)"; fi
 	echo "----------------------------------------------------------------"

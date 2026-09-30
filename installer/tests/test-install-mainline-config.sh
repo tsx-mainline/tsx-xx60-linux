@@ -137,6 +137,44 @@ GOT=$(TSX_CONF="$PCONF2" "$TSX_CONFIG_BIN" get PANEL_NAME 2>/dev/null)
 echo "$PROMPT_OUT2" | grep -qi "try again" && ok "the re-prompt message was shown" || bad "no re-prompt message seen"
 echo "$PROMPT_OUT2" | grep -qi "enter 'on' or 'off'" && ok "VOICE=maybe was rejected and re-asked" || bad "VOICE=maybe was not rejected"
 
+echo "== 6. no panel.conf temp copies are left next to --results (the run ends early here: no panel) =="
+# A stub sshpass stands in for the kiosk: it serves a panel.conf and then
+# fails the eth0 MAC read, so the driver stops with an error in step 2 --
+# after it made its temp copy of panel.conf. Both copies (the --yes
+# --wipe-data carry-over and the prompted one) must be gone afterwards.
+mkdir -p "$W/bin" "$W/res"
+cat > "$W/bin/sshpass" <<'STUB'
+#!/bin/sh
+case "$*" in *"cat /data/tsx/panel.conf"*) echo "KIOSK_URL=https://ha.example.org/";; *) exit 1;; esac
+STUB
+chmod +x "$W/bin/sshpass"
+OUT=$(PATH="$W/bin:$PATH" TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --yes --wipe-data \
+	--results "$W/res/wipe.txt" </dev/null 2>&1)
+[ $? -ne 0 ] && ok "--yes --wipe-data run stops at the (stubbed) MAC read" || bad "--yes --wipe-data run did not fail as staged: $OUT"
+echo "$OUT" | grep -q "keeping the panel's own /data/tsx/panel.conf" && ok "the panel's panel.conf was carried over (temp copy made)" || bad "no carry-over seen: $OUT"
+LEFT=$(ls "$W/res" | grep -c 'panel-conf\|reinstall-conf')
+[ "$LEFT" = 0 ] && ok "no panel-conf temp file left after the --wipe-data run" || bad "$LEFT temp file(s) left: $(ls "$W/res")"
+OUT=$(cd "$HERE" && PATH="$W/bin:$PATH" TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts \
+	--results "$W/res/prompt.txt" 2>&1 <<'EOF'
+TSS-10-ABCDEF
+https://ha.example.org/lovelace/home
+trusted
+UTC
+off
+no
+
+
+
+
+
+
+EOF
+)
+echo "$OUT" | grep -q "could not read the panel's eth0 MAC" && ok "prompted run got past the prompts and stopped at the MAC read" || bad "prompted run did not reach step 2: $OUT"
+LEFT=$(ls "$W/res" | grep -c 'panel-conf\|reinstall-conf')
+[ "$LEFT" = 0 ] && ok "no panel-conf temp file left after the prompted run" || bad "$LEFT temp file(s) left: $(ls "$W/res")"
+[ -s "$W/res/prompt.txt" ] && ok "the results file itself is kept" || bad "results file missing"
+
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-install-mainline-config || echo FAIL test-install-mainline-config
 exit $F

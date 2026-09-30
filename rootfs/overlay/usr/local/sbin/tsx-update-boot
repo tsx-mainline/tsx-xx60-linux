@@ -1,27 +1,35 @@
 #!/bin/sh
 # ON THE PANEL (running kiosk system): replace the mainline boot image.
-#   tsx-update-boot IMG SHA256          card layout: p1:tsxboot.img only, same steps as
-#                                       rootfs/install.sh step 2 (golden boot.img untouched,
-#                                       verified before/after)
-#   tsx-update-boot --emmc IMG SHA256   eMMC layout: raw write into the eMMC boot partition
-#                                       (mmcblk1p7, 32 MiB). The previous partition content is
-#                                       saved first to /data/tsxboot-emmc.prev.img (+ .sha256),
-#                                       readback verified. A bad readback restores the old image.
-#                                       Roll back: tsx-update-boot --emmc /data/tsxboot-emmc.prev.img
+#   tsx-update-boot IMG SHA256          card layout: write only p1:tsxboot.img,
+#                                       with the same steps as step 2 of
+#                                       rootfs/install.sh (the golden boot.img
+#                                       stays as it is, and the script verifies
+#                                       it before and after)
+#   tsx-update-boot --emmc IMG SHA256   eMMC layout: raw write into the eMMC
+#                                       boot partition (mmcblk1p7, 32 MiB). The
+#                                       script first saves the previous
+#                                       partition content to
+#                                       /data/tsxboot-emmc.prev.img (and .sha256).
+#                                       It verifies the write by readback. After
+#                                       a bad readback, it restores the old image.
+#                                       To roll back, run:
+#                                       tsx-update-boot --emmc /data/tsxboot-emmc.prev.img
 #                                       $(cat /data/tsxboot-emmc.prev.img.sha256)
-#   tsx-update-boot --check IMG         only check that IMG carries this panel's DTB (below)
+#   tsx-update-boot --check IMG         only check that IMG has the DTB of this
+#                                       panel (see below)
 #   tsx-update-boot --help
-# Board check (both write modes, and --check): U-Boot picks the DTB from the
-# "second" payload of the boot image. It boots a plain FDT on any panel.
+# Board check (both write modes, and --check): U-Boot takes the DTB from the
+# "second" payload of the boot image. U-Boot boots a plain FDT on any panel.
 # It searches an AML_ multi-DTB container for the env aml_dt (for example
-# yushan_one_7inch). Without a matching entry, nothing boots. So the image
-# must carry a DTB for the aml_dt of this panel, and the compatible string
-# of that DTB must name this board (7inch: crestron,tsw760, 10inch:
-# crestron,tsw1060). Otherwise the script writes nothing. aml_dt comes from
-# the U-Boot env on the card (read only), else from androidboot.lcdsize on
-# the kernel command line. --any-board (first option) skips the check.
+# yushan_one_7inch). If the container has no matching entry, nothing boots.
+# For this reason, the image must have a DTB for the aml_dt of this panel, and
+# the compatible property of the DTB must name this board (7inch:
+# crestron,tsw760, 10inch: crestron,tsw1060). If it does not, the script
+# writes nothing. aml_dt comes from the U-Boot env on the card (read only).
+# If the env has no aml_dt, it comes from androidboot.lcdsize on the kernel
+# command line. --any-board (as the first option) skips the check.
 set -eu
-case "${1:-}" in -h|--help) sed -n '2,22p' "$0"; exit 0;; esac
+case "${1:-}" in -h|--help) sed -n '2,30p' "$0"; exit 0;; esac
 ANYBOARD=0; [ "${1:-}" = --any-board ] && { ANYBOARD=1; shift; }
 
 # ---- board check -----------------------------------------------------------
