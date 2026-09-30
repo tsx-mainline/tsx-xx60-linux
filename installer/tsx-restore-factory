@@ -6,7 +6,7 @@
 #
 #   tsx-restore-factory PANEL_IP [--puf FILE] [options]      (no backup)
 #   tsx-restore-factory --bundle DIR PANEL_IP [options]       (prebuilt bundle,
-#        e.g. mkbundle.sh --emmc-raw/--boot0 from a backup of that unit)
+#        for example mkbundle.sh --emmc-raw/--boot0 from a backup of that unit)
 #
 # Without a backup, the driver zeroes the eMMC regions that stock Android does
 # not use (recovery, misc, data, alignment gaps). Cache gets an empty ext4

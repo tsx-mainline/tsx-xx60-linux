@@ -21,8 +21,8 @@
 #
 # Options:
 #   --port N            HTTP server port on the workstation (default 8080)
-#   --ws-ip IP          workstation IP to hand to the panel (default:
-#                       auto-detected from `ip route get PANEL_IP`)
+#   --ws-ip IP          workstation IP to give to the panel (default:
+#                       detected from `ip route get PANEL_IP`)
 #   --dest DIR          panel-side staging directory (default /logs/tsx-payload)
 #   --results FILE      log file (default results/tsx-android-to-card-<date>.txt,
 #                       appended, timestamped)
@@ -64,7 +64,7 @@ CRESTRONADMIN="$INSTALLER/steps/crestron-admin"
 INSTALLER_REL=tsx-install/android/tsx-android-install.sh
 MAINLINE_PW=${TSX_MAINLINE_PW:-tsx}
 
-usage() { sed -n '2,54p' "$0" >&2; }
+usage() { sed -n '2,56p' "$0" >&2; }
 log() { local ts; ts=$(date '+%Y-%m-%d %H:%M:%S'); printf '[%s] %s\n' "$ts" "$*" | tee -a "$RESULTS" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 log_multiline() {  # label text

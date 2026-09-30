@@ -17,8 +17,8 @@ set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 FETCH="$HERE/../../rootfs/vendor-fetch.sh"
 PANEL= DRY=0
-while [ $# -gt 0 ]; do case "$1" in --dry-run) DRY=1; shift;; -h|--help) sed -n '2,15p' "$0"; exit 0;; --*) echo "unknown $1" >&2; exit 2;; *) PANEL=$1; shift;; esac; done
-[ -n "$PANEL" ] || { sed -n '2,15p' "$0" >&2; exit 2; }
+while [ $# -gt 0 ]; do case "$1" in --dry-run) DRY=1; shift;; -h|--help) sed -n '2,16p' "$0"; exit 0;; --*) echo "unknown $1" >&2; exit 2;; *) PANEL=$1; shift;; esac; done
+[ -n "$PANEL" ] || { sed -n '2,16p' "$0" >&2; exit 2; }
 say() { echo "tsx-deploy-tfa: $*" >&2; }
 VARIANTS="settings_yushan settings_yushan_2nd settings_yushan_3rd"
 LOCAL=${TFA_VENDOR_LOCAL:-"$HERE/../../rootfs/vendor-local/tfa9890"}

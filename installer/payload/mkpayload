@@ -3,7 +3,7 @@
 # the UART-free installer payload. See README.md for the layout and the flows.
 #
 #   payload/mkpayload --out DIR --rootfs-p2 rootfs-p2.ext4 --rescue-tsw1060 RESCUE --bootimg-tsw1060 tsxboot.img [options]
-#     (the default Android flow: --rootfs-p2 from steps/mkp2rootfs.sh)
+#     (the default Android flow: --rootfs-p2 comes from steps/mkp2rootfs.sh)
 #   payload/mkpayload --out DIR --rootfs rootfs.tar.gz --bootimg-tsw1060 tsxboot.img [options]
 #     (the older two-stage payload: stage 2 installs the tarball on p5. Also the GO reinstall)
 #     --bootimg-tsw760 IMG   TSW-760 image (not built yet). Without it the
@@ -25,11 +25,11 @@
 #                            It needs the same inputs as the default Android flow above
 #                            (--rootfs-p2 + --rescue-tsw1060 + --bootimg-tsw1060, with
 #                            tsx-autoinstall in the boot image).
-#     --guard fallback|nogolden   hook variant stage 2 installs (default fallback)
+#     --guard fallback|nogolden   hook variant that stage 2 installs (default fallback)
 #     --no-defuse-golden     stage 2 does not set DataRecoveryDone=1 (default: it does)
 #     --allow-stale          accept a rootfs without ENV_VERIFIED=yes
 #     --allow-no-autoinstall accept a boot image whose initramfs has no tsx-autoinstall
-#                            (only the --source net flow works then)
+#                            (then only the --source net flow works)
 #
 #   payload/mkpayload --recovery --out DIR --rescue-tsw1060 RESCUE [--bootimg-tsw760 RESCUE760]
 #     A recovery-only stick: jabil.txt + the rescue image(s), nothing else. Once
@@ -51,13 +51,13 @@ while [ $# -gt 0 ]; do
 	--go) GO=1;; --usb) USB=1;; --recovery) RECOVERY=1;;
 	--guard) GUARD=$2; shift;; --defuse-golden) DEFUSE=1;; --no-defuse-golden) DEFUSE=0;;
 	--allow-stale) STALE=1;; --allow-no-autoinstall) NOAUTO=1;;
-	-h|--help) sed -n '2,33p' "$0"; exit 0;;
-	*) sed -n '2,33p' "$0"; exit 2;;
+	-h|--help) sed -n '2,40p' "$0"; exit 0;;
+	*) sed -n '2,40p' "$0"; exit 2;;
 	esac; shift
 done
 die() { echo "mkpayload: ERROR: $*" >&2; exit 1; }
 say() { echo "mkpayload: $*" >&2; }
-[ -n "$OUT" ] || { sed -n '2,33p' "$0"; exit 2; }
+[ -n "$OUT" ] || { sed -n '2,40p' "$0"; exit 2; }
 [ -d "$OUT" ] || die "$OUT is not a directory (mount the stick first)"
 
 # --- checks on the payload (shared by all modes)
