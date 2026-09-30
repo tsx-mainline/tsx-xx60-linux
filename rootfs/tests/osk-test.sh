@@ -2,11 +2,12 @@
 # On-panel acceptance test for the on-screen keyboard (KIOSK_OSK=squeekboard).
 # Host side. Needs KIOSK_DEVTOOLS=1 on the panel and a tunnel
 #   ssh -f -N -L 9222:127.0.0.1:9222 root@PANEL
-# Uses real injected touches (tests/tap.py -> /dev/input/event1 -> libinput ->
-# sway -> Chromium or the keyboard layer), grim screenshots of sway's composited
-# output (includes the keyboard layer) and CDP to read the field value.
+# It uses real injected touches (tests/tap.py -> /dev/input/event1 -> libinput
+# -> sway -> Chromium or the keyboard layer). It takes grim screenshots of the
+# composited sway output, which includes the keyboard layer. It reads the
+# field value with CDP.
 # Usage: tests/osk-test.sh PREFIX [IP]    -> results/PREFIX-*.png, results/PREFIX.txt
-# Types the word "kiosk" (a test word, never real credentials).
+# It types the word "kiosk" (a test word, never real credentials).
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 PFX=${1:?prefix}; IP=${2:-${PANEL_IP:?set PANEL_IP or pass IP as arg 2}}
@@ -39,7 +40,7 @@ osk; shot 5-gesture-shown
 echo "--- 6. three-finger tap again: hide"
 tap --together 300,300 500,300 700,300; sleep 2
 osk; state
-echo "--- 7. Password field (tap at 600,437) shows the keyboard too; type x, read only the length"
+echo "--- 7. Password field (tap at 600,437) shows the keyboard too. type x, read only the length"
 tap 600,437; sleep 2.5; osk; tap 469,700; sleep 1
 python3 $HERE/tests/cdp.py 9222 eval "$(echo "$JS" | sed 's/username:u?u.value:null/username:u?u.value:null,passwordLength:(all.find(i=>i.name==\"password\")||{value:\"\"}).value.length/')" | python3 -c 'import json,sys; print(json.loads(json.load(sys.stdin)["result"]["value"]))'
 tap 1150,400; sleep 2; osk

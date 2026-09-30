@@ -5,7 +5,7 @@
 #   1. every busybox applet the scripts use exists in the stock busybox
 #      (applet table parsed from the binary: the bionic busybox hangs under
 #      qemu-user in a futex, so it cannot simply be asked with --list),
-#   2. bash, fw_printenv, fw_setenv exist; fw_env.config points at mmcblk0 0x100000,
+#   2. bash, fw_printenv, fw_setenv exist. fw_env.config points at mmcblk0 0x100000,
 #   3. `bash -n` of every script with the stock static bash 3.2 (qemu-arm),
 #   4. no bash-4 syntax slipped in (bash 3.2 has no ${x,,} / ${x^^} / mapfile / |&).
 # Usage: tests/check-android-tools.sh [system.img]   (default: $SYSIMG)
@@ -13,7 +13,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 IMG=${1:-${SYSIMG:-}}
 if [ -z "$IMG" ] || [ ! -f "$IMG" ]; then
-	echo "SKIPPED: needs the real Crestron system.img (arg 1 or \$SYSIMG); not present here"
+	echo "SKIPPED: needs the real Crestron system.img (arg 1 or \$SYSIMG). Not present here"
 	exit 0
 fi
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT

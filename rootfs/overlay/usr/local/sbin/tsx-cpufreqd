@@ -1,15 +1,15 @@
 #!/bin/sh
-# tsx-cpufreqd : CPU governor follows the screen state that tsx-idled
-# writes to /run/tsx-idled.state ("on <level>" | "blank"), like tsx-buttons
-# and tsx-ledbard do:
-#   awake -> CPUFREQ_AWAKE (default performance: 1608 MHz at 1.1 V; this
-#            costs heat, not risk: the meson8 thermal zone still throttles at
-#            its passive trip points)
+# tsx-cpufreqd: the CPU governor follows the screen state that tsx-idled
+# writes to /run/tsx-idled.state ("on <level>" | "blank"). tsx-buttons and
+# tsx-ledbard do the same:
+#   awake -> CPUFREQ_AWAKE (default performance: 1608 MHz at 1.1 V. This
+#            costs heat, not risk. The meson8 thermal zone still throttles at
+#            its passive trip points.)
 #   blank -> CPUFREQ_BLANK (default schedutil)
-# Settings in /etc/kiosk.conf; CPUFREQ_AWAKE=off stops the daemon from
-# touching the governor (tsx-setup's schedutil stays). It never touches
-# cpufreq/boost: the 1800 MHz boost OPP is removed from the DT (not stable,
-# docs/hardware.md).
+# The settings are in /etc/kiosk.conf. CPUFREQ_AWAKE=off stops the daemon from
+# touching the governor (the schedutil of tsx-setup stays). The daemon never
+# touches cpufreq/boost. The DT no longer has the 1800 MHz boost OPP (not
+# stable, docs/hardware.md).
 STATE=${TSX_IDLED_STATE:-/run/tsx-idled.state}
 SYS=${TSX_CPUFREQ_SYS:-/sys/devices/system/cpu}
 log() { echo "$(date '+%F %T') tsx-cpufreq: $*"; }

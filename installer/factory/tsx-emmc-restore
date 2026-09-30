@@ -1,29 +1,31 @@
 #!/bin/sh
-# tsx-emmc-restore: put the xx60 eMMC (mmcblk1) back to stock Android from a
-# bundle made by mkbundle.sh (Crestron .puf images, plus this unit's own
-# eMMC backup regions if a backup exists; without one the unused regions are
-# zeroed and cache gets an empty ext4). Runs in the mainline RESCUE system (everything in RAM),
-# as root, busybox sh. Companion of tsx-factory-restore (the SD card).
+# tsx-emmc-restore: put the xx60 eMMC (mmcblk1) back to stock Android, from a
+# bundle made by mkbundle.sh (Crestron .puf images, plus the own eMMC backup
+# regions of this unit if a backup exists). Without a backup, the script zeroes
+# the unused regions and gives cache an empty ext4. It runs in the mainline
+# RESCUE system (everything in RAM), as root, in busybox sh. It is the companion
+# of tsx-factory-restore (the SD card).
 #
 #   tsx-emmc-restore check BUNDLE_DIR
 #   tsx-emmc-restore run   BUNDLE_DIR [--yes]
 #
-# Writes only the regions listed in BUNDLE_DIR/emmc.manifest, by offset on the
-# whole device (no partition table needed), in the manifest's order, each read
-# back and compared with the manifest's sha256 (the whole region, including the
-# zero padding). The U-Boot areas (bootloader 0..4M, reserved 36M+64M) and
-# boot0/boot1 are NEVER written; boot0 is hashed and must match the manifest
-# (proves this is the right unit and its U-Boot is untouched). A bundle made
-# without a backup has boot0_sha256=any: boot0 is then hashed before and after
-# the run and must not change.
-# Region sources: zero | FILE+zero | FILE.gz | keep:FILE (whole region, rewritten
-# from FILE + zero padding if it differs) | head:FILE (only the first size(FILE)
-# bytes are compared and written; the rest of the region is left alone).
+# It writes only the regions listed in BUNDLE_DIR/emmc.manifest, by offset on
+# the whole device (no partition table needed), in the order of the manifest.
+# It reads each region back and compares it with the sha256 in the manifest
+# (the whole region, including the zero padding). The script NEVER writes the
+# U-Boot areas (bootloader 0..4M, reserved 36M+64M) or boot0/boot1. It hashes
+# boot0, and the hash must match the manifest. That proves this is the right
+# unit and that its U-Boot is untouched. A bundle made without a backup has
+# boot0_sha256=any. Then the script hashes boot0 before and after the run, and
+# the hash must not change.
+# Region sources: zero | FILE+zero | FILE.gz | keep:FILE (whole region, written
+# again from FILE + zero padding if it differs) | head:FILE (the script compares
+# and writes only the first size(FILE) bytes and leaves the rest of the region alone).
 # Test hooks: TSX_EMMC (device or image file), TSX_BOOT0 (device or file),
 # TSX_EMMC_SECTORS (skip the sysfs size check), TSX_RUN.
 set -eu
 RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
-# the rescue screen (tsx-rescue-status) shows the latest line of a "run" as the current step
+# The rescue screen (tsx-rescue-status) shows the latest line of a "run" as the current step.
 say_state() { [ "${CMD:-}" = run ] || return 0; case $1 in DONE*) return 0;; esac; echo "$$ factory restore" > "$RUN/tsx-op" 2>/dev/null; printf '%s\n' "$*" > "$RUN/tsx-install-state" 2>/dev/null; return 0; }
 say() { echo "tsx-emmc-restore: $(date +%T) $*" >&2; say_state "$*"; }
 die() { say "ERROR: $*"; exit 1; }
@@ -39,16 +41,17 @@ sha_of() { sha256sum < "$1" | cut -d' ' -f1; }
 
 # ---- live progress for a background dd (BusyBox dd has no status=progress) ----
 # pr_dd DEST OFF_MIB LEN_MIB NAME -- DD_ARGS...
-# dd's own stdin (pipe or redirect, as set up by the caller) is inherited as-is;
-# its stdout is pointed at a pre-opened (non-truncating) fd on DEST so that
-# /proc/<ddpid>/fdinfo/1 'pos:' tracks the destination write offset. Every ~15s
-# (while dd is still alive) prints one progress line to fd 2. Prints nothing
-# once dd has exited, and returns dd's own exit status.
+# dd inherits its own stdin as it is (pipe or redirect, as the caller set it).
+# Its stdout goes to a pre-opened (non-truncating) fd on DEST, so 'pos:' in
+# /proc/<ddpid>/fdinfo/1 tracks the write offset on the destination. Every ~15 s
+# (while dd is still alive) the function prints one progress line to fd 2. It
+# prints nothing once dd has exited, and it returns the own exit status of dd.
 pr_dd() {
 	_pd_dev=$1; _pd_off=$2; _pd_len=$3; _pd_name=$4; shift 4; [ "${1:-}" = -- ] && shift
 	exec 8<>"$_pd_dev"
-	# ash (busybox, the rescue) gives a background job /dev/null as stdin unless it is
-	# redirected explicitly (bash does not): keep the caller's stdin (the pipe) on fd 7
+	# ash (busybox, the rescue) gives a background job /dev/null as stdin unless
+	# the script redirects it explicitly (bash does not). So keep the stdin of the
+	# caller (the pipe) on fd 7.
 	exec 7<&0
 	dd "$@" <&7 1>&8 2>/dev/null 7<&- 8<&- &
 	_pd_dp=$!
@@ -73,17 +76,17 @@ pr_dd() {
 	) &
 	_pd_rp=$!
 	wait $_pd_dp; _pd_rc=$?
-	# no explicit "kill $_pd_rp" here: the reporter already notices dd's exit via
-	# its own kill -0 check (within ~1s) and self-terminates; killing a PID that
-	# may by now have already exited and been recycled by the OS is what a
-	# background dd + reporter design must avoid (a stray signal to an unrelated,
-	# reused PID has been observed to take down the whole script)
+	# Do not kill $_pd_rp here. The reporter already sees the exit of dd in its own
+	# kill -0 check (within ~1 s) and ends itself. A design with a background dd
+	# and a reporter must avoid killing a PID that may have exited already and
+	# been recycled by the OS. A stray signal to an unrelated, reused PID took
+	# down the whole script once.
 	wait $_pd_rp 2>/dev/null
 	exec 7<&- 8<&-
 	return $_pd_rc
 }
 
-# the eMMC: the mmcblk with a boot0 sibling (the card has none)
+# The eMMC is the mmcblk with a boot0 sibling (the card has none).
 if [ -n "${TSX_EMMC:-}" ]; then DEV=$TSX_EMMC; B0=${TSX_BOOT0:?TSX_BOOT0}
 else
 	DEV=; for d in /sys/block/mmcblk[0-9]; do n=${d##*/}; [ -e "/sys/block/${n}boot0" ] && { DEV=/dev/$n; B0=/dev/${n}boot0; break; }; done

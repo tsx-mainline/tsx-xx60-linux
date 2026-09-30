@@ -16,7 +16,7 @@ peak() { tsx-peak "$1" 2>/dev/null | awk '/^total/{for(i=1;i<=NF;i++) if($i=="ch
 loopcheck() {  # $1 = label: -30 dBFS 48 kHz tone via speaker -> mic (16 kHz mono)
 	arecord -q -D mic -f S16_LE -r 16000 -c 1 -d 3 /tmp/lc.wav & r=$!
 	sleep 0.5; aplay -q -D speaker $T/tone5s-440-m30dB.wav & a=$!; wait $r; kill $a 2>/dev/null; wait $a 2>/dev/null
-	echo "loopcheck $1: peak $(peak /tmp/lc.wav) dBFS (expect -30); Master $(vol Master) Media $(vol Media)"
+	echo "loopcheck $1: peak $(peak /tmp/lc.wav) dBFS (expect -30). Master $(vol Master) Media $(vol Media)"
 	amixer -c TSW1060 contents | grep -A2 "name=" | grep -E "name=|values=" | paste - - | sed 's/  */ /g'
 }
 cpu_ticks() { awk '{print $14+$15}' /proc/$1/stat 2>/dev/null; }

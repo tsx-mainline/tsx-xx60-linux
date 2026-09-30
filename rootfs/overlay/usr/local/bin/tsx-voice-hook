@@ -1,14 +1,14 @@
 #!/bin/sh
-# tsx-voice-hook EVENT: called by the voice satellite (tsx-voice,
-# linux-voice-assistant via /opt/lva/shim/tsx_lva) on
+# tsx-voice-hook EVENT: the voice satellite (tsx-voice, linux-voice-assistant
+# through /opt/lva/shim/tsx_lva) calls it on these events:
 #   detection  (wake word)                    -> duck "Media", LED on
-#   listen     (streaming to HA; push-to-talk) -> duck "Media", LED on
+#   listen     (streaming to HA, push-to-talk) -> duck "Media", LED on
 #   think      (HA processes the request)     -> state
 #   speak      (TTS response starts)          -> keep ducked
 #   error      (pipeline error)               -> state
 #   done       (idle, disconnected)           -> restore Media, LED off
-# and by hand: duck [PERCENT] | unduck.
-# Ducking restores after 60 s at the latest (a lost connection may never
+# You can also call it by hand: duck [PERCENT] | unduck.
+# The ducking ends after 60 s at the latest (a lost connection may never
 # send "done").
 CONF=${TSX_VOICE_CONF:-/etc/tsx/voice.conf}
 RUN=${TSX_VOICE_RUN:-/run/tsx/voice}

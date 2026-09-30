@@ -1,63 +1,63 @@
 #!/bin/sh
-# xx60 mainline installer v2, step 2: runs INSIDE the mainline rescue system
-# (RAM root, busybox ash), pushed there by installer/tsx-install-mainline as
-# part of a bundle at /tmp/b (same delivery pattern as installer/tsx-restore-factory).
-# Writes the eMMC boot+root regions from pre-built images, deploys the TFA9890
-# DSP files and (optionally) KIOSK_URL into the new root, folds the SD card's
-# p5..p8 into p4 (tsxdata), and writes the FINAL env (see docs/boot.md "The v2
-# env state machine"). Never touches U-Boot itself; only the env at 1 MiB.
+# xx60 mainline installer v2, step 2. It runs INSIDE the mainline rescue
+# system (RAM root, busybox ash). installer/tsx-install-mainline pushes it
+# there in a bundle at /tmp/b (same delivery as installer/tsx-restore-factory).
+# The script writes the eMMC boot and root regions from pre-built images. It
+# deploys the TFA9890 DSP files and (optionally) KIOSK_URL into the new root.
+# It folds p5..p8 of the SD card into p4 (tsxdata). It writes the FINAL env (see
+# docs/boot.md "The v2 env state machine"). It never touches U-Boot itself. It
+# writes only the env at 1 MiB.
 #
 #   tsx-rescue-install check BUNDLE_DIR [--keep-data]
 #   tsx-rescue-install tfa   BUNDLE_DIR
 #   tsx-rescue-install run   BUNDLE_DIR [--yes] [--keep-data]
 #
 # tfa (read-only, before run): look for the TFA9890 DSP files on the panel
-# itself -- the current mainline root on eMMC p8 (a reinstall), then stock
-# Android's boot image on eMMC p7 -- validate them and put the result in
-# BUNDLE_DIR/tfa-panel/ (installer/lib/tsx-tfa.sh, docs/install.md "TFA9890
-# speaker DSP tuning"). The host moves it to BUNDLE_DIR/tfa/ if it takes it.
-# The files stay on the panel.
+# itself. First the current mainline root on eMMC p8 (a reinstall), then the
+# stock Android boot image on eMMC p7. Validate the files and put the result
+# in BUNDLE_DIR/tfa-panel/ (installer/lib/tsx-tfa.sh, docs/install.md "TFA9890
+# speaker DSP tuning"). If the host takes the files, it moves them to
+# BUNDLE_DIR/tfa/. The files stay on the panel.
 #
 # --keep-data (a mainline -> mainline reinstall, docs/install.md "Reinstalling
 # or updating a mainline panel"): if the card is already folded and p4 is a
-# clean tsxdata ext4 (tsx_tsxdata_keepable), keep it as it is -- no mkfs;
-# the browser profile/login, logs, panel.conf and sendspin state survive.
-# Without it (the Android -> mainline path, or --wipe-data on the host),
-# p4 is always formatted.
+# clean tsxdata ext4 (tsx_tsxdata_keepable), keep p4 as it is, with no mkfs.
+# The browser profile and login, logs, panel.conf and sendspin state survive.
+# Without --keep-data (the Android -> mainline path, or --wipe-data on the
+# host), the script always formats p4.
 #
-# BUNDLE_DIR layout (built by the host, see installer/emmc/mk-tsxroot-emmc.sh
+# BUNDLE_DIR layout (the host builds it, see installer/emmc/mk-tsxroot-emmc.sh
 # and installer/tsx-install-mainline):
-#   manifest              key=value: root_bytes, root_sha256, boot_sha256,
-#                          kernel flavor, and (if the build recorded it)
-#                          root_partition_min_bytes
-#   root.img              ext4 (LABEL=tsxroot-emmc), built COMPACT (content +
-#                          a margin, well under p8's ~2.9 GiB -- see
-#                          docs/boot.md eMMC region table): this script grows
-#                          it to fill p8 with resize2fs after writing it, OR
-#   root-url.txt          one line: an http URL serving that root.img (kept
-#                          for a bundle delivery path that never has to touch
-#                          the rescue's own disk for the image first); the
-#                          script streams it straight onto p8 (wget -O - | dd)
-#                          either way, and the readback sha256 against the
+#   manifest              key=value: root_bytes, root_sha256, boot_sha256, kernel
+#                          flavor, root_partition_min_bytes (if the build set it)
+#   root.img              ext4 (LABEL=tsxroot-emmc), built COMPACT (content plus a
+#                          margin, well under the ~2.9 GiB of p8, see the eMMC region
+#                          table in docs/boot.md). After the write, resize2fs grows
+#                          it to fill p8. The bundle has root.img OR root-url.txt.
+#   root-url.txt          one line: an http URL that serves that root.img. The
+#                          rescue does not need to store the image on its own
+#                          disk first. The script streams it onto p8 (wget -O -
+#                          | dd) either way. The readback sha256 against the
 #                          manifest verifies it.
 #   boot.img              the eMMC boot image (kernel+DTB+initramfs), <= 32 MiB
 #   tsx-rescue.sh          installer/lib/tsx-rescue.sh (pr_dd, tsx_env_apply, tsx_mbr_fold, tsx_mkfs_tsxdata)
 #   tsx-usb-recovery       installer/emmc/tsx-usb-recovery (copied verbatim, runs standalone)
 #   tsx-tfa.sh             installer/lib/tsx-tfa.sh (the tfa command)
-#   tfa/<variant>/stereo.cnt   (optional) TFA9890 DSP tuning files, put there
-#                          by the host: from the panel (tfa-panel/, above) or
-#                          pushed from rootfs/vendor-fetch.sh; tfa/SOURCE says
-#                          where they came from and is deployed with them
+#   tfa/<variant>/stereo.cnt   (optional) TFA9890 DSP tuning files. The host
+#                          puts them there, from the panel (tfa-panel/, above)
+#                          or pushed from rootfs/vendor-fetch.sh. tfa/SOURCE
+#                          says where they came from. It is deployed with them.
 #   kiosk-url.txt          (optional) one line: the KIOSK_URL to set
-#   panel.conf             (optional) installer/panel.conf.example built by
-#                          tsx-install-mainline's prompts or --config FILE;
-#                          written straight onto the new tsxdata as
-#                          /data/tsx/panel.conf (docs/rootfs.md "Panel
-#                          configuration"); if kiosk-url.txt is ALSO present,
-#                          panel.conf's KIOSK_URL wins once tsx-config apply
-#                          runs (the direct kiosk.conf edit below runs first,
-#                          at first boot, but a panel.conf override always
-#                          takes precedence after that)
+#   panel.conf             (optional) installer/panel.conf.example, built by
+#                          the prompts of tsx-install-mainline or by
+#                          --config FILE. The script writes it straight onto
+#                          the new tsxdata as /data/tsx/panel.conf
+#                          (docs/rootfs.md "Panel configuration"). If
+#                          kiosk-url.txt is ALSO present, KIOSK_URL in
+#                          panel.conf wins once tsx-config apply runs. The
+#                          direct kiosk.conf edit below runs first, at first
+#                          boot. After that, an override in panel.conf always
+#                          takes precedence.
 # Test hooks: TSX_EMMC/TSX_BOOT0 (as tsx-emmc-restore), TSX_RUN, TSX_SYSBLOCK
 # (card disk), TSX_STATUS (status-screen state file, default /run/tsx-install-state).
 set -eu
@@ -74,8 +74,8 @@ case "$CMD" in check|run|tfa) ;; *) sed -n '2,62p' "$0"; exit 2;; esac
 
 STATUS=${TSX_STATUS:-/run/tsx-install-state}
 set_state() { printf '%s\n' "$1" > "$STATUS" 2>/dev/null || true; }
-# the rescue screen (tsx-rescue-status) shows the state and the pr_dd progress
-# of the tool named here, while its pid lives (a "check" writes nothing to disks)
+# The rescue screen (tsx-rescue-status) shows the state and the pr_dd progress
+# of the tool named here, while its pid lives. A "check" writes nothing to disks.
 echo "$$ install" > "$RUN/tsx-op" 2>/dev/null || true
 set_state "starting ($CMD)"
 
@@ -83,11 +83,11 @@ conf() { sed -n "s/^$1=//p" "$B/manifest" | tail -n 1; }
 ROOT_BYTES=$(conf root_bytes); ROOT_SHA=$(conf root_sha256); BOOT_SHA=$(conf boot_sha256); FLAVOR=$(conf kernel_flavor)
 ROOT_MINPART=$(conf root_partition_min_bytes)
 [ -n "$ROOT_BYTES" ] && [ -n "$ROOT_SHA" ] && [ -n "$BOOT_SHA" ] || die "manifest missing root_bytes/root_sha256/boot_sha256"
-# pr_dd/the readback below both work in whole-MiB dd blocks (bs=1M count=N
-# MiB); mk-tsxroot-emmc.sh rounds the compact image up to a MiB multiple for
-# exactly this reason -- a bundle that didn't would silently leave a
-# fractional trailing MiB unwritten while the readback sha256 still covers
-# the whole file, always failing the readback check.
+# pr_dd and the readback below both work in whole-MiB dd blocks (bs=1M
+# count=N MiB). mk-tsxroot-emmc.sh rounds the compact image up to a MiB
+# multiple for exactly this reason. A bundle that did not round would
+# silently leave a fractional trailing MiB unwritten. The readback sha256
+# still covers the whole file, so the readback check would always fail.
 [ "$((ROOT_BYTES % 1048576))" = 0 ] || die "manifest root_bytes=$ROOT_BYTES is not a whole MiB (bad bundle?)"
 [ -f "$B/boot.img" ] || die "$B missing boot.img"
 ROOT_URL=
@@ -107,13 +107,13 @@ EBOOT=${EDEV}p7 EROOT=${EDEV}p8
 [ -b "$EBOOT" ] && [ -b "$EROOT" ] || die "$EBOOT / $EROOT not found (blkdevparts not on the kernel cmdline?)"
 GOT_ROOT_SECT=$(cat "/sys/class/block/${EROOT#/dev/}/size" 2>/dev/null || echo 0)
 GOT_ROOT_BYTES=$((GOT_ROOT_SECT * 512))
-# root.img is now built COMPACT (content + a margin, not p8-sized -- see
-# installer/emmc/mk-tsxroot-emmc.sh), so p8 only needs to be AT LEAST as big
-# as the image, not an exact match; it is grown to fill p8 after writing
-# (below). root_partition_min_bytes (if the manifest has it) is a second,
-# independent floor: the partition size the image was built against, so a
-# wrong/undersized device is still refused even if it happens to be bigger
-# than this particular (small) image.
+# The build makes root.img COMPACT (content plus a margin, not p8-sized, see
+# installer/emmc/mk-tsxroot-emmc.sh). So p8 must be AT LEAST as big as the
+# image, not an exact match. The script grows the image to fill p8 after the
+# write (below). root_partition_min_bytes (if the manifest has it) is a
+# second, independent floor. It is the partition size that the build used for
+# the image. So the script still refuses a wrong or undersized device, even if
+# that device is bigger than this particular (small) image.
 [ "$GOT_ROOT_BYTES" -ge "$ROOT_BYTES" ] || die "$EROOT is $GOT_ROOT_BYTES bytes, smaller than the root image (manifest root_bytes=$ROOT_BYTES)"
 if [ -n "$ROOT_MINPART" ]; then
 	[ "$GOT_ROOT_BYTES" -ge "$ROOT_MINPART" ] || die "$EROOT is $GOT_ROOT_BYTES bytes, smaller than the expected partition minimum (manifest root_partition_min_bytes=$ROOT_MINPART): wrong device?"
@@ -137,10 +137,10 @@ CWHOLE=$WHOLE CP1=$P1 CP4=$P4
 
 say "eMMC $EDEV: boot $EBOOT ($ROOT_BYTES bytes wanted on root), card $CWHOLE ($TSX_DISK_LAYOUT layout)"
 if [ -z "$ROOT_URL" ]; then
-	say "checking the bundle (sha256 of root.img/boot.img; this can take a minute)"
+	say "checking the bundle (sha256 of root.img and boot.img). This can take a minute"
 	[ "$(sha256sum < "$B/root.img" | cut -d' ' -f1)" = "$ROOT_SHA" ] || die "root.img sha256 mismatch (corrupt transfer?)"
 else
-	say "checking the bundle (boot.img sha256; root.img is streamed from $ROOT_URL and verified by readback after the write)"
+	say "checking the bundle (boot.img sha256). root.img streams from $ROOT_URL and the readback verifies it after the write"
 	GOTN=$(wget -q -O - "$ROOT_URL" 2>/dev/null | head -c 4096 | wc -c)
 	[ "$GOTN" = 4096 ] || die "cannot read the root image from $ROOT_URL (got $GOTN bytes)"
 fi
@@ -174,17 +174,18 @@ say "eMMC boot verified ($GOT)"
 # ---- 2. eMMC root (p8): write only the (compact) image, then grow it ------
 set_state "writing eMMC root (p8)"
 ROOT_MIB=$((ROOT_BYTES / 1048576))
-say "discarding $EROOT, then writing root.img ($ROOT_MIB MiB; p8 itself is $((GOT_ROOT_BYTES / 1048576)) MiB, grown into below)"
-# -f: util-linux blkdiscard refuses a device that still carries a file
-# system signature (always the case on a reinstall: the previous tsxroot-emmc)
-# and only prints "contains existing file system"; plain blkdiscard is the
-# fallback for a build whose blkdiscard has no -f
+say "discarding $EROOT, then writing root.img ($ROOT_MIB MiB). p8 itself is $((GOT_ROOT_BYTES / 1048576)) MiB, and the script grows the file system into it below"
+# -f: the blkdiscard of util-linux refuses a device that still carries a file
+# system signature. That is always the case on a reinstall (the previous
+# tsxroot-emmc). It only prints "contains existing file system". Plain
+# blkdiscard is the fallback for a build whose blkdiscard has no -f.
 blkdiscard -f "$EROOT" 2>/dev/null || blkdiscard "$EROOT" 2>&1 || say "blkdiscard $EROOT failed (continuing)"
 if [ -z "$ROOT_URL" ]; then
 	pr_dd "$EROOT" 0 "$ROOT_MIB" "eMMC root" -- if="$B/root.img" bs=1M conv=fsync || die "write to $EROOT failed"
 else
-	# sequential writes of whatever the pipe delivers: correct without
-	# iflag=fullblock; a short or failed download is caught by the readback
+	# The writes are sequential and take whatever the pipe delivers. This is
+	# correct without iflag=fullblock. The readback catches a short or failed
+	# download.
 	wget -q -O - "$ROOT_URL" | pr_dd "$EROOT" 0 "$ROOT_MIB" "eMMC root" -- bs=1M conv=fsync || die "write to $EROOT failed"
 fi
 sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
@@ -194,10 +195,11 @@ GOT=$(dd if="$EROOT" bs=1M count="$ROOT_MIB" 2>/dev/null | sha256sum | cut -d' '
 say "eMMC root verified ($GOT)"
 
 # ---- 2b. grow the (compact) root to fill the rest of p8 --------------------
-# root.img was built to content + a margin, not to p8's real size (see
-# installer/emmc/mk-tsxroot-emmc.sh), so p8 has unused space past the image
-# right now: e2fsck before resizing (resize2fs requires a clean fs), grow with
-# resize2fs (no size arg = grow to fill the block device), then e2fsck again.
+# The build made root.img with content plus a margin, not with the real size of
+# p8 (see installer/emmc/mk-tsxroot-emmc.sh). So p8 now has unused space past
+# the image. Run e2fsck before the resize, because resize2fs requires a clean
+# file system. Grow with resize2fs (no size argument = grow to fill the block
+# device). Then run e2fsck again.
 set_state "growing eMMC root (p8)"
 say "e2fsck -fy $EROOT (pre-resize)"
 e2fsck -fy "$EROOT" >/dev/null 2>&1; rc=$?
@@ -213,17 +215,17 @@ say "eMMC root grown to fill p8"
 set_state "configuring the new root"
 MNT=$RUN/newroot; mkdir -p "$MNT"
 mount -t ext4 -o rw "$EROOT" "$MNT" || die "cannot mount $EROOT"
-# Always re-stamp kernel_flavor onto the root we just wrote (fresh install
-# AND reinstall alike) with THIS bundle's own manifest FLAVOR -- the flavor
-# actually on the boot partition now -- rather than trust whatever
-# mk-tsxroot-emmc.sh baked into the root image at payload-build time. See
-# tsx_rootinfo_set_flavor in tsx-rescue.sh for why: a mismatch there (root
-# image built with one --flavor, bundled under a different one) is what left
-# a fresh --kernel stable install with kernel_flavor=lts on disk, silently
-# steering the next kernel package upgrade onto the wrong flavor.
+# Always stamp kernel_flavor again onto the root that this script just wrote
+# (fresh install and reinstall alike). Use the FLAVOR in the manifest of THIS
+# bundle. That is the flavor now on the boot partition. Do not trust what
+# mk-tsxroot-emmc.sh put into the root image at payload-build time. See
+# tsx_rootinfo_set_flavor in tsx-rescue.sh for the reason. A mismatch there
+# (a root image built with one --flavor and bundled under a different one) left
+# a fresh --kernel stable install with kernel_flavor=lts on disk. That
+# silently steered the next kernel package upgrade onto the wrong flavor.
 tsx_rootinfo_set_flavor "$MNT/etc/tsx/emmc-root.info" "$FLAVOR"
 say "  emmc-root.info: kernel_flavor=${FLAVOR:-unchanged}"
-# (never fatal: the speakers work without the DSP files)
+# A failure here is never fatal, because the speakers work without the DSP files.
 TFADIR=$MNT/usr/local/share/tsx/tfa9890
 if [ -d "$B/tfa" ]; then
 	for v in "$B"/tfa/*/; do
@@ -250,20 +252,21 @@ fi
 sync; umount "$MNT"
 
 # ---- 4. card fold: p5..p8 -> p4 tsxdata (tsx-rescue.sh, TSX_MBR_P4_TYPE_OFFSET from tsx-lib.sh) --
-# A stock card is always folded and formatted. An already folded card keeps
-# its tsxdata with --keep-data if tsx_tsxdata_keepable says so (after one
-# e2fsck -fp repair try); anything else is formatted.
+# The script always folds and formats a stock card. An already folded card
+# keeps its tsxdata with --keep-data if tsx_tsxdata_keepable says so (after one
+# e2fsck -fp repair try). The script formats anything else.
 set_state "folding the card (p5..p8 -> p4 tsxdata)"
 KEEP=0
 if [ "$TSX_DISK_LAYOUT" = stock ]; then
 	[ "$KEEP_DATA" = 0 ] || say "card not folded yet (stock layout): --keep-data does not apply, p4 is formatted"
 	tsx_mbr_fold "$CWHOLE" "$TSX_MBR_P4_TYPE_OFFSET" || die "MBR fold failed"
-	# the kernel keeps the old table (p4 = the 1 KiB extended stub, p5..p8) until
-	# it is re-read; without this, p4 would still be the stub below
+	# The kernel keeps the old table (p4 = the 1 KiB extended stub, p5..p8)
+	# until it reads the table again. Without this, p4 would still be the stub
+	# below.
 	blockdev --rereadpt "$CWHOLE" 2>/dev/null || partx -u "$CWHOLE" 2>/dev/null || true
 	sleep 1
-	tsx_find_disk || true   # re-detect: the layout just changed stock -> card, P4 now names the new primary partition
-	[ "$TSX_DISK_LAYOUT" = card ] || die "the kernel did not pick up the folded card table (blockdev --rereadpt failed?); the MBR itself is folded: re-run this step once the table is re-read"
+	tsx_find_disk || true   # detect again: the layout changed from stock to card, and P4 now names the new primary partition
+	[ "$TSX_DISK_LAYOUT" = card ] || die "the kernel did not pick up the folded card table (blockdev --rereadpt failed?). The MBR itself is folded: re-run this step once the table is re-read"
 	CP4=$P4
 else
 	say "card already folded (layout=card): p4 is $CP4"
@@ -305,7 +308,7 @@ fi
 
 # ---- 5. final env: one verified write (docs/boot.md "The v2 env state machine") --
 set_state "finalizing (env + tsx-usb-recovery)"
-# fw_env.config wants hex offset/size (see installer/steps/tsx-rescue-arm.sh for why)
+# fw_env.config needs a hex offset and size (see installer/steps/tsx-rescue-arm.sh for the reason).
 printf '%s 0x%x 0x%x\n' "$CWHOLE" "$TSX_ENV_OFFSET" "$TSX_ENV_SIZE" > "$RUN/tsx-final-env.cfg"
 WANT="boot_retry 0
 golden_boot_retry 0
@@ -313,9 +316,9 @@ DataRecoveryDone 1"
 OUT=$(tsx_env_apply "$RUN/tsx-final-env.cfg" "$WANT" 2>&1) || die "$OUT"
 say "$OUT"
 if [ -x "$B/tsx-usb-recovery" ]; then
-	sh "$B/tsx-usb-recovery" enable 2>&1 | while IFS= read -r l; do say "  usb-recovery: $l"; done   # finds the card disk itself (p1/p2 offsets), same as tsx_find_disk
+	sh "$B/tsx-usb-recovery" enable 2>&1 | while IFS= read -r l; do say "  usb-recovery: $l"; done   # it finds the card disk itself (p1 and p2 offsets), as tsx_find_disk does
 else
-	say "WARNING: $B/tsx-usb-recovery missing; USB recovery not (re-)armed. Run it by hand later."
+	say "WARNING: $B/tsx-usb-recovery missing. USB recovery not (re-)armed. Run it by hand later."
 fi
 mount -t vfat "$CP1" "$RUN/p1" 2>/dev/null || { mkdir -p "$RUN/p1"; mount -t vfat "$CP1" "$RUN/p1"; }
 touch "$RUN/p1/tsxboot.off"; sync; umount "$RUN/p1"
@@ -324,7 +327,8 @@ say "p1:tsxboot.off written: the hook is disabled, stock bootcmd now boots eMMC 
 set_state "done, rebooting"
 say "DONE. Rebooting into the kiosk from the eMMC (boot p7, root p8)."
 sync
-# in the background, so the host's ssh session ends cleanly instead of hanging
-# on a connection the reboot never closes (same pattern as tsx-restore-factory)
+# Reboot in the background. Then the ssh session of the host ends cleanly and
+# does not hang on a connection that the reboot never closes. tsx-restore-factory
+# uses the same pattern.
 (sleep 3; reboot -f) >/dev/null 2>&1 </dev/null &
 exit 0

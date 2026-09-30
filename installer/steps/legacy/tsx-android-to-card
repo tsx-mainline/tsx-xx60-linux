@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # Host: drive the whole conversion of a stock-Android TSW-1060/TSS-10 to the
-# mainline kiosk, hands off (the card stage; tsx-card-to-emmc migrates it onto
-# the eMMC afterwards). This is an internal step of tsx-install-mainline;
-# calling it directly is an expert/debug path. No adb anywhere, adbd is never
-# touched: root comes from Crestron's own patched sshd (steps/rootsh) and the
-# payload travels over HTTP.
+# mainline kiosk, hands off. This is the card stage. tsx-card-to-emmc migrates
+# the unit onto the eMMC afterwards. This is an internal step of
+# tsx-install-mainline. Calling it directly is an expert and debug path. It
+# uses no adb, and it never touches adbd. Root comes from the patched Crestron
+# sshd (steps/rootsh), and the payload travels over HTTP.
 #
 #   steps/tsx-android-to-card --payload DIR --rootfs FILE PANEL_IP [options]
 #
-#   DIR                a payload directory built by mkpayload --rootfs-p2
-#                       (e.g. out/payload), MUST be a subdirectory of the
-#                       same parent as FILE (that parent is served over HTTP)
+#   DIR                a payload directory built by mkpayload --rootfs-p2 (e.g.
+#                       out/payload). It MUST be a subdirectory of the parent
+#                       of FILE. The script serves that parent over HTTP.
 #   FILE                the raw, uncompressed p2 rootfs image
-#                       (out/rootfs-p2.ext4; a FILE.sha256 sidecar is used if
-#                       present); its parent directory must also hold
-#                       sshShell.sh (out/sshShell.sh; see docs/install.md
-#                       "TSX Android root over SSH")
-#   PANEL_IP            the panel's LAN IP (any current state: mainline,
+#                       (out/rootfs-p2.ext4). The script uses a FILE.sha256
+#                       sidecar if there is one. The parent directory of FILE
+#                       must also hold sshShell.sh (out/sshShell.sh, see
+#                       docs/install.md "TSX Android root over SSH").
+#   PANEL_IP            the LAN IP of the panel (any current state: mainline,
 #                       half-booted Android, or fresh stock Android)
 #
 # Options:
@@ -26,32 +26,32 @@
 #   --dest DIR          panel-side staging directory (default /logs/tsx-payload)
 #   --results FILE      log file (default results/tsx-android-to-card-<date>.txt,
 #                       appended, timestamped)
-#   --from-step N       skip steps before N (1..7, see the numbered comments
-#                       below); step 1 (setup + HTTP server) always runs
-#   --uart auto|yes|no  control channel for steps 3/4/7 (default auto). auto
-#                       uses the UART only if serlog.py looks like it is
-#                       running (pgrep) AND ../../tools/bench/uc.sh exists;
-#                       otherwise (and with --uart no) those steps go over
-#                       the network only (steps/rootsh + ssh polling, no
-#                       serial console); --uart yes forces the UART and dies
-#                       if uc.sh is missing. See docs/install.md "Network-only
+#   --from-step N       skip the steps before N (1..7, see the numbered comments
+#                       below). Step 1 (setup + HTTP server) always runs.
+#   --uart auto|yes|no  control channel for steps 3, 4 and 7 (default auto).
+#                       auto uses the UART only if serlog.py looks like it
+#                       runs (pgrep) AND ../../tools/bench/uc.sh exists.
+#                       Otherwise, and with --uart no, those steps use only
+#                       the network (steps/rootsh + ssh polling, no serial
+#                       console). --uart yes forces the UART and dies if
+#                       uc.sh is missing. See docs/install.md "Network-only
 #                       mode (no UART)" for the prerequisites.
 #   --yes               do not ask before the install (step 6 still prints
 #                       the preflight output first)
-#   --dry-run           print what each step would do; touches no hardware
-#                       and starts no HTTP server
+#   --dry-run           print what each step would do, without hardware or an
+#                       HTTP server
 #
 # Needs on the host: bash, sshpass, ssh, python3, split, sha256sum, ip, awk.
-# Reuses steps/rootsh (root over Crestron's patched sshd), steps/mkpanelfetch.sh
-# (generates the panel-side fetch script), steps/crestron-admin (creates the
-# Crestron admin account on a factory-fresh unit so rootsh has a login) and,
-# unless --uart no forces network-only, ../../tools/bench/uc.sh (UART;
-# serlog.py must already be running, logging to ../../tools/bench/boot-2200.log).
-# UART commands are kept to at most 80 characters (the console mangles longer
-# lines): anything longer is written to a small script, served over HTTP, and
-# fetched+run with a short wget/sh pair instead -- this applies even to the
-# one-line sshShell.sh install recipe (docs/install.md), which is too long for
-# a single UART command.
+# It reuses steps/rootsh (root over the patched Crestron sshd),
+# steps/mkpanelfetch.sh (generates the panel-side fetch script) and
+# steps/crestron-admin (creates the Crestron admin account on a factory-fresh
+# unit, so rootsh has a login). Unless --uart no forces network-only, it also
+# uses ../../tools/bench/uc.sh (UART). serlog.py must already run and log to
+# ../../tools/bench/boot-2200.log.
+# UART commands stay at 80 characters or fewer, because the console mangles
+# longer lines. The script writes a longer command to a small script, serves it
+# over HTTP, and runs it with a short wget/sh pair. This includes the one-line
+# sshShell.sh install recipe (docs/install.md).
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -74,10 +74,10 @@ log_multiline() {  # label text
 }
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"; }
 run_with_heartbeat() {  # LABEL CMD...: runs CMD in the background (its stdout+stderr going
-	# to a temp file, since $ROOTSH's own output can't be streamed -- it only prints once
-	# the whole ssh session ends), printing an elapsed-time heartbeat every ~30s while it
-	# runs; leaves the full output in $HB_OUT and the exit status in $HB_RC. Only ever
-	# polls with kill -0 and reaps its own direct child with wait -- never signals it.
+	# to a temp file, because the output of $ROOTSH cannot be streamed. It prints only when
+	# the whole ssh session ends). Print an elapsed-time heartbeat every ~30s while it
+	# runs. Leave the full output in $HB_OUT and the exit status in $HB_RC. The function only
+	# polls with kill -0 and reaps its own direct child with wait. It never signals the child.
 	local label=$1; shift
 	local tmp; tmp=$(mktemp)
 	"$@" >"$tmp" 2>&1 &
@@ -87,8 +87,8 @@ run_with_heartbeat() {  # LABEL CMD...: runs CMD in the background (its stdout+s
 		sleep 5; w=$((w + 5))
 		[ $((w % 30)) -eq 0 ] && log "  $label: still running, ${w}s elapsed"
 	done
-	# set -e is on: a failing CMD (e.g. rc=255 when the install reboots the panel
-	# under the ssh session) must not end the script here; the caller checks $HB_RC
+	# set -e is on. A failing CMD (for example rc=255 when the install reboots the
+	# panel under the ssh session) must not end the script here. The caller checks $HB_RC.
 	if wait "$cpid"; then HB_RC=0; else HB_RC=$?; fi
 	HB_OUT=$(cat "$tmp"); rm -f "$tmp"
 	log "  $label: finished after ${w}s (rc=$HB_RC)"
@@ -119,10 +119,10 @@ case "$UART_OPT" in auto|yes|no) ;; *) echo "tsx-android-to-card: --uart must be
 mkdir -p "$(dirname "$RESULTS")"
 log "== tsx-android-to-card: PANEL=$PANEL PAYLOAD=$PAYLOAD ROOTFS=$ROOTFS from-step=$FROM_STEP dry-run=$DRYRUN uart=$UART_OPT"
 
-# control-channel choice: auto uses the UART only if serlog.py looks like it
-# is running AND uc.sh exists; --uart yes/no force it on/off. Resolved early
-# (no network, no hardware touched) so step 1's "needs" checks below know
-# whether uc.sh is actually required.
+# Choose the control channel. auto uses the UART only if serlog.py looks like
+# it runs AND uc.sh exists. --uart yes and --uart no force it on and off. The
+# script resolves this early (no network, no hardware touched), so the "needs"
+# checks of step 1 below know whether uc.sh is required.
 case "$UART_OPT" in
 yes) UART_MODE=yes;;
 no) UART_MODE=no;;
@@ -141,8 +141,9 @@ else
 fi
 
 # ---------------------------------------------------------------- step 1 --
-# Inputs, sanity checks, workstation IP, HTTP server (always runs: later
-# steps depend on its output even when --from-step skips the earlier ones).
+# Inputs, sanity checks, workstation IP, HTTP server. This step always runs.
+# Later steps depend on its output, even when --from-step skips the earlier
+# steps.
 for c in sshpass ssh python3 split sha256sum ip awk; do need_cmd "$c"; done
 [ -d "$PAYLOAD" ] || die "$PAYLOAD is not a directory"
 [ -f "$ROOTFS" ] || die "$ROOTFS not found"
@@ -163,9 +164,9 @@ log "step 1: $ROOTFS matches tsx-install.conf ($P2SHA, $((P2BYTES / 1048576)) Mi
 OUTDIR=$(cd "$(dirname "$ROOTFS")" && pwd)
 PAYLOADABS=$(cd "$PAYLOAD" && pwd)
 case "$PAYLOADABS" in "$OUTDIR"/*) PAYLOADBASE=$(basename "$PAYLOADABS");; *) die "$PAYLOAD must be a subdirectory of $OUTDIR (the HTTP server serves $OUTDIR)";; esac
-# The patched sshShell.sh is only needed when rootsh is not root yet AND the
-# UART is used to install it (step 4); a unit whose sshd already gives a root
-# shell needs nothing here.
+# The patched sshShell.sh is needed only when rootsh is not root yet AND the
+# UART installs it (step 4). A unit whose sshd already gives a root shell
+# needs nothing here.
 SSHSHELL="$OUTDIR/sshShell.sh"
 [ -x "$ROOTSH" ] || die "$ROOTSH not found/executable"
 [ -x "$MKPANELFETCH" ] || die "$MKPANELFETCH not found/executable"
@@ -212,7 +213,7 @@ is_mainline() {
 	case "$out" in [6-9].*|[1-9][0-9].*) return 0;; *) return 1;; esac   # 6.x LTS, 7.x stable, ...
 }
 rootsh_ok() {
-	# a stock sshShell.sh drops "rootsh" into the Crestron console, which never exits: short timeout
+	# A stock sshShell.sh drops "rootsh" into the Crestron console, which never exits. So use a short timeout.
 	local out; out=$(TSX_SSH_TIMEOUT=30 "$ROOTSH" "$PANEL" id 2>/dev/null) || true
 	grep -q '^uid=0(' <<<"$out"   # the tty echo ("bash-3.2# id; ...") can come first
 }
@@ -239,14 +240,14 @@ wait_serial() {  # pattern timeout_s [abort_pattern ...]
 	die "timeout (${timeout}s) waiting on the serial log for: $pat"
 }
 wait_serial_from() {  # MARK pattern timeout_s [abort_pattern ...] -- like wait_serial, but searches
-	# the serial log from line MARK on (the reboot can be over before the ssh session
-	# that started it returns: 2026-09-27 the kiosk was up 72 s before install returned)
+	# the serial log from line MARK on. The reboot can end before the ssh session
+	# that started it returns. On 2026-09-27 the kiosk was up 72 s before install returned.
 	local mark=$1 pat=$2 timeout=$3; shift 3
 	local waited=0 out a
 	log "  waiting on the serial log (from line $mark) for: $pat (timeout ${timeout}s)"
 	while :; do
 		out=$(tail -n +"$mark" "$SERIALDIR/boot-2200.log" | tr -d '\0')
-		# here-strings, not "printf | grep -q": with pipefail, grep -q's early exit SIGPIPEs printf on a big log
+		# Use here-strings, not "printf | grep -q". With pipefail, the early exit of grep -q sends SIGPIPE to printf on a big log.
 		for a in "$@"; do grep -qF -- "$a" <<<"$out" && die "serial log: abort pattern seen: $a"; done
 		grep -qF -- "$pat" <<<"$out" && { log "  ok: seen '$pat'"; return 0; }
 		[ "$waited" -lt "$timeout" ] || die "timeout (${timeout}s) waiting on the serial log for: $pat"
@@ -265,13 +266,13 @@ wait_mainline_ssh() {  # timeout_s
 	die "timeout (${timeout}s) waiting for mainline ssh on $PANEL"
 }
 wait_android_stable() {  # timeout_s -- fwUpgrade=0, no pending upgrade image,
-	# boot_completed=1 and the root prompt, all through the UART; a stock unit
-	# can run Crestron's one-time golden re-install on first boot (~5 min,
-	# then it reboots itself) even when p5 was never reformatted, so this is
-	# unconditional and just keeps polling (and so tolerates that reboot)
-	# until everything answers or the timeout is hit.
+	# boot_completed=1 and the root prompt, all through the UART. A stock unit
+	# can run the one-time golden re-install of Crestron on first boot (~5 min,
+	# then it reboots itself), even when nobody reformatted p5. So this function
+	# is unconditional. It keeps polling, and so it tolerates that reboot, until
+	# everything answers or the timeout is reached.
 	local timeout=$1 waited=0 poll=20 fw ls raw bc
-	log "  waiting for stock Android to settle (fwUpgrade=0, no pending upgrade image, boot_completed=1, root prompt); tolerates one self-reboot (timeout ${timeout}s)"
+	log "  waiting for stock Android to settle (fwUpgrade=0, no pending upgrade image, boot_completed=1, root prompt). Tolerates one self-reboot (timeout ${timeout}s)"
 	while :; do
 		fw=$(uart -w 5 'fw_printenv fwUpgrade' 2>/dev/null || true)
 		ls=$(uart -w 5 'ls /mnt/sdcard/ROMDISK/romdisk/user/system/image' 2>/dev/null || true)
@@ -290,17 +291,19 @@ wait_android_stable() {  # timeout_s -- fwUpgrade=0, no pending upgrade image,
 }
 wait_android_stable_net() {  # timeout_s -- network-only equivalent of wait_android_stable:
 	# same four conditions (fwUpgrade=0, no pending upgrade image, boot_completed=1,
-	# p5 mounted), but run through steps/rootsh instead of the UART. rootsh
-	# needs root, so each round starts with rootsh_ok; a round where it fails
-	# (e.g. mid golden-reinstall reboot) just doesn't count as settled yet --
-	# this is how the one self-reboot is tolerated, same as the UART version.
+	# p5 mounted), but through steps/rootsh instead of the UART. rootsh needs
+	# root, so each round starts with rootsh_ok. If it fails (e.g. during the
+	# reboot of the golden re-install), that round does not count as settled
+	# yet. This is how the function tolerates the one self-reboot, as the UART
+	# version does.
 	local timeout=$1 waited=0 poll=20 fw ls bc mounted
-	log "  waiting for stock Android to settle over the network (root via rootsh, fwUpgrade=0, no pending upgrade image, boot_completed=1, p5 mounted); tolerates one self-reboot (timeout ${timeout}s)"
+	log "  waiting for stock Android to settle over the network (root via rootsh, fwUpgrade=0, no pending upgrade image, boot_completed=1, p5 mounted). Tolerates one self-reboot (timeout ${timeout}s)"
 	while :; do
 		if rootsh_ok; then
 			fw=$("$ROOTSH" "$PANEL" 'fw_printenv fwUpgrade' 2>/dev/null) || fw=
-			# ls is EXPECTED to fail here ("No such file"): rootsh returns the remote
-			# exit status, so keep the output instead of blanking it on rc != 0.
+			# ls is EXPECTED to fail here ("No such file"). rootsh returns the
+			# exit status of the remote command, so keep the output and do not
+			# blank it when rc != 0.
 			ls=$("$ROOTSH" "$PANEL" 'ls /mnt/sdcard/ROMDISK/romdisk/user/system/image' 2>/dev/null) || true
 			bc=$("$ROOTSH" "$PANEL" 'getprop sys.boot_completed' 2>/dev/null) || bc=
 			mounted=$("$ROOTSH" "$PANEL" 'grep -c mmcblk0p5 /proc/mounts' 2>/dev/null) || mounted=
@@ -319,62 +322,63 @@ wait_android_stable_net() {  # timeout_s -- network-only equivalent of wait_andr
 }
 
 # ---------------------------------------------------------------- step 2 --
-# If the panel is currently on mainline, force the next boot into stock
-# Android (p1:tsxboot.off) and wait for the UART root prompt.
+# If the panel runs mainline now, force the next boot into stock Android
+# (p1:tsxboot.off) and wait for the UART root prompt.
 if [ "$FROM_STEP" -le 2 ]; then
-	log "== step 2: ensure the next boot is stock Android"
+	log "== step 2: make sure the next boot is stock Android"
 	if [ "$DRYRUN" = 1 ]; then
-		log "[dry-run] would check 'ssh root@$PANEL uname -r'; if it answers Linux 6.x: mount p1, touch tsxboot.off, sync, umount, reboot; then wait_serial 'root@Crestron Touchpanel:/ #' 180"
+		log "[dry-run] would check 'ssh root@$PANEL uname -r'. If it answers Linux 6.x: mount p1, touch tsxboot.off, sync, umount, reboot. Then wait_serial 'root@Crestron Touchpanel:/ #' 180"
 	elif is_mainline && [ "$UART_MODE" != yes ]; then
-		# going back to Android needs the UART prompt below; without it, the
-		# usual cause is a finished card stage (a re-run after a later step failed)
+		# Going back to Android needs the UART prompt below. Without the UART,
+		# the usual cause is a finished card stage (a re-run after a later step
+		# failed).
 		die "panel $PANEL already runs mainline ($($MSSH 'uname -r' 2>/dev/null)). Network-only mode cannot take it back to stock Android. If the card stage is done (root /dev/mmcblk0p2), continue with: steps/tsx-card-to-emmc $PANEL, steps/tsx-deploy-tfa.sh $PANEL, then emmc/tsx-usb-recovery enable on the panel (see tsx-install-mainline)"
 	elif is_mainline; then
-		log "  panel is on mainline; creating p1:tsxboot.off and rebooting"
+		log "  panel is on mainline. Creating p1:tsxboot.off and rebooting"
 		$MSSH 'mkdir -p /mnt/p1 && mount -t vfat /dev/mmcblk0p1 /mnt/p1 && touch /mnt/p1/tsxboot.off && sync && umount /mnt/p1 && reboot' >>"$RESULTS" 2>&1 || true
 		wait_serial "root@Crestron Touchpanel:/ #" 180
 	else
-		log "  panel does not answer mainline ssh; assuming it is already stock Android"
+		log "  panel does not answer mainline ssh. Assuming it is already stock Android"
 	fi
 else
 	log "== step 2: skipped (--from-step $FROM_STEP)"
 fi
 
 # ---------------------------------------------------------------- step 3 --
-# Stock Android must boot FULLY (or it self-resets ~8.5 min in). If p5 is
-# not a stock filesystem (fs_mgr_mount_all error / e2fsck unsupported
-# feature), reformat it from the UART and let Crestron's firmware
-# re-install run once (~5 min) before touching p2.
+# Stock Android must boot FULLY, or it resets itself ~8.5 min in. If p5 is not
+# a stock file system (fs_mgr_mount_all error or e2fsck unsupported feature),
+# reformat it from the UART. Then let the firmware re-install of Crestron run
+# once (~5 min) before the script touches p2.
 if [ "$FROM_STEP" -le 3 ]; then
-	log "== step 3: ensure stock Android boots fully (p5 stock fs) and has settled"
+	log "== step 3: make sure stock Android boots fully (p5 stock fs) and has settled"
 	if [ "$DRYRUN" = 1 ]; then
 		if [ "$UART_MODE" = yes ]; then
-			log "[dry-run] (uart) would scan the recent serial log for 'fs_mgr_mount_all returned unexpected error 255' / e2fsck 'unsupported feature'; if seen: uart 'grep -c mmcblk0p5 /proc/mounts' (expect 0), uart 'busybox mke2fs -F -L sdcard -b 4096 -I 256 -N 95616 /dev/block/mmcblk0p5', uart 'busybox reboot -f', wait_serial for the second prompt"
-			log "[dry-run] (uart) would then ALWAYS (reformatted or not: a stock unit can run Crestron's one-time golden re-install on first boot and reboot itself even without a p5 reformat) poll the UART up to 12 min for 'fw_printenv fwUpgrade' = fwUpgrade=0, 'ls /mnt/sdcard/ROMDISK/romdisk/user/system/image' absent, 'getprop sys.boot_completed' = 1 and the root prompt, tolerating one self-reboot along the way"
+			log "[dry-run] (uart) would scan the recent serial log for 'fs_mgr_mount_all returned unexpected error 255' / e2fsck 'unsupported feature'. If seen: uart 'grep -c mmcblk0p5 /proc/mounts' (expect 0), uart 'busybox mke2fs -F -L sdcard -b 4096 -I 256 -N 95616 /dev/block/mmcblk0p5', uart 'busybox reboot -f', wait_serial for the second prompt"
+			log "[dry-run] (uart) would then ALWAYS poll the UART for up to 12 min, whether or not it reformatted p5. A stock unit can run the one-time golden re-install of Crestron on first boot and reboot itself, even without a p5 reformat. The poll waits for 'fw_printenv fwUpgrade' = fwUpgrade=0, 'ls /mnt/sdcard/ROMDISK/romdisk/user/system/image' absent, 'getprop sys.boot_completed' = 1 and the root prompt. It tolerates one self-reboot"
 		else
-			log "[dry-run] (network) would require rootsh_ok (root over ssh must already work; network-only mode cannot bootstrap it here); check 'grep -c mmcblk0p5 /proc/mounts' via rootsh and die if p5 is not mounted (the mke2fs repair is UART-only, rerun with --uart yes); then poll rootsh up to 12 min for 'fw_printenv fwUpgrade' = fwUpgrade=0, the upgrade image dir absent, 'getprop sys.boot_completed' = 1 and p5 still mounted, tolerating one self-reboot (ssh drops are retried until the timeout)"
+			log "[dry-run] (network) would require rootsh_ok. Root over ssh must already work, because network-only mode cannot bootstrap it here. Check 'grep -c mmcblk0p5 /proc/mounts' via rootsh and die if p5 is not mounted (the mke2fs repair is UART-only, rerun with --uart yes). Then poll rootsh for up to 12 min for 'fw_printenv fwUpgrade' = fwUpgrade=0, the upgrade image dir absent, 'getprop sys.boot_completed' = 1 and p5 still mounted. It tolerates one self-reboot, and it retries ssh drops until the timeout"
 		fi
 	elif [ "$UART_MODE" = yes ]; then
 		WINDOW=$(tail -n 4000 "$SERIALDIR/boot-2200.log" 2>/dev/null || true)
 		if grep -qE 'fs_mgr_mount_all returned unexpected error 255|unsupported feature' <<<"$WINDOW"; then
-			log "  p5 is not a stock filesystem (fs_mgr/e2fsck error seen); reformatting from the UART"
+			log "  p5 is not a stock filesystem (fs_mgr/e2fsck error seen). Reformatting from the UART"
 			MOUNTED=$(uart -w 3 'grep -c mmcblk0p5 /proc/mounts' | grep -oE '^[0-9]+$' | tail -n 1)
-			[ "${MOUNTED:-1}" = 0 ] || die "p5 (mmcblk0p5) appears mounted (${MOUNTED:-unknown}); refusing to mke2fs it"
+			[ "${MOUNTED:-1}" = 0 ] || die "p5 (mmcblk0p5) appears mounted (${MOUNTED:-unknown}). Refusing to mke2fs it"
 			uart -w 5 'busybox mke2fs -F -L sdcard -b 4096 -I 256 -N 95616 /dev/block/mmcblk0p5' >>"$RESULTS" 2>&1
 			uart -w 3 'busybox reboot -f' >>"$RESULTS" 2>&1 || true
 			wait_serial "root@Crestron Touchpanel:/ #" 180
 		else
-			log "  no fs_mgr/e2fsck error in the recent serial log; p5 looks stock already"
+			log "  no fs_mgr/e2fsck error in the recent serial log. p5 looks stock already"
 		fi
-		log "  waiting for stock Android to fully settle before touching it (the golden firmware re-install can run on first boot even without a p5 reformat, ~5 min then it reboots itself once)"
+		log "  waiting for stock Android to settle before touching it. The golden firmware re-install can run on first boot even without a p5 reformat. It takes about 5 min and then reboots the unit once"
 		wait_android_stable 720
 	else
 		log "  network-only mode: checking root over ssh (rootsh.sh) and that p5 is mounted (the mke2fs repair is UART-only)"
-		rootsh_ok || die "network-only mode needs root over ssh already (steps/rootsh); see docs/install.md 'Network-only mode (no UART)', or rerun with --uart yes"
+		rootsh_ok || die "network-only mode needs root over ssh already (steps/rootsh). See docs/install.md 'Network-only mode (no UART)', or rerun with --uart yes"
 		MOUNTED=$("$ROOTSH" "$PANEL" 'grep -c mmcblk0p5 /proc/mounts' 2>/dev/null) || MOUNTED=
-		grep -qE '^[1-9][0-9]*$' <<<"$MOUNTED" || die "p5 (mmcblk0p5) is not mounted; the mke2fs repair is UART-only, rerun with --uart yes"
-		log "  p5 (mmcblk0p5) is mounted; looks stock already"
-		log "  waiting for stock Android to fully settle before touching it (network-only; the golden firmware re-install can run on first boot and reboot itself once, dropping ssh -- tolerated)"
+		grep -qE '^[1-9][0-9]*$' <<<"$MOUNTED" || die "p5 (mmcblk0p5) is not mounted. The mke2fs repair is UART-only, rerun with --uart yes"
+		log "  p5 (mmcblk0p5) is mounted. Looks stock already"
+		log "  waiting for stock Android to settle before touching it (network-only). The golden firmware re-install can run on first boot and reboot the unit once. This drops ssh, which is expected"
 		wait_android_stable_net 720
 	fi
 else
@@ -382,28 +386,28 @@ else
 fi
 
 # ---------------------------------------------------------------- step 4 --
-# Root over Crestron's own sshd: install the patched sshShell.sh from the
-# UART if steps/rootsh does not already answer uid=0. The remount/cp/
-# chmod chain is too long for one UART line, so it is written to a small
-# script and fetched+run instead (same trick as panel-fetch.sh).
+# Root over the Crestron sshd: install the patched sshShell.sh from the UART
+# if steps/rootsh does not answer uid=0 yet. The remount, cp and chmod chain is
+# too long for one UART line. So the script writes it to a small script and
+# fetches and runs that script (the same trick as panel-fetch.sh).
 if [ "$FROM_STEP" -le 4 ]; then
 	log "== step 4: root over Crestron's sshd (steps/rootsh)"
 	if [ "$DRYRUN" = 1 ]; then
 		if [ "$UART_MODE" = yes ]; then
-			log "[dry-run] (uart) would check '$ROOTSH $PANEL id'; if not uid=0: run $CRESTRONADMIN $PANEL (factory-fresh unit may have no account yet), retry; if still not root: uart wget sshShell.sh, sha256 check, then fetch+run a small install-sshshell.sh (remount rw, backup, install, chmod, sync, remount ro) and re-check"
+			log "[dry-run] (uart) would check '$ROOTSH $PANEL id'. If not uid=0: run $CRESTRONADMIN $PANEL (factory-fresh unit may have no account yet), retry. If still not root: uart wget sshShell.sh, sha256 check, then fetch+run a small install-sshshell.sh (remount rw, backup, install, chmod, sync, remount ro) and re-check"
 		else
-			log "[dry-run] (network) would check '$ROOTSH $PANEL id'; if not uid=0: run $CRESTRONADMIN $PANEL (factory-fresh unit may have no account yet), retry; if still not root: die (network-only mode cannot install the sshShell.sh patch itself; needs it done already via UART, adb, or --uart yes)"
+			log "[dry-run] (network) would check '$ROOTSH $PANEL id'. If not uid=0: run $CRESTRONADMIN $PANEL (factory-fresh unit may have no account yet), retry. If still not root: die (network-only mode cannot install the sshShell.sh patch itself. Needs it done already via UART, adb, or --uart yes)"
 		fi
 	elif rootsh_ok; then
 		log "  rootsh already answers uid=0, nothing to install"
 	elif [ "$UART_MODE" = yes ]; then
-		log "  rootsh is not root yet; trying $CRESTRONADMIN first (a factory-fresh unit has no account yet, so rootsh cannot work even after the sshShell.sh patch)"
-		"$CRESTRONADMIN" "$PANEL" >>"$RESULTS" 2>&1 || log "  crestron-admin.sh did not confirm console login (continuing; an account may already exist)"
+		log "  rootsh is not root yet. Trying $CRESTRONADMIN first (a factory-fresh unit has no account yet, so rootsh cannot work even after the sshShell.sh patch)"
+		"$CRESTRONADMIN" "$PANEL" >>"$RESULTS" 2>&1 || log "  crestron-admin.sh did not confirm console login (continuing. An account may already exist)"
 		if rootsh_ok; then
 			log "  ok: rootsh now answers uid=0 (the account was the only thing missing)"
 		else
 			[ -f "$SSHSHELL" ] || die "rootsh is not root and $SSHSHELL is missing: put your patched sshShell.sh there (see docs/install.md) or enable the root shell first"
-			log "  rootsh is still not root; installing $SSHSHELL from the UART"
+			log "  rootsh is still not root. Installing $SSHSHELL from the UART"
 			uart -w 5 "busybox wget -q -O /logs/sshShell.sh $BASEURL/sshShell.sh"
 			REMOTESHA=$(uart -w 5 'busybox sha256sum /logs/sshShell.sh' | grep -oE '^[0-9a-f]{64}' | tail -n 1)
 			LOCALSHA=$(sha256sum "$SSHSHELL" | awk '{print $1}')
@@ -427,12 +431,12 @@ if [ "$FROM_STEP" -le 4 ]; then
 			log "  ok: rootsh now answers uid=0"
 		fi
 	else
-		log "  rootsh is not root yet; trying $CRESTRONADMIN (a factory-fresh unit may have no account yet; the sshShell.sh patch itself needs a root shell we don't have in network-only mode)"
-		"$CRESTRONADMIN" "$PANEL" >>"$RESULTS" 2>&1 || log "  crestron-admin.sh did not confirm console login (continuing; an account may already exist)"
+		log "  rootsh is not root yet. Trying $CRESTRONADMIN (a factory-fresh unit may have no account yet). The sshShell.sh patch needs a root shell, and network-only mode has none"
+		"$CRESTRONADMIN" "$PANEL" >>"$RESULTS" 2>&1 || log "  crestron-admin.sh did not confirm console login (continuing. An account may already exist)"
 		if rootsh_ok; then
 			log "  ok: rootsh now answers uid=0 (the account was the only thing missing)"
 		else
-			die "root over ssh needs the patched /system/bin/sshShell.sh (out/sshShell.sh, recipe in README) -- install it once from any root shell (UART, or adb) or run with --uart yes."
+			die "root over ssh needs the patched /system/bin/sshShell.sh (out/sshShell.sh, recipe in README). Install it once from any root shell (UART or adb), or run with --uart yes."
 		fi
 	fi
 else
@@ -440,9 +444,9 @@ else
 fi
 
 # ---------------------------------------------------------------- step 5 --
-# Payload over HTTP, no adb: chunk the raw p2 image, generate the panel-side
-# fetch script (mkpanelfetch.sh), push it with rootsh + wget, run it in the
-# background, poll the log for ALL DONE.
+# Payload over HTTP, no adb. Split the raw p2 image into chunks. Generate the
+# panel-side fetch script (mkpanelfetch.sh). Push it with rootsh + wget. Run it
+# in the background. Poll the log for ALL DONE.
 if [ "$FROM_STEP" -le 5 ]; then
 	log "== step 5: payload over HTTP (p2 chunks + payload files)"
 	CHUNKDIR="$OUTDIR/p2-chunks"
@@ -465,10 +469,11 @@ if [ "$FROM_STEP" -le 5 ]; then
 		REMOTESHA=$("$ROOTSH" "$PANEL" "busybox sha256sum /logs/panel-fetch.sh" | awk '{print $1}')
 		LOCALSHA=$(sha256sum "$PANELFETCH" | awk '{print $1}')
 		[ "$REMOTESHA" = "$LOCALSHA" ] || die "panel-fetch.sh sha256 mismatch after wget: $REMOTESHA != $LOCALSHA"
-		# own session (setsid) + a short wait before rootsh's "exit": a plain "nohup ... &" was killed
-		# by the pty hangup before it had even opened its log (2026-09-27)
+		# Use an own session (setsid) and a short wait before the "exit" of rootsh.
+		# A plain "nohup ... &" died at the pty hangup before it had opened its
+		# log (2026-09-27).
 		"$ROOTSH" "$PANEL" 'busybox setsid /system/bin/bash /logs/panel-fetch.sh > /logs/panel-fetch.log 2>&1 < /dev/null & sleep 3; ls -l /logs/panel-fetch.log' >>"$RESULTS" 2>&1 || true
-		log "  panel-fetch.sh started; polling /logs/panel-fetch.log every 20s"
+		log "  panel-fetch.sh started. Polling /logs/panel-fetch.log every 20s"
 		elapsed=0
 		while :; do
 			sleep 20; elapsed=$((elapsed + 20))
@@ -486,7 +491,8 @@ else
 fi
 
 # ---------------------------------------------------------------- step 6 --
-# preflight, then (after an explicit gate unless --yes) install --p2-written.
+# Run preflight. Then run install --p2-written, after an explicit gate unless
+# --yes is set.
 if [ "$FROM_STEP" -le 6 ]; then
 	log "== step 6: preflight + install"
 	PREFLIGHT_CMD="/system/bin/bash $DEST/$INSTALLER_REL preflight --stick $DEST --p2-written 2>&1"
@@ -506,7 +512,7 @@ if [ "$FROM_STEP" -le 6 ]; then
 			read -r -p "Type INSTALL to proceed (this writes p1/p2 and reboots the panel): " ans </dev/tty
 			[ "$ans" = INSTALL ] || die "aborted: operator did not type INSTALL"
 		fi
-		# the serial log only exists with the UART; network-only mode has none
+		# The serial log exists only with the UART. Network-only mode has none.
 		if [ "$UART_MODE" = yes ]; then SERIAL_MARK=$(wc -l < "$SERIALDIR/boot-2200.log"); fi
 		run_with_heartbeat "install" "$ROOTSH" "$PANEL" "$INSTALL_CMD"
 		INSTOUT=$HB_OUT; IRC=$HB_RC
@@ -527,11 +533,11 @@ if [ "$FROM_STEP" -le 7 ]; then
 			log "[dry-run] (uart) would wait_serial 'tsx: booting tsxboot.img' 90, then 'switch_root to /dev/mmcblk0p2' 240, then 'tsx: starting kiosk' 90 (abort on 'Kernel panic' / 'tsx: mainline disabled')"
 			log "[dry-run] (uart) would then wait_mainline_ssh 120"
 		else
-			log "[dry-run] (network) would poll 'ssh root@$PANEL uname -r' (is_mainline) up to 400s, tolerating the install reboot dropping ssh; then log 'cat /proc/cmdline', the root device from /proc/mounts (expect /dev/mmcblk0p2) and 'pgrep -f chromium' (kiosk)"
+			log "[dry-run] (network) would poll 'ssh root@$PANEL uname -r' (is_mainline) up to 400s, tolerating the install reboot dropping ssh. Then log 'cat /proc/cmdline', the root device from /proc/mounts (expect /dev/mmcblk0p2) and 'pgrep -f chromium' (kiosk)"
 		fi
 	else
 		if [ "$UART_MODE" = yes ]; then
-			# --from-step 7: look back ~2 boots' worth of serial lines
+			# For --from-step 7, look back the serial lines of ~2 boots.
 			[ -n "${SERIAL_MARK:-}" ] || SERIAL_MARK=$(( $(wc -l < "$SERIALDIR/boot-2200.log") - 1500 )); [ "$SERIAL_MARK" -gt 0 ] || SERIAL_MARK=1
 			wait_serial_from "$SERIAL_MARK" "tsx: booting tsxboot.img" 300 "Kernel panic" "tsx: mainline disabled"
 			wait_serial_from "$SERIAL_MARK" "switch_root to /dev/mmcblk0p2" 240 "Kernel panic" "tsx: mainline disabled"

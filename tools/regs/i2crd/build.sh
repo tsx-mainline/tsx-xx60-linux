@@ -33,7 +33,7 @@ if [ -n "${BUILD_HOST:-}" ] && [ -z "${ON_HOST:-}" ]; then
 fi
 
 LINUX_DIR=${LINUX_DIR:-$TOP/linux}
-[ -d "$LINUX_DIR" ] || { echo "build.sh: LINUX_DIR $LINUX_DIR not found (kernel fork checkout; see tools/build/kbuild.sh)"; exit 1; }
+[ -d "$LINUX_DIR" ] || { echo "build.sh: LINUX_DIR $LINUX_DIR not found (this is the kernel fork checkout, see tools/build/kbuild.sh)"; exit 1; }
 NOLIBC=$LINUX_DIR/tools/include/nolibc
 [ -f "$NOLIBC/nolibc.h" ] || { echo "build.sh: no $NOLIBC/nolibc.h (LINUX_DIR too old? need a kernel with tools/include/nolibc)"; exit 1; }
 

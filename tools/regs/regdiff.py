@@ -26,7 +26,7 @@ OWNED_C = {0x104a, 0x104b, 0x104c, 0x1065, 0x109c, 0x10d1, 0x10d2, 0x10d9,
            0x10da, 0x10db, 0x10de} | set(range(0x10e0, 0x10e5))
 KNOWN = {("VCBUS", 0x14e1), ("VCBUS", 0x14e2), ("VCBUS", 0x14e5), ("VCBUS", 0x1cc2),
          ("CBUS", 0x104a), ("CBUS", 0x1065), ("CBUS", 0x10d2)}
-# HHI_LVDS_TX_PHY_CNTL1 (0x10df): not written by the driver; bit 25 changes
+# HHI_LVDS_TX_PHY_CNTL1 (0x10df): not written by the driver. Bit 25 changes
 # between boots without writes , so it is never compared.
 SKIP = {("CBUS", 0x10df)}
 

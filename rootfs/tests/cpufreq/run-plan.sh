@@ -3,7 +3,7 @@
 # results/. Only after the coordinator has released the panel and the
 # panel runs tsxboot-cpufreq.img (TFTP). Usage: run-plan.sh [phase...]
 #   phases: info vf base soak   (default). 1800 and 1992 need a DT that
-#   enables opp-1800000000 / opp-1992000000; the tsx DT enables neither.
+#   enables opp-1800000000 / opp-1992000000. The tsx DT enables neither.
 # Stops at the first failing phase. SOAK_MIN (default 30), PIN_MIN (default 10).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); RES=$HERE/../results; mkdir -p "$RES"
@@ -26,4 +26,4 @@ for ph in ${@:-info vf base soak}; do case $ph in
 	1992) run 04-pin-1992 "sh /root/cpufreq/stress.sh -t $PIN_MIN -f 1992000";;
 	soak) run 05-soak-free "BOOST=${SOAK_BOOST:-0} sh /root/cpufreq/stress.sh -t $SOAK_MIN -f free -g ${SOAK_GOV:-schedutil}";;
 	*) echo "unknown phase $ph"; exit 1;; esac; done
-echo "all phases passed; results in $RES"
+echo "all phases passed. Results in $RES"

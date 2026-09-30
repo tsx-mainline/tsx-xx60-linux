@@ -1,41 +1,42 @@
 #!/bin/bash
-# Build the v2 rescue image (installer/tsx-install-mainline's PAYLOAD/rescue.img):
-# the golden-slot / one-shot mainline rescue, shared by both kernel flavors (it
-# only ever runs stage 2 / the eMMC writer, then reboots into whichever flavor
-# the install picked -- see docs/install.md "What runs where"). Chains the
-# pieces that already exist but have no single driver:
+# Build the v2 rescue image (installer/tsx-install-mainline's PAYLOAD/rescue.img).
+# It is the golden-slot and one-shot mainline rescue, and both kernel flavors
+# share it. It only runs stage 2 (the eMMC writer) and then reboots into the
+# flavor that the install picked (see docs/install.md "What runs where").
+# The script chains pieces that exist but had no single driver:
 #   1. rootfs/mkbootimg.sh (KDIR)        -> rootfs/out/tsxboot.img
-#      (needs rootfs/out/initramfs-switchroot.cpio.gz already built, e.g. by
+#      (needs rootfs/out/initramfs-switchroot.cpio.gz, for example from
 #      rootfs/build-rootfs.sh initramfs)
 #   2. installer/initramfs/build-initramfs.sh -> installer/out/initramfs-switchroot-autoinstall.cpio.gz
 #   3. installer/initramfs/repack-bootimg.py   -> installer/out/tsxboot-audio-autoinstall.img
-#      (same kernel + DTB as step 1, stage-2 initramfs swapped in)
+#      (the kernel and DTB of step 1, with the stage-2 initramfs swapped in)
 #   4. installer/rescue/mkrescue.sh            -> installer/rescue/out/tsx-rescue-tsw1060.img
-#   5. installer/rescue-v2/mkrescue-v2.sh       -> OUT (stamps the version; the rescue screen itself is in the base initramfs)
+#   5. installer/rescue-v2/mkrescue-v2.sh       -> OUT (stamps the version)
+#      The rescue screen itself is in the base initramfs.
 #
 #   ci/build-rescue.sh --kdir OUT_DIR --out RESCUE.img [--flavor NAME]
-#     --kdir OUT_DIR   a kbuild.sh "image" step's OUT_DIR (zImage + board DTB +
-#                      kernel.release); which flavor's kernel goes in the
-#                      rescue is cosmetic (see NOTE below), default flavor tag
-#                      recorded in the image is "shared".
+#     --kdir OUT_DIR   the OUT_DIR of a kbuild.sh "image" step (zImage, board
+#                      DTB, kernel.release). The flavor of the kernel in the
+#                      rescue is cosmetic (see NOTE below). The default flavor
+#                      tag in the image is "shared".
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 KDIR= OUT= FLAVOR=shared
 while [ $# -gt 0 ]; do case $1 in
 	--kdir) KDIR=$2; shift;; --out) OUT=$2; shift;; --flavor) FLAVOR=$2; shift;;
-	*) sed -n '2,20p' "$0"; exit 2;;
+	*) sed -n '2,21p' "$0"; exit 2;;
 esac; shift; done
 [ -n "$KDIR" ] && [ -f "$KDIR/zImage" ] || { echo "build-rescue.sh: --kdir OUT_DIR required (a kbuild.sh image-step output)" >&2; exit 2; }
 [ -n "$OUT" ] || { echo "build-rescue.sh: --out RESCUE.img required" >&2; exit 2; }
 
-# NOTE: the rescue never boots a flavor's own kernel end to end -- it only
-# ever runs installer/steps/tsx-rescue-install (write eMMC boot+root, fold the
-# card, reboot) or, on the golden path, arms a one-shot into the same. Which
-# flavor's zImage/DTB happen to be packed into it is not user-visible; the
-# caller picks one (release.yml uses lts, the default flavor) so there is
-# exactly one rescue image to build, verify and ship instead of two
-# byte-identical-except-for-kernel ones.
+# NOTE: the rescue never boots the kernel of a flavor end to end. It only runs
+# installer/steps/tsx-rescue-install (write eMMC boot and root, fold the card,
+# reboot), or, on the golden path, arms a one-shot into the same step. Users
+# cannot see which flavor's zImage and DTB are packed into it. The caller
+# picks one (release.yml uses lts, the default flavor). This gives exactly one
+# rescue image to build, verify and ship, and not two images that differ only
+# in the kernel.
 [ -f "$REPO/rootfs/out/initramfs-switchroot.cpio.gz" ] || { echo "build-rescue.sh: rootfs/out/initramfs-switchroot.cpio.gz missing (run rootfs/build-rootfs.sh initramfs first)" >&2; exit 2; }
 
 echo "build-rescue.sh: 1/5 rootfs/mkbootimg.sh (KDIR=$KDIR)"

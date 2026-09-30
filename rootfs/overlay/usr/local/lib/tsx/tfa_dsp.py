@@ -2,24 +2,26 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """TFA9890 (NXP "TFA1" family, CoolFlux DSP) container parser and loader.
 
-Reimplements, for the TFA9890 only, what the vendor Android library
-(libjbl_acoustic.so + NXP nxpTfaHost "climax 3.1") does on the TSW-1060:
-parse the NXP container (stereo.cnt, "PM1_00"), then per amplifier:
-I2C reset, container bitfields, power on, wait for the DSP subsystem,
-ROM check + patch, soft mute, config / speaker / preset / EQ messages,
-SBSL=1 ("configured"), calibration check, and finally unmute.
+This file reimplements, for the TFA9890 only, what the vendor Android
+library (libjbl_acoustic.so + NXP nxpTfaHost "climax 3.1") does on the
+TSW-1060. It parses the NXP container (stereo.cnt, "PM1_00"). Then, for
+each amplifier, it does these steps: I2C reset, container bitfields, power
+on, wait for the DSP subsystem, ROM check + patch, soft mute, config /
+speaker / preset / EQ messages, SBSL=1 ("configured"), calibration check,
+and finally unmute.
 
-The register/xmem/RPC sequence is verified byte for byte against a trace of
-the vendor climax_hostsw run under qemu against NXP's own TFA9890 simulator
-("-d dummy90"), see tests/test_tfa_dsp.py and golden/*.trace.
+The register, xmem and RPC sequence matches, byte for byte, a trace of the
+vendor climax_hostsw. That run used qemu against the own TFA9890 simulator
+of NXP ("-d dummy90"). See tests/test_tfa_dsp.py and golden/*.trace.
 
-Protocol facts are taken from the vendor trace and the GPL-2.0 NXP tfa98xx
-driver headers (github.com/nxpsw/tfa98xx: tfa98xx_parameters.h,
+The protocol facts come from the vendor trace and from the GPL-2.0 NXP
+tfa98xx driver headers (github.com/nxpsw/tfa98xx: tfa98xx_parameters.h,
 tfa1_tfafieldnames.h, tfa9890_tfafieldnames.h).
 
-Runs on the panel (Alpine armv7, python3 stdlib only; I2C via /dev/i2c-N
-with the I2C_RDWR ioctl, which also works on addresses bound to the
-tfa989x kernel driver) and on the host (parse, plan, dry-run).
+It runs on the panel (Alpine armv7, python3 stdlib only). I2C goes through
+/dev/i2c-N with the I2C_RDWR ioctl, which also works on addresses that are
+bound to the tfa989x kernel driver. It also runs on the host (parse, plan,
+dry-run).
 
 Usage:
   tfa_dsp.py info  CNT
@@ -133,7 +135,7 @@ class NxpFile:
         self.customer, self.application, self.type = cstr(cust), cstr(app), cstr(typ)
         self.name = name
         self.raw = bytes(data)
-        # VP2 volume-step files carry size 0 in the vendor drop: CRC covers the file
+        # VP2 volume-step files carry size 0 in the vendor drop. The CRC covers the file.
         if self.size not in (0, len(data)):
             raise CntError("%s: header size %d != file size %d" % (name, self.size, len(data)))
         crc = zlib.crc32(self.raw[12:]) & 0xffffffff
@@ -561,7 +563,7 @@ def cold_start(cnt, t, profile=0, vstep=0, say=print):
     t.dsp_msg(MODULE_SPEAKERBOOST, SB_PARAM_SET_LSMODEL, spk.payload)
     vs = prof["files"][0]
     write_vstep(t, vs.steps[vstep])
-    # "configured": SBSL=1 lets the DSP start; the vendor then checks MTPEX + cal-done
+    # "configured": SBSL=1 lets the DSP start. The vendor then checks MTPEX + cal-done
     t.set_bf(0x0950, 1)
     mtp = t.rd(REG_MTP0)
     cal = int.from_bytes(t.mem_read(DMEM_XMEM, XMEM_CAL_DONE, 1), "big")
@@ -577,7 +579,7 @@ def unmute(t):
 
 def stop(t):
     """vendor --stop: CFSM off, AMPE=0 DCA=0 PWDN=1 (DSP keeps its config).
-    The vendor also sets CHSA=0 (left); not done here: the kernel mux owns CHSA."""
+    The vendor also sets CHSA=0 (left). This code does not, because the kernel mux owns CHSA."""
     audio, sysc = t.rd(REG_AUDIO), t.rd(REG_SYS)
     t.wr(REG_AUDIO, audio & ~AUDIO_CFSM)
     t.wr(REG_SYS, (sysc & ~SYS_AMPE & ~SYS_DCA) | SYS_PWDN)
@@ -602,12 +604,13 @@ def decode_sys(v):
 
 
 def state_info(t):
-    """SpeakerBoost state (param 0xC0), 9 words; scaling as in NXP Tfa98xx.c
-    (SPKRBST_HEADROOM 7, AGCGAIN_EXP 7, LIMGAIN_EXP 4). Re/X1/X2 (exp 9)
-    verified plausible on hardware (unit A). T (temperature) is NOT exp 9:
-    that decoded a constant 98.9 C from raw 0x18b8ad on both amps at
-    15:38-15:45 on 2026-09-26 (see the DSP bring-up notes ("Hardware bring-up"));
-    exp 8 gives 49.4 C, matching the IC's measured 47-50 C, so T uses exp 8."""
+    """SpeakerBoost state (param 0xC0), 9 words. The scaling follows NXP
+    Tfa98xx.c (SPKRBST_HEADROOM 7, AGCGAIN_EXP 7, LIMGAIN_EXP 4). Re/X1/X2
+    (exp 9) proved plausible on hardware (unit A). T (temperature) is NOT
+    exp 9. That decoded a constant 98.9 C from raw 0x18b8ad on both amps at
+    15:38-15:45 on 2026-09-26 (see the DSP bring-up notes, "Hardware
+    bring-up"). Exp 8 gives 49.4 C, which matches the measured 47-50 C of the
+    IC, so T uses exp 8."""
     raw = t.dsp_get(MODULE_SPEAKERBOOST, SB_PARAM_GET_STATE, 27)
     w = [int.from_bytes(raw[i:i + 3], "big", signed=True) for i in range(0, 27, 3)]
     f = lambda v, e: v / float(1 << (23 - e))
@@ -680,7 +683,7 @@ def cmd_start(a):
     addrs = [a.dev] if a.dev else [d["addr"] for d in cnt.devices]
     tfas = [Tfa(bus, x) for x in addrs]
     if a.dry_run:
-        print("# dry run: reads are real, writes are printed only; RMW values and"
+        print("# dry run: reads are real, writes are printed only. RMW values and"
               " DSP replies below assume nothing was written")
         for t in tfas:
             try:
@@ -723,7 +726,7 @@ def cmd_status(a):
         print("0x%02x: %s" % (addr, " ".join("%02x=%04x" % kv for kv in sorted(regs.items()))))
         print("  status  %s" % decode_status(st))
         print("  sys     %s" % decode_sys(sysc))
-        print("  i2s     CHS12=%d CHS3=%d CHSA=%d I2SSR=%d; VOL=%d (-%.1f dB) CFSM=%d"
+        print("  i2s     CHS12=%d CHS3=%d CHSA=%d I2SSR=%d. VOL=%d (-%.1f dB) CFSM=%d"
               % (bf_get(regs[4], 0x0431), bf_get(regs[4], 0x0450), bf_get(regs[4], 0x0461),
                  bf_get(regs[4], 0x04c3), bf_get(regs[6], 0x0687), bf_get(regs[6], 0x0687) / 2.0,
                  bf_get(regs[6], 0x0650)))

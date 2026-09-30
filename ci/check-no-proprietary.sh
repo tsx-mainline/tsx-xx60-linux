@@ -1,13 +1,13 @@
 #!/bin/sh
-# Fail if a built rootfs tarball/ext4 image carries any Crestron proprietary
-# file. The only proprietary files mkrootfs.sh ever writes are the TFA9890
-# DSP tuning containers (rootfs/mkrootfs.sh, usr/local/share/tsx/tfa9890/),
-# copied in only when TFA_VENDOR_LOCAL/TFA_VENDOR_SRC point at them or
-# TFA_VENDOR_FETCH pulls Crestron's .puf; CI builds always set
-# TFA_VENDOR_FETCH=no and leave TFA_VENDOR_SRC unset, so none should ever be
-# present here. This is a check on the build's OUTPUT, independent of that
-# env var, so a future change to mkrootfs.sh cannot silently reintroduce one.
-#
+# Fail if a built rootfs tarball or ext4 image carries a Crestron proprietary
+# file. The only proprietary files that mkrootfs.sh ever writes are the
+# TFA9890 DSP tuning containers (rootfs/mkrootfs.sh,
+# usr/local/share/tsx/tfa9890/). The script copies them only when
+# TFA_VENDOR_LOCAL or TFA_VENDOR_SRC points at them, or when TFA_VENDOR_FETCH
+# pulls the .puf of Crestron. CI builds always set TFA_VENDOR_FETCH=no and
+# leave TFA_VENDOR_SRC unset, so none should be present. This check looks at
+# the OUTPUT of the build and does not depend on that env var. So a later
+# change to mkrootfs.sh cannot silently add one again.
 #   ci/check-no-proprietary.sh <rootfs.tar.gz> <rootfs.ext4>
 set -eu
 TAR=$1 IMG=$2

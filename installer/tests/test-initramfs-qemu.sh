@@ -1,6 +1,7 @@
 #!/bin/bash
 # Boot the rootfs virt test kernel under qemu-system-arm -M virt with an
-# initramfs and the kiosk rootfs (qcow2 overlay; the rootfs image is not modified).
+# initramfs and the kiosk rootfs. The rootfs is a qcow2 overlay, so the rootfs
+# image stays unmodified.
 #  1. rootfs/out initramfs (before installer)       -> must switch_root
 #  2. installer/out/tsxboot-audio-autoinstall.img's initramfs (stage 2 integrated,
 #     no install order = the normal path)          -> must switch_root
@@ -12,7 +13,7 @@
 #     /var/lib/kiosk (etc.) onto it and bind-mounts them back, over ssh.
 #  3. installer/out/tsx-rescue-tsw1060.img's initramfs (golden-slot rescue)
 #                                                  -> must NOT switch_root: rescue,
-#     banner with the IP, dropbear; over ssh: tsx-rescue/tsx-boot-ok present,
+#     banner with the IP, dropbear. Over ssh: tsx-rescue/tsx-boot-ok present,
 #     tsx-rescue done refuses (no TSX disk under qemu), p5 not mounted, nothing written.
 # Initramfs are taken out of the boot images, so the test checks what goes to p1.
 set -euo pipefail
@@ -66,15 +67,16 @@ boot() {   # boot NAME INITRD MODE(root|rescue) [DISK] [full] [DATADISK]
 					grep -q MARKER_OK "$W/data.txt" && ok "$1: /data/var/lib/kiosk/.tsx-moved marker present (first-boot move ran)" || bad "$1: .tsx-moved marker missing"
 					grep -q "started" "$W/data.txt" && ok "$1: kiosk service still running with /data attached" || bad "$1: kiosk not running"
 				else
-					# Known, pre-existing (not a tsx-data issue): p2's ~14 MiB nominal free
-					# space is too tight for sshd's own first-boot `ssh-keygen -A` host-key
-					# generation (ENOSPC), so sshd never starts and ssh is unreachable here
-					# on THIS image, independently of /data/tsx-data. Not counted as a
-					# failure of tsx-data, whose move+bind logic is exhaustively covered
-					# instead by tests/test-tsx-data.sh (chroot, no ssh needed). Reported
-					# as a finding, not swallowed.
+					# Known and pre-existing, not a tsx-data issue. The p2 nominal free
+					# space of about 14 MiB is too small for the first-boot
+					# `ssh-keygen -A` host-key generation of sshd (ENOSPC). So sshd
+					# never starts and ssh is unreachable on THIS image, whatever
+					# /data/tsx-data holds. This does not count as a tsx-data failure.
+					# tests/test-tsx-data.sh (chroot, no ssh needed) covers the move
+					# and bind logic of tsx-data. The test reports the problem as a
+					# finding and does not swallow it.
 					grep -ai "ssh-keygen\|sshd.*hostkeys\|ERROR: sshd" "$W/serial.log" | sed 's/^/    /'
-					echo "  note: $1: ssh unreachable (sshd first-boot host-key generation hits ENOSPC on this ~14 MiB-free p2; see tests/test-tsx-data.sh for the bind-mount/marker checks instead)"
+					echo "  note: $1: ssh unreachable (the first-boot host-key generation of sshd hits ENOSPC on this p2 with about 14 MiB free). tests/test-tsx-data.sh has the bind-mount and marker checks"
 				fi
 			fi
 		fi
@@ -84,7 +86,7 @@ boot() {   # boot NAME INITRD MODE(root|rescue) [DISK] [full] [DATADISK]
 		grep -q "tsx-rescue: network: eth0 10.0.2.15" "$W/serial.log" && ok "$1: banner with the IP on the console" || bad "$1: no banner/IP"
 		for i in $(seq 60); do "${SSH[@]}" true 2>/dev/null && break; sleep 1; done
 		"${SSH[@]}" 'for c in tsx-rescue /usr/local/sbin/tsx-boot-ok tsx-autoinstall fw_printenv mkfs.ext4 e2fsck; do command -v $c >/dev/null || echo MISSING $c; done; cat /etc/motd' > "$W/s1.txt" 2>&1
-		! grep -q MISSING "$W/s1.txt" && grep -q "TSX RESCUE SYSTEM" "$W/s1.txt" && ok "$1: ssh root/tsx works; tools present; /etc/motd banner" || { bad "$1: ssh/tools"; cat "$W/s1.txt"; }
+		! grep -q MISSING "$W/s1.txt" && grep -q "TSX RESCUE SYSTEM" "$W/s1.txt" && ok "$1: ssh root/tsx works. Tools present; /etc/motd banner" || { bad "$1: ssh/tools"; cat "$W/s1.txt"; }
 		"${SSH[@]}" 'tsx-rescue done; echo rc=$?; tsx-rescue status; grep -c " /newroot\| / ext4" /proc/mounts' > "$W/s2.txt" 2>&1 || true
 		sed 's/^/    /' "$W/s2.txt"
 		grep -q "rc=1" "$W/s2.txt" && grep -q "env disk (sd) not found" "$W/s2.txt" && ok "$1: tsx-rescue done refuses without the TSX SD card (no env write)" || bad "$1: tsx-rescue done"

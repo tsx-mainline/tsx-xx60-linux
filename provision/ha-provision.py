@@ -1,62 +1,68 @@
 #!/usr/bin/env python3
-"""ha-provision.py: Home Assistant credentials for the TSW-1060 panel .
+"""ha-provision.py: Home Assistant credentials for the TSW-1060 panel.
 
 Python 3 standard library only. Every secret goes to provision/secrets/
-(dir 0700, files 0600). No secret is ever printed; only file names and lengths.
+(dir 0700, files 0600). The script never prints a secret. It prints only
+file names and lengths.
 
-Subcommands (run in this order; each one is safe to re-run):
+Subcommands (run them in this order, and each one is safe to run again):
 
-  create-user   ONE-TIME, needs an admin token that YOU create and delete:
-                HA profile -> Security -> Long-lived access tokens -> Create
-                ("tsx-provision-temp"), put it in secrets/admin-token (0600).
-                Generates a 32-char random password into secrets/tsw1060.password
-                (unless the file exists), then over the WebSocket API:
+  create-user   One time only. It needs an admin token that you create and
+                delete yourself: HA profile -> Security -> Long-lived access
+                tokens -> Create ("tsx-provision-temp"). Put the token in
+                secrets/admin-token (0600).
+                The script generates a 32-character random password in
+                secrets/tsw1060.password (unless the file exists). Then it
+                calls the WebSocket API:
                   config/auth/create                     (name "TSW-1060 Panel",
                                                           group system-users,
                                                           local_only false)
                   config/auth_provider/homeassistant/create (username tsw1060)
-                Writes secrets/user.json (user_id, username; not secret).
-                Delete the temporary admin token in HA afterwards (the script
-                reminds you) and `rm secrets/admin-token`.
-                Alternative without an admin token: create the user in the HA UI
+                It writes secrets/user.json (user_id and username, not secret).
+                Afterwards, delete the temporary admin token in HA (the script
+                reminds you) and run `rm secrets/admin-token`.
+                You can also skip the admin token. Create the user in the HA UI
                 (Settings -> People -> Users -> Add user, username tsw1060, NOT
-                administrator) with the password from secrets/tsw1060.password
-                (make it with: ./ha-provision.py genpass).
+                administrator) with the password from secrets/tsw1060.password.
+                Make the password with: ./ha-provision.py genpass
 
-  genpass       Only writes secrets/tsw1060.password (if absent).
+  genpass       Write secrets/tsw1060.password (only if it is absent).
 
-  mint          Logs in AS THE PANEL USER (no admin session involved):
+  mint          Log in as the panel user. No admin session is involved:
                 POST /auth/login_flow (client_id = kiosk origin + "/",
                 handler ["homeassistant", null]) -> username/password step ->
                 POST /auth/token (authorization_code) -> access + refresh token.
-                Then a WebSocket as that user:
+                Then open a WebSocket as that user:
                   auth/current_user                  (asserts is_admin == false)
                   auth/long_lived_access_token "tsw1060-buttons" 3650 days
                      -> secrets/ha-token   (tsx-buttons HA_TOKEN_FILE)
                   auth/long_lived_access_token "tsw1060-kiosk" 3650 days
                      -> secrets/kiosk-token (kiosk-set-token --file)
                   frontend/set_user_data core.default_panel = DASHBOARD
-                Also writes secrets/hassTokens.json: the frontend's own
-                localStorage format from this login (access_token,
-                refresh_token, expires, hassUrl, clientId, ...), a normal
-                refreshable session for tools that seed it as-is.
-                An existing token with the same client name is kept (HA refuses
-                duplicates) unless --rotate: then the old one is deleted first.
+                The script also writes secrets/hassTokens.json. It has the
+                localStorage format of the frontend for this login
+                (access_token, refresh_token, expires, hassUrl, clientId, ...).
+                It is a normal refreshable session for tools that seed it as is.
+                The script keeps an existing token with the same client name,
+                because HA refuses duplicates. With --rotate, it deletes the
+                old token first.
 
-  verify        Checks secrets/ha-token and secrets/kiosk-token with GET /api/
-                and GET /api/states/<light>; checks the MQTT login (below).
+  verify        Check secrets/ha-token and secrets/kiosk-token with GET /api/
+                and GET /api/states/<light>. Also check the MQTT login (below).
 
   wait-event    As the panel user, wait for one tsx_button event (panel check).
-  states-grep   Entities visible to the panel user matching --pattern (tsx).
-  light-state   State of --light as the panel user.
+  states-grep   List the entities that the panel user can see and that match
+                --pattern (tsx).
+  light-state   Print the state of --light as the panel user.
 
-  mqtt-test     MQTT 3.1.1 CONNECT with the panel user (Mosquitto app with HA
-                user auth), SUBSCRIBE tsx/test, PUBLISH a harmless message to
-                tsx/test, wait for it to come back. Stdlib socket client.
+  mqtt-test     Send an MQTT 3.1.1 CONNECT as the panel user (Mosquitto app with
+                HA user auth) and SUBSCRIBE to tsx/test. PUBLISH a harmless
+                message to tsx/test and wait for it to come back. The client
+                uses a stdlib socket.
 
 Options: --url (default https://ha.example.org), --user (tsw1060),
---broker (default: none; required for mqtt-test), --port (1883), --dashboard (tsw-1060),
---light (default: light.example_light), --rotate.
+--broker (default: none, required for mqtt-test), --port (1883),
+--dashboard (tsw-1060), --light (default: light.example_light), --rotate.
 """
 import argparse, base64, datetime, json, os, secrets, socket, ssl, stat, string, struct, sys, time
 import urllib.error, urllib.parse, urllib.request
@@ -183,7 +189,7 @@ class WS:
             elif n == 127:
                 n = struct.unpack(">Q", self._recvn(8))[0]
             if b1 & 0x80:
-                self._recvn(4)  # servers do not mask; ignore if they do
+                self._recvn(4)  # servers do not mask. Ignore the mask if one is present.
             payload = self._recvn(n)
             if op == 0x9:  # ping -> pong
                 self.s.sendall(bytes([0x8A, 0x80]) + os.urandom(4))
@@ -321,8 +327,9 @@ def mint(a):
             print(f"  could not set the default dashboard: {e}")
     finally:
         ws.close()
-    # the login session's refresh token stays valid (and in hassTokens.json);
-    # it expires by itself after 90 days unused, or delete it in the user's profile.
+    # The refresh token of the login session stays valid (and stays in
+    # hassTokens.json). It expires after 90 days without use. You can also
+    # delete it in the profile of the user.
 
 
 def verify(a):
@@ -412,7 +419,7 @@ def mqtt_test(a):
                 break
     s.sendall(bytes([0xE0, 0]))
     s.close()
-    print(f"  MQTT SUBSCRIBE tsx/test granted qos={granted}; PUBLISH '{msg}' "
+    print(f"  MQTT SUBSCRIBE tsx/test granted qos={granted}. PUBLISH '{msg}' "
           f"{'came back' if got else 'did NOT come back'}")
     return got
 
@@ -431,7 +438,7 @@ def wait_event(a):
             except RuntimeError as e:
                 print(f"  {type_}: {e}")
         if not how:
-            print("  cannot subscribe as the panel user (non-admin); check the event in HA instead")
+            print("  cannot subscribe as the panel user (non-admin). Check the event in HA instead")
             sys.exit(2)
         print(f"  listening ({how}) for tsx_button, {a.timeout} s", flush=True)
         ws.s.settimeout(a.timeout)

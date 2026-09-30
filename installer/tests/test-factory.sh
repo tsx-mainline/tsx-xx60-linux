@@ -1,11 +1,14 @@
 #!/bin/bash
 # Host test of the factory restore from the Crestron firmware package:
-# factory/puf-tool.sh (host) + factory/tsx-factory-restore (rescue system).
-# Inputs (read only): tsw-xx60_3.002.1061.001.puf, unit A's factory-state card
-# (captures/tsw-1060/backup, fw 3.002.1061 = the .puf's version) as the reference,
-# unit B's card (captures/tsw-1060-unitB/backup) as the card to restore, after a
-# simulated card-stage conversion. The panel tool runs in a privileged Alpine 3.24
-# container on a loop device (the rescue's tool set). ~10 GB in $TMPDIR.
+# factory/puf-tool.sh (host) and factory/tsx-factory-restore (rescue system).
+# Inputs (read only):
+#  - tsw-xx60_3.002.1061.001.puf
+#  - the factory-state card of unit A (captures/tsw-1060/backup, fw 3.002.1061,
+#    the version of the .puf), as the reference
+#  - the card of unit B (captures/tsw-1060-unitB/backup), as the card to
+#    restore, after a simulated card-stage conversion
+# The panel tool runs in a privileged Alpine 3.24 container on a loop device
+# (the tool set of the rescue). The test needs about 10 GB in $TMPDIR.
 set -uo pipefail
 INSTALLER_DIR=$(cd "$(dirname "$0")/.." && pwd); ROOT=$(cd "$INSTALLER_DIR/.." && pwd); CAPTURES=${CAPTURES_DIR:-}
 PUF=${PUF_FILE:-}
@@ -13,7 +16,7 @@ A=$CAPTURES/tsw-1060/backup/tsw1060-mmcblk0.img
 BU=$CAPTURES/tsw-1060-unitB/backup/tsw1060B-mmcblk0-20260926.img
 T=$INSTALLER_DIR/factory/puf-tool.sh
 if [ -z "$CAPTURES" ] || [ ! -f "$A" ] || [ ! -f "$BU" ] || [ ! -f "$PUF" ]; then
-	echo "SKIPPED: needs the Crestron .puf (PUF_FILE) and real unit captures (CAPTURES_DIR); not present here"
+	echo "SKIPPED: needs the Crestron .puf (PUF_FILE) and real unit captures (CAPTURES_DIR). Not present here"
 	exit 0
 fi
 W=${TMPDIR:-/var/tmp}/tsx-factory-test; rm -rf "$W"; mkdir -p "$W"; trap 'rm -rf "$W"' EXIT
@@ -90,7 +93,7 @@ export TSX_SHARE=/installer/android TSX_SYSBLOCK=/sys/block/$n TSX_DEVDIR=/dev T
 FR="sh /installer/factory/tsx-factory-restore"
 ok() { echo "  ok: $*"; }; fail() { echo "  FAIL: $*"; }
 ls /sys/block/$n | grep -c "${n}p" | grep -qx 4 && mkfs.ext4 -q -F -L tsxdata /dev/${n}p4 && ok "simulated card-stage card: 4 partitions, p4 = tsxdata, p2 = kiosk rootfs"
-$FR check /w/b > /tmp/c 2>&1 && grep -q "layout now card" /tmp/c && ok "check: card-stage layout recognised, bundle verified, nothing written"
+$FR check /w/b > /tmp/c 2>&1 && grep -q "layout now card" /tmp/c && ok "check: card-stage layout recognized, bundle verified, nothing written"
 $FR run /w/bA --yes > /tmp/r 2>&1 && fail "env of unit A accepted on unit B" || { grep -q "wrong unit" /tmp/r && ok "bundle of another unit refused"; }
 mkdir -p /mnt/x; mount /dev/${n}p2 /mnt/x; $FR run /w/b --yes > /tmp/r 2>&1 && fail "ran with p2 mounted" || { grep -q "is mounted" /tmp/r && ok "refused while a card partition is mounted"; }; umount /mnt/x
 cp -r /w/b /tmp/bb; printf X | dd of=/tmp/bb/system.img bs=1 seek=4096000 conv=notrunc 2>/dev/null

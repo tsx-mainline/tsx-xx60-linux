@@ -1,15 +1,16 @@
 #!/bin/sh
 # Host test for the text console font and the ASCII banners (no panel needed):
-#   - tsx-confont picks the Terminus font by the framebuffer size (fake sysfs:
-#     fb0/modes or fb0/virtual_size) so the console is at least 80x25, falls
-#     back to the kernel's default font when nothing fits / no fb / no font,
-#     calls setfont on the right tty and never fails;
-#   - every text-console path loads it (/init text_console, tsx-autoinstall,
-#     tsx-rescue-status) and the initramfs build ships the fonts;
-#   - the rescue screen banner and /etc/motd: Tux + figlet smslant
-#     "TSX - LINUX" (spaces around the dash), at most 80 columns, the same art
-#     in both (the whole screen: test-rescue-screen.sh).
-# busybox/dash sh, no compiler. figlet (optional) re-checks the art itself.
+#   - tsx-confont picks the Terminus font by the framebuffer size, so the
+#     console has at least 80x25. The fake sysfs has fb0/modes or
+#     fb0/virtual_size. If nothing fits, or there is no fb or no font,
+#     tsx-confont falls back to the default font of the kernel. It calls
+#     setfont on the right tty and never fails.
+#   - every text-console path loads the font (/init text_console,
+#     tsx-autoinstall, tsx-rescue-status), and the initramfs build ships the
+#     fonts.
+#   - the rescue screen banner and /etc/motd show Tux and the figlet smslant
+#     "TSX - LINUX" (spaces around the dash), at most 80 columns. Both use the
+#     same art. test-rescue-screen.sh checks the whole screen.
 set -eu
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
 CF=$HERE/rootfs/initramfs/overlay/usr/sbin/tsx-confont
@@ -44,7 +45,7 @@ fakesys s600 "U:600x400p-0";    expect s600 "default"
 fakesys nofb;                   expect nofb "default"
 # ORIENTATION portrait / portrait-flipped: /init turns the console a quarter
 # (fbcon rotate 3 / 1) before tsx-confont, which then sees the width and
-# height swapped; landscape-flipped (2) keeps them
+# height swapped. landscape-flipped (2) keeps them
 rotsys() { fakesys "$1" "$2"; mkdir -p "$T/$1/class/graphics/fbcon"; echo "$3" > "$T/$1/class/graphics/fbcon/rotate"; }
 rotsys p1280 "U:1280x800p-0" 3; expect p1280 "ter-120b 80x64"
 rotsys q1280 "U:1280x800p-0" 1; expect q1280 "ter-120b 80x64"

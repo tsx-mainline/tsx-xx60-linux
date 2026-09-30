@@ -1,11 +1,15 @@
 #!/bin/sh
-# Host test for rootfs/src/tsx-splash.c (no framebuffer needed): builds it
-# with the host compiler, renders frames with "png -g WxH" from a synthetic
-# splash dir (a PPM with a white square, a PSF2 font whose glyphs are solid
-# blocks) and checks the pixels: the image centred on black, the status text
-# where the panel shows it (70 % of the height), the progress bar fill and
-# track, the fallback to a smaller image centred on a bigger screen, no bar
-# with -p -1, and a missing font (bar only). CC (default gcc).
+# Host test for rootfs/src/tsx-splash.c (no framebuffer needed). The test
+# builds it with the host compiler. It renders frames with "png -g WxH" from a
+# synthetic splash dir: a PPM with a white square, and a PSF2 font whose
+# glyphs are solid blocks. It checks the pixels for these cases:
+#  - the image centered on black
+#  - the status text where the panel shows it (70 % of the height)
+#  - the fill and the track of the progress bar
+#  - a smaller image, centered on a bigger screen (the fallback)
+#  - no bar with -p -1
+#  - a missing font (bar only)
+# CC selects the compiler (default gcc).
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
@@ -57,21 +61,21 @@ expect() {  # FILE X Y RRGGBB WHAT
 echo "== 1024x600, image + status + 50 % =="
 "$W/tsx-splash" -d "$W/d" -g 1024x600 -s AB -p 50 png "$W/a.png"
 expect "$W/a.png" 0 0 000000 "background black"
-expect "$W/a.png" 512 300 ffffff "image centred"
-expect "$W/a.png" 505 425 9aa3ad "status text at 70 % (text centred, 2 glyphs of 8)"
+expect "$W/a.png" 512 300 ffffff "image centered"
+expect "$W/a.png" 505 425 9aa3ad "status text at 70 % (text centered, 2 glyphs of 8)"
 expect "$W/a.png" 500 425 000000 "left of the text is black"
 expect "$W/a.png" 400 445 3fa7e0 "bar: filled part"
 expect "$W/a.png" 600 445 1c2329 "bar: track past 50 %"
-expect "$W/a.png" 320 445 000000 "bar: 36 % wide, centred"
+expect "$W/a.png" 320 445 000000 "bar: 36 % wide, centered"
 [ "$("$W/tsx-splash" -g 1024x600 size)" = 1024x600 ] && ok "size -g" || bad "size -g"
 
 echo "== no bar (-p -1) =="
 "$W/tsx-splash" -d "$W/d" -g 1024x600 -s AB -p -1 png "$W/b.png"
 expect "$W/b.png" 400 445 000000 "no bar"
 
-echo "== 1280x800: the 1024x600 image centred, no font-24 (bar only) =="
+echo "== 1280x800: the 1024x600 image centered, no font-24 (bar only) =="
 "$W/tsx-splash" -d "$W/d" -g 1280x800 -s AB -p 100 png "$W/c.png"
-expect "$W/c.png" 640 400 ffffff "smaller image centred"
+expect "$W/c.png" 640 400 ffffff "smaller image centered"
 expect "$W/c.png" 127 400 000000 "outside the smaller image is black"
 expect "$W/c.png" 640 565 000000 "no font: no text"
 expect "$W/c.png" 869 598 3fa7e0 "bar full at 100 %"
@@ -96,7 +100,7 @@ echo portrait-flipped > "$W/orient"
 echo junk > "$W/orient"
 [ "$(TSX_ORIENTATION_FILE="$W/orient" "$W/tsx-splash" -g 1280x800 size)" = 1280x800 ] && ok "junk orientation file: landscape" || bad "junk orientation file"
 "$W/tsx-splash" -d "$W/d2" -g 1024x600 -o portrait -s AB -p 50 png "$W/p.png"
-expect "$W/p.png" 300 512 ffffff "portrait png: the 600x1024 frame, image centred"
+expect "$W/p.png" 300 512 ffffff "portrait png: the 600x1024 frame, image centered"
 expect "$W/p.png" 295 720 9aa3ad "portrait png: status text (24 px font) at 70 % of 1024"
 expect "$W/p.png" 250 754 3fa7e0 "portrait png: bar filled"
 expect "$W/p.png" 350 754 1c2329 "portrait png: bar track"

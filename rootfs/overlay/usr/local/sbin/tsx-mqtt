@@ -1,8 +1,8 @@
 #!/bin/sh
-# tsx-mqtt: MQTT bridge between the xx60 kiosk and Home Assistant .
+# tsx-mqtt: MQTT bridge between the xx60 kiosk and Home Assistant.
 #
-# Publishes HA MQTT discovery (retained) for one device with:
-#   light  "LED bar"      RGB (tsx-ledbar; HA 0..255 <-> bar 0..100 per channel)
+# It publishes HA MQTT discovery (retained) for one device with:
+#   light  "LED bar"      RGB (tsx-ledbar. HA 0..255 <-> bar 0..100 per channel)
 #   light  "Key LEDs"     brightness 0..255 (tsx-keypad led N|off)
 #   switch "Screen"       ON = lit, OFF = blanked (tsx-blank)
 #   number "Backlight"    1..BACKLIGHT_MAX of /etc/kiosk.conf (tsx-idled override)
@@ -12,24 +12,28 @@
 #                         /run/tsx/last-input)
 #   event  "Key NAME"     per front-panel key: short / long / hold
 #   device triggers       per key: button_short_press / button_long_press
-#   sensor "Illuminance"  lux of the MAX44009 (tsx-als; only with /etc/tsx/als.conf)
+#   sensor "Illuminance"  lux of the MAX44009 (tsx-als. Only with /etc/tsx/als.conf)
 #   switch "Auto brightness"  tsx-als auto on|off
 #   number "Volume"       0..100 % of the ALSA "Master" softvol (only when the
-#                         TSW1060 sound card exists; /etc/asound.conf)
-#   update "Update"       tsx-autoupdate's status (installed/pending Alpine
-#                         packages, reboot pending, Chromium hold state);
-#                         Install runs "tsx-autoupdate now" in the background
-# State/commands under $BASE (default tsx/<hostname>); availability with LWT.
+#                         TSW1060 sound card exists. /etc/asound.conf)
+#   update "Update"       status of tsx-autoupdate (installed and pending
+#                         Alpine packages, reboot pending, Chromium hold
+#                         state). Install runs "tsx-autoupdate now" in the
+#                         background
+# State and commands are under $BASE (default tsx/<hostname>). Availability
+# uses LWT.
 #
-# Config /etc/tsx/mqtt.conf (empty BROKER = exit quietly). Needs mosquitto-clients.
+# Config /etc/tsx/mqtt.conf (empty BROKER = exit quietly). It needs
+# mosquitto-clients.
 # Key presses come from the "last" line of /run/tsx/buttons.state
-# (tsx-buttons); two identical presses within the same second are one event.
+# (tsx-buttons). Two identical presses within the same second are one event.
 #
 # Env overrides for tests: TSX_MQTT_CONF, TSX_RUN_DIR, TSX_IDLED_STATE,
-# TSX_BUTTONS_CONF, TSX_KIOSK_CONF, TSX_BACKLIGHT_DIR, TSX_MQTT_DRY=1 (print instead of publish,
-# read commands from stdin, one pass). TSX_MQTT_PUB_TIMEOUT=seconds bounds each
-# mosquitto_pub connect+publish (default 5) so an unreachable broker cannot hang
-# the script; see pub() and the stop trap below.
+# TSX_BUTTONS_CONF, TSX_KIOSK_CONF, TSX_BACKLIGHT_DIR, TSX_MQTT_DRY=1 (print
+# instead of publish, read commands from stdin, one pass).
+# TSX_MQTT_PUB_TIMEOUT=seconds limits each mosquitto_pub connect+publish
+# (default 5), so an unreachable broker cannot hang the script. See pub()
+# and the stop trap below.
 set -u
 CONF=${TSX_MQTT_CONF:-/etc/tsx/mqtt.conf}
 R=${TSX_RUN_DIR:-/run/tsx}
@@ -41,13 +45,13 @@ CARD=${TSX_SOUND_CARD:-TSW1060}
 ASOUND=${TSX_ASOUND_DIR:-/proc/asound}
 DRY=${TSX_MQTT_DRY:-0}
 PUBTO=${TSX_MQTT_PUB_TIMEOUT:-5}
-LASTPUBOK=1   # 0 once a publish fails/times out; the stop trap skips the LWT offline publish then
+LASTPUBOK=1   # 0 after a publish fails or times out. The stop trap then skips the LWT offline publish
 
 BROKER= PORT=1883 USER= PASSWORD= CAFILE= DISCOVERY_PREFIX=homeassistant NODE_ID= BASE_TOPIC= DEVICE_NAME=
 [ -r "$CONF" ] && . "$CONF"
-# panel.conf overrides (MQTT_HOST/PORT/USER/PASSWORD via `tsx-config apply`);
-# same precedence as kiosk-session's /etc/kiosk.conf + /run/tsx/kiosk.conf --
-# docs/rootfs.md "Panel configuration"
+# panel.conf overrides (MQTT_HOST/PORT/USER/PASSWORD through `tsx-config apply`).
+# They have the same precedence as /etc/kiosk.conf + /run/tsx/kiosk.conf in
+# kiosk-session -- docs/rootfs.md "Panel configuration"
 [ -r "$R/mqtt.conf" ] && . "$R/mqtt.conf"
 if [ -z "$BROKER" ] && [ "$DRY" != 1 ]; then
 	echo "tsx-mqtt: BROKER not set in $CONF, nothing to do"; exit 0
@@ -63,7 +67,7 @@ M=$R/mqtt
 mkdir -p "$M" && chmod 700 "$M"
 log() { echo "$(date '+%F %T') tsx-mqtt: $*"; }
 
-# mosquitto client options in files (XDG_CONFIG_HOME), not on the command line
+# Put the mosquitto client options in files (XDG_CONFIG_HOME), not on the command line.
 export XDG_CONFIG_HOME=$M
 {
 	echo "-h $BROKER"; echo "-p $PORT"
@@ -77,10 +81,10 @@ chmod 600 "$M/mosquitto_pub" "$M/mosquitto_sub"
 pub() {  # pub [-r] TOPIC PAYLOAD
 	r=; [ "$1" = -r ] && { r=-r; shift; }
 	if [ "$DRY" = 1 ]; then echo "PUB${r:+ (retained)} $1 $2"; return 0; fi
-	# setsid + timeout bounds connect+publish to $PUBTO seconds even with an
-	# unreachable broker; setsid puts mosquitto_pub in its own process group
-	# (pgid = timeout's pid) so the stop trap can kill both with one signal
-	# instead of leaving mosquitto_pub orphaned mid-connect.
+	# setsid + timeout limit connect+publish to $PUBTO seconds, even with an
+	# unreachable broker. setsid puts mosquitto_pub in its own process group
+	# (pgid = pid of timeout). The stop trap can then kill both with one
+	# signal, and mosquitto_pub does not stay orphaned in mid-connect.
 	setsid timeout "$PUBTO" mosquitto_pub -i "$NODE-pub-$$" -q 1 $r -t "$1" -m "$2" &
 	pp=$!
 	echo "$pp" >> "$M/pub.pids"
@@ -130,7 +134,7 @@ discovery() {
 }
 
 # ---- state -----------------------------------------------------------------
-# LED bar: panel keeps "want R G B" (0..100); HA sees rgb (max channel 255) + brightness
+# LED bar: panel keeps "want R G B" (0..100). HA sees rgb (max channel 255) + brightness
 ledbar_state() {
 	w=$(field "$R/ledbar.state" want); [ -n "$w" ] || w="0 0 0"
 	set -- $w
@@ -287,16 +291,16 @@ mkfifo "$M/sub.fifo" 2>/dev/null || { rm -f "$M/sub.fifo"; mkfifo "$M/sub.fifo";
 mosquitto_sub -i "$NODE-sub" -q 1 -v -t "$BASE/+/set" -t "$BASE/+/+/set" -t "$DP/status" \
 	--will-topic "$BASE/availability" --will-payload offline --will-retain > "$M/sub.fifo" &
 SUB=$!
-HANDLER=   # set below; a signal landing before that must not hit set -u
+HANDLER=   # set below. A signal that lands before that must not hit set -u
 
 stop() {
 	kill $SUB 2>/dev/null
 	[ -n "$HANDLER" ] && kill $HANDLER 2>/dev/null
-	# kill any publisher still stuck connecting (whole setsid group: timeout + mosquitto_pub)
+	# Kill any publisher that is still stuck in connect (the whole setsid group: timeout + mosquitto_pub)
 	if [ -s "$M/pub.pids" ]; then
 		while read -r pp; do [ -n "$pp" ] && kill -TERM -- "-$pp" 2>/dev/null; done < "$M/pub.pids"
-		# that publish is dead, not finished: its own pub() never got back to
-		# set LASTPUBOK (we are running from inside its wait, via the trap)
+		# That publish is dead, not finished. Its own pub() never got back to
+		# set LASTPUBOK (this code runs from inside its wait, through the trap).
 		LASTPUBOK=0
 	fi
 	[ "$LASTPUBOK" = 0 ] || pub -r "$BASE/availability" offline
@@ -328,6 +332,6 @@ while kill -0 $SUB 2>/dev/null; do
 	fi
 	sleep 0.25
 done
-log "subscriber ended (broker gone?); restarting"
+log "subscriber ended (broker gone?). Restarting"
 kill $HANDLER 2>/dev/null
 exit 1

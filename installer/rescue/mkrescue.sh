@@ -1,15 +1,15 @@
 #!/bin/bash
-# Build the mainline RESCUE image for the golden slot (p1:boot.img).
-# U-Boot's golden bootcmd is "fatload mmc 0 ${loadaddr} boot.img;
-# bootm", so the rescue is an Android v0 boot image exactly like tsxboot.img:
-# same kernel + DTB (byte-identical, from BASE), initramfs = BASE's initramfs
-# (rootfs switch_root initramfs with installer stage 2) + a second cpio archive
-# appended (the kernel unpacks concatenated archives in order) that adds:
+# Build the mainline RESCUE image for the golden slot (p1:boot.img). The golden
+# bootcmd of U-Boot is "fatload mmc 0 ${loadaddr} boot.img; bootm". So the
+# rescue is an Android v0 boot image, exactly like tsxboot.img: the same kernel +
+# DTB (byte-identical, from BASE), and the initramfs of BASE (the rootfs switch_root
+# initramfs with installer stage 2) plus a second cpio archive appended to it. The
+# kernel unpacks concatenated archives in order. The second archive adds:
 #   /etc/tsx/rescue-image      flag: /init goes straight to the rescue system
-#   /usr/sbin/tsx-rescue       status / done / banner (IP in /etc/motd; the LCD screen is
+#   /usr/sbin/tsx-rescue       status / done / banner (IP in /etc/motd. The LCD screen is
 #                              tsx-rescue-status, from BASE)
-#   /usr/local/sbin/tsx-boot-ok + /etc/tsx/uboot-env.conf   (from work/rootfs overlay)
-#   /etc/inittab               BASE's + "::once:/usr/sbin/tsx-rescue banner"
+#   /usr/local/sbin/tsx-boot-ok + /etc/tsx/uboot-env.conf   (from the work/rootfs overlay)
+#   /etc/inittab               the one of BASE + "::once:/usr/sbin/tsx-rescue banner"
 #   rescue/mkrescue.sh [--base IMG] [--model tsw1060] [--out IMG]
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INSTALLER_DIR=$(cd "$HERE/.." && pwd); ROOTFS_DIR=$(cd "$INSTALLER_DIR/../rootfs" && pwd)

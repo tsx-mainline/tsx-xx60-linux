@@ -1,33 +1,34 @@
 #!/usr/bin/env python3
 """tsx-env.py: read, check, merge and write the xx60 U-Boot env block.
 
-The env U-Boot 1.00.x reads and saves lives on the SD card (mmcblk0) at byte
-0x100000, 64 KiB, one copy: 4-byte CRC32 (little endian) over the next 65532
-bytes, then "name=value\\0" entries, a terminating "\\0", zero padding
-(work/rootfs proved the location; all three known blocks are laid out like this).
+The env that U-Boot 1.00.x reads and saves lives on the SD card (mmcblk0) at
+byte 0x100000. It is 64 KiB with one copy: a 4-byte CRC32 (little endian) over
+the next 65532 bytes, then "name=value\\0" entries, a terminating "\\0", and zero
+padding (work/rootfs proved the location, and all three known blocks have this
+layout).
 
-Usage (SRC/DST = a block device, a card image, or a bare 64 KiB env file;
-a file of exactly 65536 bytes is taken as a bare env block, anything else is
-read at --offset, default 0x100000):
+Usage (SRC/DST = a block device, a card image, or a bare 64 KiB env file).
+The script takes a file of exactly 65536 bytes as a bare env block. It reads
+anything else at --offset (default 0x100000):
   tsx-env.py show SRC [NAME...]
   tsx-env.py check SRC                      CRC + "this is a xx60 env" (exit 1 if not)
   tsx-env.py unit SRC                       the per-unit variables (PER_UNIT below)
   tsx-env.py merge SRC OUT [--guard fallback|nogolden] [--no-defuse-golden]
             [--set NAME=VALUE ...] [--unset NAME ...]
-      OUT = SRC's env with ONLY the hook variables changed: tsx_boot and
+      OUT = the env of SRC with ONLY the hook variables changed: tsx_boot and
       switch_bootmode set (byte-identical to the hook on the TSW-1060),
-      boot_retry=0, golden_boot_retry=0, DataRecoveryDone=1 (the Crestron golden
-      image then does not format p5/p7; --no-defuse-golden
-      leaves it as it is). Every
-      other variable keeps its exact bytes and its position; new ones are
-      appended (fw_setenv does the same). OUT is a bare 64 KiB block.
+      boot_retry=0, golden_boot_retry=0, DataRecoveryDone=1 (then the Crestron
+      golden image does not format p5/p7. --no-defuse-golden leaves it as it
+      is). Every other variable keeps its exact bytes and its position. New
+      variables go at the end (fw_setenv does the same). OUT is a bare 64 KiB block.
   tsx-env.py generic SRC OUT --model tsw1060|tsw760 [--guard ..] [--no-defuse-golden]
-      for a card image that is not made for one unit: SRC's env (a donor unit)
-      with the per-unit identity removed (see NEUTRAL) + the hook.
+      for a card image that is not made for one unit: the env of SRC (a donor
+      unit) with the per-unit identity removed (see NEUTRAL) + the hook.
   tsx-env.py unhook SRC OUT
-      factory state for Crestron's Android (factory/puf-tool.sh): stock
+      factory state for the Android of Crestron (factory/puf-tool.sh): stock
       switch_bootmode, tsx_boot and tsx_once deleted, boot_retry/golden_boot_retry 0,
-      fwUpgrade 0, reformat* 0, DataRecoveryDone 0. Identity and everything else unchanged.
+      fwUpgrade 0, reformat* 0, DataRecoveryDone 0. The identity and everything
+      else stay unchanged.
   tsx-env.py write BLOCK DST                write a bare 64 KiB block at DST+offset
   tsx-env.py diff A B                       variable-level diff of two env blocks
 """
@@ -43,10 +44,10 @@ TSX_BOOT = ('mmcinfo; if fatexist mmc 0 tsxboot.off; then echo tsx: mainline dis
 GUARDS = {
     'fallback': STOCK_SWITCH + 'if itest ${boot_retry} -lt 6; then run tsx_boot; fi',
     'nogolden': STOCK_SWITCH + 'if itest ${boot_retry} -lt 6 || itest ${boot_retry} -gt 9; then run tsx_boot; fi',
-    # true one-shot (tsx-rescue-arm.sh's default): gated on tsx_once, not
-    # boot_retry. U-Boot clears tsx_once (setenv 0; saveenv) BEFORE running
-    # tsx_boot, so installing this hook does nothing until something else
-    # sets tsx_once=1, and the shot is spent the instant this line runs.
+    # A true one-shot (the default of tsx-rescue-arm.sh): gated on tsx_once, not
+    # boot_retry. U-Boot clears tsx_once (setenv 0; saveenv) BEFORE it runs
+    # tsx_boot. So installing this hook does nothing until something else sets
+    # tsx_once=1, and the shot is spent as soon as this line runs.
     'once': STOCK_SWITCH + 'if itest ${tsx_once} -eq 1; then setenv tsx_once 0; saveenv; run tsx_boot; fi',
 }
 KNOWN_SWITCH = {STOCK_SWITCH: 'stock', STOCK_SWITCH + 'run tsx_boot': 'plain',
@@ -57,9 +58,9 @@ KNOWN_SWITCH = {STOCK_SWITCH: 'stock', STOCK_SWITCH + 'run tsx_boot': 'plain',
 # ethaddr ..:b8:30, TSW-1060 B ..:b8:37, TSW-760 C from xx60-FACTORY.img)
 # against the built-in default env of the running U-Boot (results/env-per-unit.txt).
 #   identity: set in the Crestron/Jabil factory, nothing recreates them
-#   hw:       re-detected by U-Boot at every boot on 2 GB units
-#             (select_m8m2_dtd: aml_dt, lcmsupplier; "lcd dpck": lcdsize,
-#             display_*, fb_*), but kept anyway
+#   hw:       U-Boot detects them again at every boot on 2 GB units
+#             (select_m8m2_dtd: aml_dt, lcmsupplier. "lcd dpck": lcdsize,
+#             display_*, fb_*), but the script keeps them anyway
 #   state:    Crestron runtime/config state kept by Android scripts
 PER_UNIT = {
     'identity': ['ethaddr', 'tsid', 'product_name', 'lan_hostname', 'updater_version', 'updater_build'],
@@ -70,8 +71,8 @@ PER_UNIT = {
               'DataRecoveryDone', 'reformatDataPartition', 'reformatExtendedPartition', 'fwUpgrade',
               'boot_complete_recover'],
 }
-# generic image: identity removed / neutral (U-Boot then uses what it has:
-# efuse MAC if burned (common/main.c), else no MAC in the env)
+# Generic image: identity removed or neutral. U-Boot then uses what it has: the
+# efuse MAC if burned (common/main.c), else no MAC in the env.
 NEUTRAL = {'tsid': 'FFFFFFFF', 'standaloneapp': '0', 'forced_auth_mode': 'true'}
 MODEL_HW = {
     'tsw1060': {'lcdsize': '10inch', 'aml_dt': 'yushan_one_10inch', 'display_width': '1280',

@@ -1,6 +1,6 @@
 #!/bin/sh
-# Print the DHCP address on the serial console (kernel log), in the format
-# the host boot loop (the host TFTP boot loop (tools/bench/tftpboot.sh)) looks for: "eth0: A.B.C.D/NN".
+# Print the DHCP address on the serial console (kernel log). The host TFTP
+# boot loop (tools/bench/tftpboot.sh) looks for this format: "eth0: A.B.C.D/NN".
 (
 for i in $(seq 1 60); do
 	a=$(ip -4 -o addr show dev eth0 2>/dev/null | awk '{print $4; exit}')

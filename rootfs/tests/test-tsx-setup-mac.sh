@@ -1,14 +1,15 @@
 #!/bin/bash
 # Host test: the eth0-MAC selection in rootfs/overlay/etc/init.d/tsx-setup
-# (docs/recovery.md "Random MAC in the rescue, and the fix"). Runs the exact
-# same script the panel runs, via the TSX_MMCBLK0/TSX_ETH0_MAC_FILE
-# host-test hooks (same idea as tsx-config's TSX_APPLY_PREFIX), against a
-# fake env image standing in for /dev/mmcblk0. No docker, no real block
-# device, no root.
+# (docs/recovery.md "Random MAC in the rescue, and the fix"). The test runs the
+# same script that the panel runs. It uses the TSX_MMCBLK0 and
+# TSX_ETH0_MAC_FILE host-test hooks (the same idea as TSX_APPLY_PREFIX of
+# tsx-config). A fake env image stands in for /dev/mmcblk0. The test needs no
+# docker, no real block device and no root.
 #
-# Also checks that every rescue path sets the same MAC: the logic lives in
-# the initramfs's base rcS (force-rescue on a TSS-10 got a random MAC and a
-# different DHCP address while it lived only in the rescue image's rcS).
+# The test also checks that every rescue path sets the same MAC. The logic
+# lives in the base rcS of the initramfs. Before, a force-rescue on a TSS-10
+# got a random MAC and a different DHCP address. The logic lived only in the
+# rcS of the rescue image.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 SCRIPT="$HERE/overlay/etc/init.d/tsx-setup"
@@ -28,13 +29,13 @@ mkenv() {  # mkenv FILE [ETHADDR-LINE]
 	{ [ -n "${2:-}" ] && printf '%s\n' "$2"; printf 'other=1\n'; } >> "$1"
 }
 
-# run_setup MMCBLK MACFILE: source tsx-setup under busybox sh (openrc
-# helpers stubbed; einfo prints to stdout as OpenRC's does, so a message that
-# leaks into select_eth0_mac's answer fails the test) and
-# call ONLY select_eth0_mac -- never start(), which also touches zram swap
-# and the real /sys cpufreq governor and has no business running against a
-# shared test host. Prints "MAC=<value>" and leaves MACFILE as the function
-# left it.
+# run_setup MMCBLK MACFILE: source tsx-setup under busybox sh and call ONLY
+# select_eth0_mac. The openrc helpers are stubs. einfo prints to stdout as
+# OpenRC does, so a message that leaks into the answer of select_eth0_mac
+# fails the test. The test never calls start(): start() also touches zram
+# swap and the real /sys cpufreq governor, and it must not run on a shared
+# test host. run_setup prints "MAC=<value>" and leaves MACFILE as the
+# function left it.
 run_setup() {
 	local mmcblk=$1 macf=$2
 	TSX_MMCBLK0="$mmcblk" TSX_ETH0_MAC_FILE="$macf" busybox sh -c '
@@ -66,9 +67,9 @@ GOT=$(echo "$OUT" | sed -n 's/^MAC=//p')
 [ "$GOT" = "00:11:22:33:44:55" ] && ok "a stale persisted MAC no longer wins over a valid env ethaddr" \
 	|| bad "stale persisted MAC was used instead of the env: got $GOT"
 [ "$(cat "$MF3")" = "00:11:22:33:44:55" ] && ok "the stale mac file was resynced to the env" || bad "mac file still stale: $(cat "$MF3")"
-# this is exactly what the rescue system (rcS) always computes from the same
-# env, unconditionally -- so a kiosk boot and a rescue boot of the same unit
-# now always agree, instead of only agreeing before the file went stale.
+# The rescue system (rcS) always computes this MAC from the same env,
+# unconditionally. So a kiosk boot and a rescue boot of the same unit now
+# always agree. Before, they agreed only until the file went stale.
 
 echo "== env present but unreadable/malformed (no ethaddr line): the persisted MAC is kept, nothing regenerated =="
 BADENV="$W/mmcblk0.bad"; mkenv "$BADENV"

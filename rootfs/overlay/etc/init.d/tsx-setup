@@ -2,26 +2,26 @@
 description="TSX early setup: time zone, eth0 MAC, zram swap, CPU governor"
 depend() { need localmount; before networking kiosk; }
 
-# select_eth0_mac: print the MAC eth0 should use, on stdout, and keep
-# TSX_ETH0_MAC_FILE in step with it. Split out of start() so a host test
-# (rootfs/tests/test-tsx-setup-mac.sh) can call just this, without the zram/
-# cpufreq/timezone side effects the rest of start() has on a real host.
+# select_eth0_mac: print the MAC that eth0 must use on stdout, and keep
+# TSX_ETH0_MAC_FILE in step with it. It is separate from start(), so a host
+# test (rootfs/tests/test-tsx-setup-mac.sh) can call only this function. The
+# rest of start() has zram, cpufreq and timezone side effects on a real host.
 #
-# mainline has no MAC source on this board (stmmac picks a random one each
-# boot, so the DHCP address changed every boot). The U-Boot env "ethaddr"
-# (the MAC U-Boot itself uses for DHCP, read only from mmcblk0 at 1 MiB, the
-# live env, verified 2026-09-26) ALWAYS wins when it is present and valid,
-# matching the rescue system's own priority
-# (rootfs/initramfs/overlay/etc/init.d/rcS) -- a stateless RAM system that
-# re-derives it from the same env every boot, with no file to fall out of
-# sync. TSX_ETH0_MAC_FILE (/etc/tsx/eth0.mac) is only the fallback for a
-# board with no ethaddr in its env, and is kept in step with a valid ethaddr
-# whenever one is seen (docs/recovery.md "Random MAC in the rescue, and
-# the fix").
+# Mainline has no MAC source on this board. stmmac picks a random MAC at each
+# boot, so the DHCP address changed at every boot. The U-Boot env "ethaddr"
+# ALWAYS wins when it is present and valid. It is the MAC that U-Boot itself
+# uses for DHCP. The script reads it only from mmcblk0 at 1 MiB, the live
+# env (verified 2026-09-26). This matches the priority of the rescue system
+# (rootfs/initramfs/overlay/etc/init.d/rcS). That system is stateless and runs
+# in RAM. It derives the MAC from the same env at every boot, so no file can
+# fall out of sync. TSX_ETH0_MAC_FILE (/etc/tsx/eth0.mac) is only the
+# fallback for a board with no ethaddr in its env. The script keeps it in
+# step with a valid ethaddr whenever it sees one (docs/recovery.md "Random
+# MAC in the rescue, and the fix").
 #
-# TSX_MMCBLK0/TSX_ETH0_MAC_FILE: host-test hooks only (rootfs/tests/), same
-# idea as tsx-config's TSX_APPLY_PREFIX -- empty/unset leaves the panel's
-# real paths.
+# TSX_MMCBLK0 and TSX_ETH0_MAC_FILE are hooks for host tests only
+# (rootfs/tests/). They work like TSX_APPLY_PREFIX in tsx-config. If they
+# are empty or unset, the script uses the real paths of the panel.
 select_eth0_mac() {
 	blk=${TSX_MMCBLK0:-/dev/mmcblk0}
 	macf=${TSX_ETH0_MAC_FILE:-/etc/tsx/eth0.mac}
@@ -35,9 +35,9 @@ select_eth0_mac() {
 		[ -s "$macf" ] && cur=$(head -1 "$macf")
 		if [ "$cur" != "$mac" ]; then
 			mkdir -p "$(dirname "$macf")" && echo "$mac" > "$macf"
-			# stderr: stdout is this function's answer (OpenRC's einfo prints
-			# to stdout; on a fresh install this line made mac= two lines and
-			# `ip link set` failed, leaving the random MAC)
+			# Use stderr, because stdout is the answer of this function. einfo
+			# of OpenRC prints to stdout. On a fresh install, this line made
+			# mac= two lines, and `ip link set` failed. The random MAC stayed.
 			einfo "eth0 MAC $mac (from U-Boot env; $macf was '${cur:-unset}', now back in sync)" >&2
 		fi
 	else
@@ -53,7 +53,7 @@ select_eth0_mac() {
 
 start() {
 	ebegin "TSX setup"
-	# boot splash status line (no-op when the text console has the screen)
+	# Boot splash status line (does nothing when the text console has the screen)
 	/usr/local/bin/tsx-splash -s "starting services" -p 30 status 2>/dev/null
 	. /etc/kiosk.conf
 	[ -r /run/tsx/kiosk.conf ] && . /run/tsx/kiosk.conf   # panel.conf overrides (tsx-config apply)
@@ -64,7 +64,7 @@ start() {
 	mac=$(select_eth0_mac)
 	if ip link set dev eth0 address "$mac" 2>/dev/null; then einfo "eth0 MAC $mac"
 	else ewarn "eth0 MAC '$mac' could not be set: eth0 keeps $(cat /sys/class/net/eth0/address 2>/dev/null)"; fi
-	# compressed swap in RAM (needs CONFIG_ZRAM; the panel kernel lacks it today)
+	# Compressed swap in RAM. It needs CONFIG_ZRAM, and the panel kernel lacks it today.
 	if [ ! -e /sys/block/zram0 ]; then modprobe zram num_devices=1 2>/dev/null || true; fi
 	if [ -e /sys/block/zram0/disksize ] && ! grep -q zram0 /proc/swaps; then
 		mem=$(awk '/MemTotal/{print $2}' /proc/meminfo)

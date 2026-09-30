@@ -1,13 +1,14 @@
 #!/bin/bash
-# Stamp a built rescue image (installer/rescue/mkrescue.sh's own output, UNCHANGED
-# -- this script does not modify anything under installer/rescue/) with its version
-# line, by appending one more cpio archive on top, the same layering trick
-# mkrescue.sh itself uses for the rescue overlay: the kernel unpacks concatenated
-# cpio archives in order, so a later file wins.
+# Stamp a built rescue image (the own output of installer/rescue/mkrescue.sh,
+# UNCHANGED, because this script does not modify anything under
+# installer/rescue/) with its version line. It appends one more cpio archive on
+# top. This is the same layering trick that mkrescue.sh uses for the rescue
+# overlay. The kernel unpacks concatenated cpio archives in order, so a later
+# file wins.
 #
-# The rescue screen itself (/usr/sbin/tsx-rescue-status, started by the base
-# initramfs's inittab on tty1) now ships in the base initramfs, so the
-# initramfs's own rescue shows it too. This adds only:
+# The rescue screen itself (/usr/sbin/tsx-rescue-status, started on tty1 by the
+# inittab of the base initramfs) now ships in the base initramfs, so the own
+# rescue of the initramfs shows it too. This script adds only:
 #   /etc/tsx/rescue-version   "built <date>, kernel <flavor>", shown on the screen
 #
 #   installer/rescue-v2/mkrescue-v2.sh --base RESCUE_IMG [--flavor lts|stable] [--out IMG]
@@ -27,9 +28,9 @@ ks, rs, ps = h[1], h[3], h[8]; pad = lambda n: (n + ps - 1) // ps * ps
 open(sys.argv[2], 'wb').write(d[ps + pad(ks): ps + pad(ks) + rs])
 PY
 # NOTE: BASE (a rescue image) is itself two concatenated cpio archives (the
-# kiosk switch_root initramfs + the rescue overlay, see installer/rescue/mkrescue.sh);
-# a plain `cpio -id` from userspace only unpacks the FIRST one it finds -- that
-# is the base initramfs, which must carry the screen.
+# kiosk switch_root initramfs + the rescue overlay, see installer/rescue/mkrescue.sh).
+# A plain `cpio -id` from userspace unpacks only the FIRST archive that it finds.
+# That is the base initramfs, and it must carry the screen.
 mkdir -p "$W/base"; (cd "$W/base" && zcat "$W/base-rd.gz" | cpio -id --quiet etc/inittab usr/sbin/tsx-rescue-status 2>/dev/null) || true
 [ -x "$W/base/usr/sbin/tsx-rescue-status" ] && grep -q 'tsx-rescue-status loop' "$W/base/etc/inittab" || { echo "mkrescue-v2.sh: $BASE's initramfs has no rescue screen (usr/sbin/tsx-rescue-status + its inittab line): rebuild the initramfs"; exit 1; }
 

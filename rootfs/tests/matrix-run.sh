@@ -1,11 +1,15 @@
 #!/bin/bash
-# browser hardware matrix: one configuration.
+# Browser hardware matrix: one configuration.
 #   matrix-run.sh CFG KIOSK_GPU 'EXTRA_FLAGS' 'DISABLE_FEATURES' CPUFREQ_AWAKE [IP]
-# Sets the four kiosk.conf values on the panel (backup kiosk.conf.pre-matrix
-# once), restarts the kiosk (and reloads tsx-cpufreq), waits for the page,
-# then: kiosk.log head, chrome://gpu + benchmark (perf-bench.sh), grim
-# screenshot of the dashboard and of cards.html, OSK check, and after
-# 5 minutes of running the GPU-process crash count (chrome://gpu + log).
+# The script sets the four kiosk.conf values on the panel. It backs up
+# kiosk.conf as kiosk.conf.pre-matrix once. It restarts the kiosk, reloads
+# tsx-cpufreq, and waits for the page. Then it collects:
+#  - the head of kiosk.log
+#  - chrome://gpu and a benchmark (perf-bench.sh)
+#  - a grim screenshot of the dashboard and one of cards.html
+#  - the OSK check
+#  - after 5 minutes of running, the GPU-process crash count (chrome://gpu
+#    and the log)
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd); R=$HERE/../results
 CFG=$1 GPU=$2 EXTRA=$3 FEAT=$4 GOV=$5 IP=${6:-${PANEL_IP:?set PANEL_IP or pass IP as arg 6}}

@@ -27,11 +27,11 @@ openssh-client-default
 seatd
 seatd-openrc
 # cage itself is built from source by mkrootfs.sh: 0.3.1 (fixes Chromium --kiosk
-# fullscreen; 0.3.0 in v3.24 ignores the request made before the window maps)
+# fullscreen. 0.3.0 in v3.24 ignores the request made before the window maps)
 # + src/cage-0.3.1-argb8888-fallback.patch (Meson8 planes have no XRGB8888).
 wlroots0.20
 # on-screen keyboard (KIOSK_OSK): sway has the layer-shell / input-method-v2 /
-# text-input-v3 protocols cage lacks; dbus for squeekboard's session API
+# text-input-v3 protocols cage lacks. Dbus for squeekboard's session API
 sway
 # sway's background = the boot splash until the page has painted (kiosk-session)
 swaybg
@@ -59,7 +59,7 @@ wayland-libs-client
 chromium=152.0.7977.82-r0
 font-dejavu
 libinput
-# GPU readiness (Lima / Mali-450 through Mesa; unused on simpledrm)
+# GPU readiness (Lima / Mali-450 through Mesa. Unused on simpledrm)
 mesa-dri-gallium
 mesa-egl
 mesa-gles
@@ -83,7 +83,7 @@ avahi
 avahi-compat-libdns_sd
 # voice : Assist satellite linux-voice-assistant (ESPHome API,
 # installed by voice/install-lva.sh): python3 +
-# zeroconf, numpy, protobuf, cryptography (aioesphomeapi imports; also the
+# zeroconf, numpy, protobuf, cryptography (aioesphomeapi imports. Also the
 # ESPHome API encryption, rootfs/voice/shim/tsx_panel/noise.py), tzlocal,
 # aiohappyeyeballs, libmpv via python-mpv (TTS / media playback on ALSA)
 python3

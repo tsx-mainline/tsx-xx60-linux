@@ -1,15 +1,16 @@
 #!/bin/bash
-# Chroot test of etc/init.d/tsx-data's move+bind logic (installer p2 space
-# fix): a fixed 800 MiB p2 leaves almost no headroom once packages are
-# installed, so /var/lib/kiosk, /var/log, /var/lib/tsx, /var/lib/sendspin,
-# /root and /home need to live on /data (p4, tsxdata) instead, moved there
-# once and bind-mounted every boot. This is a dedicated chroot test rather
-# than an addition to test-initramfs-qemu.sh's qemu boot: that harness boots
-# a whole-disk rootfs-p2.ext4 image with no spare partition to stand in for
-# tsxdata, so a loop-mounted ext4 in a privileged container is the cheap way
-# to exercise the real script (read straight from the rootfs overlay, not a
-# copy) against real bind mounts, ownership and the marker/idempotency file.
-# Needs docker --privileged. Usage: tests/test-tsx-data.sh
+# Chroot test of the move and bind logic of etc/init.d/tsx-data (installer p2
+# space fix). A fixed 800 MiB p2 leaves almost no headroom once packages are
+# installed. So /var/lib/kiosk, /var/log, /var/lib/tsx, /var/lib/sendspin,
+# /root and /home must live on /data (p4, tsxdata). The script moves them
+# there once and bind-mounts them at every boot.
+# This is a dedicated chroot test and not an addition to the qemu boot of
+# test-initramfs-qemu.sh. That harness boots a whole-disk rootfs-p2.ext4 image
+# with no spare partition to stand in for tsxdata. A loop-mounted ext4 in a
+# privileged container is the cheap way to exercise the real script. The test
+# reads the script straight from the rootfs overlay and not from a copy. It
+# checks real bind mounts, ownership and the marker (idempotency) file.
+# The test needs docker --privileged. Usage: tests/test-tsx-data.sh
 set -uo pipefail
 ROOTFS_DIR=$(cd "$(dirname "$0")/../../rootfs" && pwd)
 SCRIPT="$ROOTFS_DIR/overlay/etc/init.d/tsx-data"

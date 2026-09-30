@@ -1,7 +1,7 @@
 #!/bin/sh
 # ALS/light-sensor hardware checks, run ON THE PANEL (read-only except a short blank/wake):
 #   scp rootfs/tests/hw-check.sh tools/regs/regdump root@<ip>:/tmp/ && ssh root@<ip> sh /tmp/hw-check.sh
-# Writes nothing to storage; touches no audio output.
+# Writes nothing to storage. Touches no audio output.
 RD=/tmp/regdump
 say() { echo; echo "== $*"; }
 say kernel; uname -a; cat /proc/cmdline

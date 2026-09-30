@@ -1,6 +1,7 @@
 #!/bin/sh
-# meas.sh TAG FILE [DEV]: on the panel. ZL AecCtrl0 (0x0300) -> 0x9c06 (master bypass, no soft reset,
-# the standard leveltest2 method), record the mic (tsx_dsnoop) 5 s, play FILE through DEV (default) at +1.5 s,
+# meas.sh TAG FILE [DEV]: run on the panel. Set ZL AecCtrl0 (0x0300) to 0x9c06
+# (master bypass, no soft reset, the standard leveltest2 method). Record the mic
+# (tsx_dsnoop) for 5 s and play FILE through DEV (default) at +1.5 s. Then
 # restore 0x0300.
 TAG=$1; F=$2; D=${3:-default}
 OLD=$(sh /tmp/zlreg.sh 0x0300 | cut -d' ' -f2)

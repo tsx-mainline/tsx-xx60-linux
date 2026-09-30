@@ -1,21 +1,23 @@
 #!/bin/bash
-# Host end-to-end test of the Android installer on a loop device with the
-# exact Crestron MBR (rootfs/tests/crestron-mbr.sfdisk) and the REAL stock
-# U-Boot env block of the TSW-1060 (captures/.../tsw1060-mmcblk0p3-env.img,
-# taken 2026-09-25 before the hook) at 0x100000.
+# Host end-to-end test of the Android installer on a loop device. The device
+# has the exact Crestron MBR (rootfs/tests/crestron-mbr.sfdisk). It also has
+# the REAL stock U-Boot env block of the TSW-1060 at 0x100000
+# (captures/.../tsw1060-mmcblk0p3-env.img, taken 2026-09-25 before the hook).
 #
 # Stage 1 (tsx-android-install.sh) runs under the STOCK Android /system/bin/bash
-# 3.2 (ARM, from system.img, through qemu-user binfmt). Stand-ins: busybox =
-# Alpine's (the stock applet set is checked by check-android-tools.sh),
-# fw_printenv/fw_setenv = u-boot-tools (the stock ones are bionic binaries
-# that do not run under qemu-user).
+# 3.2. The bash is the ARM binary from system.img, run through qemu-user
+# binfmt. Two tools are stand-ins. The busybox is the Alpine one
+# (check-android-tools.sh checks the stock applet set). fw_printenv and
+# fw_setenv come from u-boot-tools, because the stock ones are bionic
+# binaries that do not run under qemu-user.
 # The mainline initramfs (tsx-autoinstall) runs under Alpine busybox sh with
-# rootfs/install.sh -- still exercised directly here (independent of
-# tsx-android-install.sh) for the tsx-install/GO reinstall and U-Boot jabil
-# boot triggers, which do not go through the Android-side script at all.
-# Payloads are small fakes built here (fake rootfs tarball, fake boot image whose
-# ramdisk contains usr/sbin/tsx-autoinstall, a p5-sized ext4 image).
-# Needs docker --privileged (losetup) and ~20 s. Usage: tests/test-android-install.sh
+# rootfs/install.sh. The test also runs that path directly, independent of
+# tsx-android-install.sh. It covers the tsx-install/GO reinstall and the U-Boot
+# jabil boot triggers, which do not go through the Android-side script.
+# The payloads are small fakes built here: a rootfs tarball, a boot image
+# whose ramdisk contains usr/sbin/tsx-autoinstall, and a p5-sized ext4 image.
+# The test needs docker --privileged (losetup) and about 20 s.
+# Usage: tests/test-android-install.sh
 set -euo pipefail
 INSTALLER_DIR=$(cd "$(dirname "$0")/.." && pwd)
 ROOTFS_DIR=$(cd "$INSTALLER_DIR/../rootfs" && pwd)
@@ -23,7 +25,7 @@ CAPTURES=${CAPTURES_DIR:-}
 SYSIMG=${SYSIMG:-}   # required: the real Crestron system.img (no default here)
 ENVIMG=$CAPTURES/tsw-1060/backup/tsw1060-mmcblk0p3-env.img
 if [ -z "$CAPTURES" ] || [ ! -f "$ENVIMG" ] || [ ! -f "$SYSIMG" ]; then
-	echo "SKIPPED: needs the real stock U-Boot env capture (CAPTURES_DIR) and the Crestron system.img (SYSIMG); not present here"
+	echo "SKIPPED: needs the real stock U-Boot env capture (CAPTURES_DIR) and the Crestron system.img (SYSIMG). Not present here"
 	exit 0
 fi
 W=${TMPDIR:-/tmp}/tsx-android-install-test; rm -rf "$W"; mkdir -p "$W"
@@ -120,7 +122,7 @@ echo "rootfstype=ramfs init=/init console=ttyAML0" > /tmp/cmdline
 export TSX_SHARE=/share TSX_STICK=/mnt/media_rw/udisk0 TSX_NO_REBOOT=1 TSX_CMDLINE=/tmp/cmdline TSX_DT_MODEL="Crestron TSW-1060" TSX_RUN=/tmp/run
 AUTO="sh /installer/initramfs/tsx-autoinstall"
 mkdir -p /mnt/p1w; mount -o rw /dev/${n}p1 /mnt/p1w
-{ echo "# written directly, not by tsx-android-install.sh; read by tsx-autoinstall in the mainline initramfs"
+{ echo "# written directly, not by tsx-android-install.sh. Read by tsx-autoinstall in the mainline initramfs"
   echo "SOURCE=usb"; echo "MODEL=tsw1060"; echo "UNIT=test"; echo "BOOTIMG_SHA256=$(sha256sum < /w/tsxboot.img | cut -d" " -f1)"; echo "ANDROID_BACKUP=/tmp"; } > /mnt/p1w/tsxinst.cfg
 umount /mnt/p1w
 $AUTO > /tmp/s2.txt 2>&1 || { cat /tmp/s2.txt /tmp/run/tsx-autoinstall.log; fail "stage 2"; }
@@ -186,7 +188,7 @@ grep -E "p2 written|p1:boot.img = mainline rescue|MBR: entry 4|DONE" /tmp/i12.tx
 [ "$(dd if=/dev/${n}p2 bs=1M count=16 2>/dev/null | sha256sum | cut -d" " -f1)" = "$P2SHA" ] && ok "p2 = the kiosk rootfs image (sha256 of the written range)"
 mount -o ro /dev/${n}p1 /mnt/p1
 cmp -s /mnt/p1/boot.img /w/rescue.img && cmp -s /mnt/p1/tsxboot.img /w/tsxboot.img && ok "p1: boot.img = rescue, tsxboot.img = kiosk image"
-grep -q "^MKDATA=p4" /mnt/p1/tsxlayout.cfg && [ ! -e /mnt/p1/tsxinst.cfg ] && ok "p1:tsxlayout.cfg orders the p4 format; no stage-2 install order"
+grep -q "^MKDATA=p4" /mnt/p1/tsxlayout.cfg && [ ! -e /mnt/p1/tsxinst.cfg ] && ok "p1:tsxlayout.cfg orders the p4 format. No stage-2 install order"
 MKUUID12=$(sed -n "s/^MKDATA_UUID=//p" /mnt/p1/tsxlayout.cfg)
 [ -n "$MKUUID12" ] && ok "p1:tsxlayout.cfg carries a fresh MKDATA_UUID ($MKUUID12)"
 umount /mnt/p1
@@ -210,10 +212,10 @@ env -u TSX_STICK $AUTO > /tmp/a13.txt 2>&1; mount -o ro /dev/${n}p4 /mnt/r; [ -f
 rm -f /mnt/media_rw/udisk0/tsx-install/GO; env -u TSX_STICK $AUTO > /tmp/a14.txt 2>&1 && ok "later boots: tsx-autoinstall exits 0, nothing to do"
 
 echo "== 8b. stale tsxdata superblock survives a factory restore (bug of 2026-09-27) -- MKDATA_UUID tells it apart"
-# (a) p4 currently holds a real (not corrupt) tsxdata fs with LABEL=tsxdata (from
-# 8/8a above), standing in for the stale superblock a factory restore leaves
-# behind. A fresh order (new MKDATA_UUID, as a real installer run would write)
-# must format over it rather than trust the label.
+# (a) p4 now holds a real, not corrupt, tsxdata fs with LABEL=tsxdata (from
+# 8/8a above). It stands in for the stale superblock that a factory restore
+# leaves behind. A fresh order has a new MKDATA_UUID, as a real installer run
+# writes. The installer must format over the fs and must not trust the label.
 NEWUUID=$(cat /proc/sys/kernel/random/uuid)
 [ "$NEWUUID" != "$MKUUID12" ] && ok "fresh MKDATA_UUID for the new order differs from the stale UUID of p4"
 mount /dev/${n}p1 /mnt/p1; rm -f /mnt/p1/tsxlayout.done
@@ -233,8 +235,8 @@ mount -o ro /dev/${n}p4 /mnt/r; [ -f /mnt/r/marker ] && ok "(b) marker2 survives
 # (c) old-style cfg (no MKDATA_UUID, as an older installer would leave) + a
 # CORRUPT stale tsxdata (label intact, e2fsck -fn fails): must still format,
 # because this is the exact shape of the reported bug (label-only check
-# missed a corrupt survivor). Corrupt the inode/journal area a few MiB in;
-# the superblock at byte 1024 is untouched, so blkid still reports tsxdata.
+# missed a corrupt survivor). Corrupt the inode/journal area a few MiB in.
+# The superblock at byte 1024 is untouched, so blkid still reports tsxdata.
 mkfs.ext4 -F -q -O ^metadata_csum_seed,^orphan_file -L tsxdata -m 1 /dev/${n}p4
 dd if=/dev/zero of=/dev/${n}p4 bs=4096 seek=1 count=2048 conv=notrunc 2>/dev/null   # zero 8 MiB of group-0 metadata (descriptors, bitmaps, inode table) right after the superblock block, leaving byte 1024 (the superblock itself, so blkid still sees tsxdata)
 blkid -s LABEL -o value /dev/${n}p4 | grep -qx tsxdata && ! e2fsck -fn /dev/${n}p4 >/dev/null 2>&1 && ok "(c) corrupted p4: blkid still says tsxdata, e2fsck -fn fails (reproduces the starting state of the bug)"
@@ -244,10 +246,10 @@ env -u TSX_STICK $AUTO > /tmp/a17.txt 2>&1
 grep -q "no MKDATA_UUID in this order" /tmp/run/tsx-autoinstall.log && grep -q "or e2fsck -fn failed: formatting" /tmp/run/tsx-autoinstall.log && ok "(c) old cfg + corrupt stale tsxdata: formatted (this is the bug from hardware 2026-09-27)"
 e2fsck -fn /dev/${n}p4 >/dev/null 2>&1 && ok "(c) p4 now passes e2fsck -fn (freshly formatted)"
 
-# (d) old-style cfg (no MKDATA_UUID) + a CLEAN stale tsxdata (label intact,
-# e2fsck -fn clean): not formatted again (this is the idempotency the label
-# check was originally meant to provide, and it must still work for an
-# order left by an older installer).
+# (d) An old-style cfg (no MKDATA_UUID) and a CLEAN stale tsxdata (label
+# intact, e2fsck -fn clean). The installer must not format again. The label
+# check was first meant to give this idempotency. It must still work for an
+# order that an older installer left.
 mkfs.ext4 -F -q -O ^metadata_csum_seed,^orphan_file -L tsxdata -m 1 /dev/${n}p4
 mount /dev/${n}p4 /mnt/r; echo keep3 > /mnt/r/marker; umount /mnt/r
 mount /dev/${n}p1 /mnt/p1; rm -f /mnt/p1/tsxlayout.done

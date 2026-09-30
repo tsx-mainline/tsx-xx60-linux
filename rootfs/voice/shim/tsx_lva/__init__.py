@@ -15,7 +15,7 @@ all driven by environment variables that /etc/init.d/tsx-voice sets from
         ptt: no on-device wake word or stop word inference (saves CPU; the
         models are still loaded so HA's wake word select keeps working)
   TSX_VOICE_KEEP_OUTPUT_OPEN=0|1
-        1 = upstream behaviour (mpv plays silence between sounds, the output
+        1 = upstream behavior (mpv plays silence between sounds, the output
         stream stays open, SPK_EN and dmix stay active all the time)
 
 When HA_TRANSPORT is esphome or both (panel.conf, tsx-config; default
@@ -212,7 +212,7 @@ def _patch_panel():
     # panel-entity command noisy in the log once VOICE=on. Each entity
     # already only acts on msg.key == self.key, so filtering to the one
     # entity that owns the key changes nothing functionally (Home Assistant
-    # never targets more than one entity per command); it only stops
+    # never targets more than one entity per command). It only stops
     # handing the message to entities it was never meant for.
     orig_handle = VoiceSatelliteProtocol.handle_message
     keyed_commands = (LightCommandRequest, SwitchCommandRequest,
@@ -297,7 +297,7 @@ def _patch():
         import pymicro_wakeword  # noqa: WPS433
         import pyopen_wakeword  # noqa: WPS433
 
-        # no features -> no inference; wake word and stop word never fire
+        # no features -> no inference. Wake word and stop word never fire
         pymicro_wakeword.MicroWakeWordFeatures.process_streaming = lambda self, audio: []
         pyopen_wakeword.OpenWakeWordFeatures.process_streaming = lambda self, audio: []
         # logging is not configured yet (LVA does it in main): print

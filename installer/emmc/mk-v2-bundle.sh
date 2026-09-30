@@ -1,19 +1,19 @@
 #!/bin/bash
-# Host: assemble one kernel flavor's slice of the v2 install payload (the
-# BUNDLE_DIR installer/steps/tsx-rescue-install reads): root.img (from
-# mk-tsxroot-emmc.sh) + the already-built eMMC boot image (kernel/mkimage.sh's
-# output for that flavor, e.g. hwtest/<flavor>/tsxboot-emmc.img) + one
-# manifest tying them together with a byte count and both sha256sums.
+# Host: assemble the slice of the v2 install payload for one kernel flavor (the
+# BUNDLE_DIR that installer/steps/tsx-rescue-install reads). The slice holds
+# root.img (from mk-tsxroot-emmc.sh), the already-built eMMC boot image (the
+# output of kernel/mkimage.sh for that flavor, e.g. hwtest/<flavor>/tsxboot-emmc.img)
+# and one manifest. The manifest ties them together with a byte count and both sha256sums.
 #
 #   mk-v2-bundle.sh --root-img FILE --boot-img FILE --flavor lts|stable --out-dir DIR
 #
-# root_bytes is the ROOT.IMG's own (compact) size, not the eMMC p8 partition
-# size (mk-tsxroot-emmc.sh sizes root.img to content + margin, well under
-# p8's ~2.9 GiB -- see docs/boot.md). If ROOT has a sibling
-# ROOT.manifest-fragment (mk-tsxroot-emmc.sh's own output, next to the image
-# it built), its root_partition_min_bytes is carried into this manifest too,
-# so installer/steps/tsx-rescue-install can refuse an unexpectedly small p8
-# even though it no longer checks for an exact size match against root_bytes.
+# root_bytes is the size of ROOT.IMG itself (compact), not the size of the eMMC
+# p8 partition. mk-tsxroot-emmc.sh sizes root.img to content plus a margin, well
+# under the ~2.9 GiB of p8 (see docs/boot.md). If ROOT has a sibling
+# ROOT.manifest-fragment (an output of mk-tsxroot-emmc.sh, next to the image
+# it built), the script also carries its root_partition_min_bytes into this manifest.
+# So installer/steps/tsx-rescue-install can refuse an unexpectedly small p8,
+# although it no longer checks for an exact size match against root_bytes.
 set -euo pipefail
 ROOT= BOOT= FLAVOR= OUT=
 while [ $# -gt 0 ]; do case $1 in --root-img) ROOT=$2; shift;; --boot-img) BOOT=$2; shift;; --flavor) FLAVOR=$2; shift;; --out-dir) OUT=$2; shift;; *) sed -n '2,14p' "$0"; exit 2;; esac; shift; done

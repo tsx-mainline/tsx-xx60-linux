@@ -1,31 +1,31 @@
 #!/bin/bash
-# Write a xx60 card image (from mkcard.sh) to the panel's SD card in a Linux
-# PC's card reader. No UART, no root shell on the panel.
+# Write a xx60 card image (from mkcard.sh) to the SD card of the panel in the card
+# reader of a Linux PC. It needs no UART and no root shell on the panel.
 #
 #   sudo sdcard/flash-card.sh --image card-tsw1060.img[.gz|.xz|.zst] --device /dev/sdX [options]
 #   sudo sdcard/flash-card.sh --restore BACKUP.img --device /dev/sdX
 #
 #   --mode auto|update|full   (default auto: update if the card holds the Crestron layout
 #                              and a valid xx60 env, else full)
-#       update  keep everything of the unit's card except: p1 gets tsxboot.img (golden
-#               boot.img stays), p5 = the image's rootfs, env = the card's OWN env + hook.
+#       update  keep everything on the card of the unit except: p1 gets tsxboot.img (golden
+#               boot.img stays), p5 = the rootfs of the image, env = the card's OWN env + hook.
 #               p2, p6 (/data), p7, p8, MBR, U-Boot copy: untouched.
-#       full    write the whole image (a new/blank/foreign card). If the card already has
-#               the Crestron MBR, its first MiB (MBR + U-Boot copy) is kept. The env is the
-#               card's own + hook if it has one, else --unit-env FILE, else refused unless
-#               --generic-env (the image's env: no MAC in the env).
+#       full    write the whole image (a new, blank or foreign card). If the card already has
+#               the Crestron MBR, the script keeps its first MiB (MBR + U-Boot copy). The env is the
+#               own env of the card + hook if it has one, else --unit-env FILE, else the script
+#               refuses, unless --generic-env is set (the env of the image: no MAC in the env).
 #   --unit-env FILE   64 KiB env block of this unit (a flash-card/installer backup, p1:tsxenv.bak)
-#   --keep-data       full mode: do not write p6/p7/p8 (keep the card's Crestron data)
+#   --keep-data       full mode: do not write p6/p7/p8 (keep the Crestron data on the card)
 #   --guard fallback|nogolden   hook variant (default fallback)
 #   --no-defuse-golden  do not set DataRecoveryDone=1 (default: set it, so the
 #                     Crestron golden image does not format p5/p7 and empty /data)
-#   --backup-dir DIR  where the full card backup goes (default ./tsx-card-backups); REQUIRED
-#                     step, the flash does not start without a verified backup
-#   (card size: at least the original Phison MP995, 3,980,394,496 bytes = 7774208 sectors;
-#    a larger card is accepted, the layout is unchanged and the rest stays unused;
-#    a smaller card is always refused)
+#   --backup-dir DIR  where the full card backup goes (default ./tsx-card-backups). This
+#                     step is REQUIRED. The flash does not start without a verified backup
+#   (card size: at least the original Phison MP995, 3,980,394,496 bytes = 7774208 sectors.
+#    The script accepts a larger card. The layout stays the same and the rest stays unused.
+#    It always refuses a smaller card)
 #   --force-device    accept a block device that is not removable/USB/MMC
-#   --dry-run         read, back up, plan and print; write nothing
+#   --dry-run         read, back up, plan and print. Write nothing
 #   --yes             do not ask
 # A regular file as --device is accepted (tests). Needs: python3, mtools, GNU dd, sha256sum.
 set -euo pipefail
@@ -63,7 +63,7 @@ elif [ -f "$DEV" ]; then SIZE=$(stat -c %s "$DEV")
 else die "$DEV is neither a block device nor a file"; fi
 if [ "$SIZE" != $CARD_BYTES ]; then
 	[ "$SIZE" -lt $CARD_BYTES ] && die "card is $SIZE bytes, smaller than the xx60 card ($CARD_BYTES): refused"
-	say "NOTE: card is larger than the original Phison MP995 ($SIZE > $CARD_BYTES bytes, 7774208 sectors): the Crestron layout uses the first $CARD_BYTES, the rest stays unused"
+	say "NOTE: card is larger than the original Phison MP995 ($SIZE > $CARD_BYTES bytes, 7774208 sectors). The Crestron layout uses the first $CARD_BYTES bytes and the rest stays unused"
 fi
 mkdir -p "$BKDIR"; TS=$(date +%Y%m%d-%H%M%S); LOG=$BKDIR/flash-$TS.log; : > "$LOG"
 say "target $DEV ($SIZE bytes)"
@@ -105,7 +105,7 @@ else say "WARNING: no manifest next to the image: not verified"; fi
 $ENVPY check "$IMG" >> "$LOG" || die "the image's env is not valid (see $LOG)"
 # p5 must stay mountable by the stock Android kernel 3.10 (Android shares p5 as its
 # /sdcard after a fallback): no metadata_csum_seed (INCOMPAT 0x2000), no orphan_file
-# (COMPAT 0x1000, RO_COMPAT 0x10000). mkcard.sh makes sure of that; checked again here.
+# (COMPAT 0x1000, RO_COMPAT 0x10000). mkcard.sh makes sure of that. This script checks it again.
 python3 - "$IMG" $P5_OFF <<'PY' || die "the image's p5 has ext4 features the stock Android kernel 3.10 cannot mount: rebuild it with mkcard.sh"
 import struct, sys
 f = open(sys.argv[1], 'rb'); f.seek(int(sys.argv[2]) + 1024); d = f.read(1024)
@@ -149,7 +149,7 @@ HOOKST=$($ENVPY check "$W/card-env.bin" 2>/dev/null | sed -n 's/.*hook \([a-z]*\
 say "card: Crestron layout $( [ $CRESTRON = 1 ] && echo yes || echo NO ), env $( [ $CARDENV = 1 ] && echo "valid (unit ${UNIT:-?}, hook ${HOOKST:-?})" || echo 'NOT valid')"
 [ "$MODE" = auto ] && { [ $CRESTRON = 1 ] && [ $CARDENV = 1 ] && MODE=update || MODE=full; }
 
-# model check: the image is for one model, the card's env says which unit this is
+# Model check: the image is for one model, and the env of the card says which unit this is.
 IMODEL=$($ENVPY show "$IMG" lcdsize | sed -n 's/^lcdsize=//p')
 if [ $CARDENV = 1 ]; then
 	CMODEL=$($ENVPY show "$W/card-env.bin" lcdsize | sed -n 's/^lcdsize=//p')
@@ -198,5 +198,5 @@ while read -r n f o l d; do
 	[ "$(sum "$DEV" $d $l)" = "$(sum "$f" $o $l)" ] || die "verify of $n failed. Re-run, or restore: $0 --restore $BK --device $DEV"
 done < "$PLAN"
 $ENVPY check "$DEV" >> "$LOG" || die "env on the card is not valid after the write (restore the backup)"
-say "done and verified. Put the card back; the panel boots the kiosk. Backup: $BK"
+say "done and verified. Put the card back. The panel boots the kiosk. Backup: $BK"
 say "undo: $0 --restore $BK --device $DEV"

@@ -5,7 +5,7 @@
 #                                                        switch_bootmode, delete tsx_boot, remove
 #                                                        p1:tsxboot.img / tsxinst.cfg / tsxboot.off
 #   bash tsx-android-uninstall.sh --disable             only create p1:tsxboot.off (the hook then
-#                                                        boots Android; remove the file to re-enable)
+#                                                        boots Android. Remove the file to re-enable)
 #   bash tsx-android-uninstall.sh --restore-env FILE    write a 64 KiB env backup taken by the
 #                                                        installer (env-0x100000.bin or p1:tsxenv.bak)
 #                                                        back to mmcblk0 at 0x100000
@@ -64,13 +64,13 @@ restore-env)
 	ask "Write $ENVFILE to $WHOLE at 0x100000 (old block saved to $W/env-before-restore.bin)?"
 	run dd if="$ENVFILE" of="$WHOLE" bs=65536 seek=16 count=1 conv=notrunc,fsync
 	[ $DRY = 1 ] || { tsx_env_sane >&2 || die "env not sane after the restore: CRC? write $W/env-before-restore.bin back the same way"; }
-	log "env restored; switch_bootmode is now: $(tsx_hook_state)";;
+	log "env restored. switch_bootmode is now: $(tsx_hook_state)";;
 revert)
 	st=$(tsx_hook_state)
-	log "hook state: $st; tsx_boot: $(tsx_env tsx_boot >/dev/null 2>&1 && echo set || echo unset)"
+	log "hook state: $st. tsx_boot: $(tsx_env tsx_boot >/dev/null 2>&1 && echo set || echo unset)"
 	ask "Revert the U-Boot hook and remove p1:tsxboot.img?"
 	if [ "$st" != stock ]; then
-		case "$st" in fallback|nogolden|plain) ;; *) die "switch_bootmode has unknown content; not touching it";; esac
+		case "$st" in fallback|nogolden|plain) ;; *) die "switch_bootmode has unknown content. Not touching it";; esac
 		run tsx_fw_bound "$FWS" switch_bootmode "$TSX_STOCK_SWITCH"
 		[ $DRY = 1 ] || [ "$(tsx_env switch_bootmode)" = "$TSX_STOCK_SWITCH" ] || die "switch_bootmode readback differs"
 	fi

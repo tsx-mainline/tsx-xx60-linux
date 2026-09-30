@@ -109,11 +109,11 @@ def sidecar_text(e, key, path):
 def cmd_patch(a, sigs):
     key, e, state, digest = identify(a.binary, sigs)
     if e is None:
-        print(f"patch-chromium: UNKNOWN build (sha256 {digest}); not patched. "
+        print(f"patch-chromium: UNKNOWN build (sha256 {digest}). Not patched. "
               f"Derive the site on the host: patch-chromium.py --derive {a.binary} --add", file=sys.stderr)
         return 2
     if site_state(a.binary, e) != state:
-        print("patch-chromium: sha256 known but the site bytes do not match; not patched", file=sys.stderr)
+        print("patch-chromium: sha256 known but the site bytes do not match. Not patched", file=sys.stderr)
         return 2
     if state == "patched":
         print(f"patch-chromium: already patched ({key})")
@@ -125,7 +125,7 @@ def cmd_patch(a, sigs):
         new = sha256(a.binary)
         if new != e["sha256_patched"]:
             write_at(a.binary, int(e["offset"], 16), bytes.fromhex(e["orig"]))
-            print(f"patch-chromium: patched sha256 {new} != expected; reverted", file=sys.stderr)
+            print(f"patch-chromium: patched sha256 {new} != expected. Reverted", file=sys.stderr)
             return 2
         print(f"patch-chromium: patched {a.binary} at {e['offset']} ({e['orig']} -> {e['patched']}), "
               f"sha256 {e['sha256_orig'][:12]}.. -> {new[:12]}.. ({key})")
@@ -154,12 +154,12 @@ def cmd_check(a, sigs):
 def cmd_revert(a, sigs):
     key, e, state, digest = identify(a.binary, sigs)
     if e is None:
-        print(f"patch-chromium: unknown build (sha256 {digest}); refusing. Reinstall the package "
+        print(f"patch-chromium: unknown build (sha256 {digest}). Refusing. Reinstall the package "
               "instead: apk fix chromium", file=sys.stderr)
         return 2
     if state == "patched":
         if site_state(a.binary, e) != "patched":
-            print("patch-chromium: site bytes differ; refusing", file=sys.stderr)
+            print("patch-chromium: site bytes differ. Refusing", file=sys.stderr)
             return 2
         write_at(a.binary, int(e["offset"], 16), bytes.fromhex(e["orig"]))
         if sha256(a.binary) != e["sha256_orig"]:
@@ -269,7 +269,7 @@ def cmd_derive(a, sigs):
     cands = []
     for x in xrefs:
         # LOG(ERROR) block: starts with "movs r0, #2" (severity ERROR) somewhere
-        # within 0x100 bytes before the reference; the gate branches to it.
+        # within 0x100 bytes before the reference. The gate branches to it.
         for va in range(x - 0x600, x, 2):
             o = TO + va - TV
             hw1, hw2 = struct.unpack_from("<HH", data, o)

@@ -1,13 +1,15 @@
 #!/bin/bash
-# Host test for mk-tsxroot-emmc.sh: builds a small synthetic rootfs tarball
-# (one modules tree, an etc/fstab, etc/kiosk.conf) and checks that the image
-# it produces is COMPACT (well under the given --bytes partition size, not
-# truncated to it), fsck-clean, has the right label/fstab/KIOSK_URL edits, and
-# that the manifest-fragment carries root_bytes (the image's own size) +
-# root_partition_min_bytes (the --bytes given). Needs docker (the script
-# itself always uses it, to build for armv7 the same as a real run); SKIPS if
-# docker is unavailable or unusable here, same convention as
-# installer/factory/tests/test-emmc-restore.sh.
+# Host test for mk-tsxroot-emmc.sh. The test builds a small synthetic rootfs
+# tarball (one modules tree, an etc/fstab, etc/kiosk.conf). It checks these
+# points:
+#  - the image is COMPACT: well under the given --bytes partition size and
+#    not truncated to it
+#  - the image is fsck-clean and has the right label, fstab and KIOSK_URL edits
+#  - the manifest fragment carries root_bytes (the size of the image) and
+#    root_partition_min_bytes (the --bytes value)
+# The test needs docker. The script always uses docker, to build for armv7 as
+# a real run does. The test skips if docker is unavailable or unusable here,
+# the same convention as installer/factory/tests/test-emmc-restore.sh.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); EMMC=$(cd "$HERE/.." && pwd)
 SUT=$EMMC/mk-tsxroot-emmc.sh

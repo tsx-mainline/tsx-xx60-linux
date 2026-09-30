@@ -1,5 +1,5 @@
 #!/bin/sh
-# neofetch-style system summary for the busybox initramfs; prints to stdout.
+# neofetch-style system summary for the busybox initramfs. Prints to stdout.
 e=$(printf '\033'); C="$e[1;36m"; Y="$e[1;33m"; W="$e[1;37m"; R="$e[0m"
 model=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null)
 kern=$(uname -r); up=$(awk '{s=int($1); printf "%dm %ds", s/60, s%60}' /proc/uptime)

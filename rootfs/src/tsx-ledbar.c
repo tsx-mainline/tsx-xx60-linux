@@ -1,22 +1,24 @@
 /*
- * tsx-ledbar: RGB LED bar of the xx60 .
+ * tsx-ledbar: RGB LED bar of the xx60.
  *
- * The bar is driven by an STM32 on the internal USB port (14be:001b). Its
+ * An STM32 on the internal USB port (14be:001b) drives the bar. Its
  * interface 1 takes Cresnet packets, one per USB transfer:
  *   analog join  : 00 05 14 JH JL VH VL   joins 3/4/5 = red/green/blue, V 0..100
  *   digital join : 00 03 00 JL JH|80*off  joins 0/1/2 = red/green/blue
- * (vendor sysfs .../2-1:1.1/stm32_io took exactly these bytes).
+ * (the vendor sysfs .../2-1:1.1/stm32_io took exactly these bytes).
  *
- * Backends: the kernel driver leds-crestron-stm32 (/sys/class/leds/tsx:rgb:bar,
- * multi_intensity + brightness, "raw" attribute for packets) when present,
- * else libusb (claims interface 1 itself). --usb forces libusb (detaches the
- * kernel driver while it runs).
+ * Backends: when the kernel driver leds-crestron-stm32 is present, the tool
+ * uses it (/sys/class/leds/tsx:rgb:bar, multi_intensity and brightness, and
+ * the "raw" attribute for packets). Otherwise it uses libusb, which claims
+ * interface 1 itself. --usb forces libusb and detaches the kernel driver while
+ * the tool runs.
  *
- * Colour model: the "wanted" colour (set/on/off/boot) is kept in
- * /run/tsx/ledbar.state; the output is the wanted colour scaled by the
- * screen state of tsx-idled (/run/tsx-idled.state "blank"): BLANK=off|dim|keep
- * and BLANK_DIM (percent) in /etc/tsx/ledbar.conf. "apply" re-applies it (the
- * tsx-ledbar service runs it when the screen blanks or wakes).
+ * Color model: the tool keeps the "wanted" color (set, on, off, boot) in
+ * /run/tsx/ledbar.state. The output is the wanted color, scaled by the
+ * screen state of tsx-idled (/run/tsx-idled.state "blank"). BLANK=off|dim|keep
+ * and BLANK_DIM (percent) in /etc/tsx/ledbar.conf control the scaling.
+ * "apply" applies the color again. The tsx-ledbar service runs it when the
+ * screen blanks or wakes.
  *
  * Env overrides for tests: TSX_LEDBAR_SYSFS (LED dir), TSX_RUN_DIR,
  * TSX_IDLED_STATE, TSX_LEDBAR_CONF.
@@ -298,7 +300,7 @@ static int usb_send(const unsigned char *p, int n)
 	unsigned char b[MAXPKT]; memcpy(b, p, n);
 	r = usb_xfer(ep_out, out_int, b, n, &got, 1000);
 	if (r) { fprintf(stderr, "tsx-ledbar: usb write: %s\n", libusb_strerror(r)); return -EIO; }
-	/* collect the answer if one comes quickly (verbose shows it) */
+	/* Collect the answer if one comes quickly (verbose mode shows it). */
 	if (ep_in) {
 		unsigned char in[512];
 		if (!usb_xfer(ep_in, in_int, in, sizeof in, &got, 50) && got > 0 && verbose) {
@@ -354,7 +356,7 @@ static int send_rgb(const int *rgb)
 	return 0;
 }
 
-/* set wanted colour (NULL = keep), compute output, send, record */
+/* Set the wanted color (NULL keeps the old one), compute the output, send it and record it. */
 static int apply(const int *want)
 {
 	struct state st; read_state(&st);
@@ -371,11 +373,11 @@ static int apply(const int *want)
 static void __attribute__((noreturn)) usage(void)
 {
 	fputs("usage: tsx-ledbar [-n] [-v] [--usb] COMMAND\n"
-	      "  set R G B          colour, each 0..100 (screen-blank rule of ledbar.conf applies)\n"
-	      "  on | off           last non-black colour (else BOOT_COLOR) | black\n"
+	      "  set R G B          color, each 0..100 (screen-blank rule of ledbar.conf applies)\n"
+	      "  on | off           last non-black color (else BOOT_COLOR) | black\n"
 	      "  boot               BOOT_COLOR of /etc/tsx/ledbar.conf\n"
-	      "  apply              re-send the wanted colour for the current screen state\n"
-	      "  get                print wanted/last/output colour\n"
+	      "  apply              re-send the wanted color for the current screen state\n"
+	      "  get                print wanted/last/output color\n"
 	      "  analog JOIN VALUE  one analog join packet (3/4/5 = red/green/blue level)\n"
 	      "  digital JOIN on|off  one digital join packet (0/1/2 = red/green/blue)\n"
 	      "  raw HEX...         any Cresnet packet, e.g. raw 00 05 14 00 03 00 64\n"
@@ -411,7 +413,7 @@ int main(int argc, char **argv)
 	const char *cmd = argv[a++]; int n = argc - a, e = 0;
 	char **av = argv + a;
 
-	/* one writer at a time (service, ssh, MQTT bridge) */
+	/* Allow one writer at a time (service, ssh, MQTT bridge). */
 	char lk[PATH_MAX]; snprintf(lk, sizeof lk, "%s/ledbar.lock", rundir);
 	int lfd = dry_run ? -1 : (mkdir(rundir, 0755), open(lk, O_CREAT | O_RDWR, 0644));
 	if (lfd >= 0) flock(lfd, LOCK_EX);
@@ -419,7 +421,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "set")) {
 		int rgb[3];
 		if (n == 1) { if (parse_rgb(av[0], rgb)) die("set: want R G B (0..100)"); }
-		else if (n == 3) for (int i = 0; i < 3; i++) rgb[i] = to_int(av[i], 0, 100, "colour");
+		else if (n == 3) for (int i = 0; i < 3; i++) rgb[i] = to_int(av[i], 0, 100, "color");
 		else usage();
 		e = apply(rgb);
 	} else if (!strcmp(cmd, "on")) {

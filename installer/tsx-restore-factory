@@ -1,90 +1,111 @@
 #!/usr/bin/env bash
-# Full factory restore driver: restore a xx60 unit (SD card AND eMMC) from
-# the mainline rescue system, hands off. NO BACKUP NEEDED: the only inputs are the
-# Crestron .puf and the unit's own U-Boot env, which is read live from the card
-# (1 MiB) in the rescue system (it holds the identity: MAC, tsid, model).
+# Full factory restore driver. It restores a xx60 unit (SD card and eMMC) from
+# the mainline rescue system, hands off. NO BACKUP NEEDED. The only inputs are
+# the Crestron .puf and the U-Boot env of the unit. The rescue system reads that
+# env live from the card (1 MiB). It holds the identity: MAC, tsid, model.
 #
 #   tsx-restore-factory PANEL_IP [--puf FILE] [options]      (no backup)
 #   tsx-restore-factory --bundle DIR PANEL_IP [options]       (prebuilt bundle,
 #        e.g. mkbundle.sh --emmc-raw/--boot0 from a backup of that unit)
 #
-# Without a backup the eMMC regions stock Android does not use (recovery, misc,
-# data, alignment gaps) are zeroed and cache gets an empty ext4 (mkbundle.sh); the
-# card gets empty factory p5..p8 as always. Crestron's /data (account, settings)
-# is factory-fresh: create the admin account in the web UI (https://PANEL/) or let
-# tsx-android-to-card do it.
+# Without a backup, the driver zeroes the eMMC regions that stock Android does
+# not use (recovery, misc, data, alignment gaps). Cache gets an empty ext4
+# (mkbundle.sh). The card gets empty factory p5..p8 as always. Crestron /data
+# (account, settings) is factory-fresh. Create the admin account in the web UI
+# (https://PANEL/) or let tsx-android-to-card do it.
 #
-# Steps (each logged with timestamps to --results, default
-# results/tsx-restore-factory-<date>.txt; --from-step N resumes):
+# Steps. The driver logs each step with timestamps to --results (default
+# results/tsx-restore-factory-<date>.txt). --from-step N resumes.
 #   1  inputs: bundle SHA256SUMS, uboot-check.txt (U-Boot is never written),
-#      helper scripts present; UART mode (see --uart below) also needs the
-#      serial logger running
-#   2  get the panel into the RESCUE system: from the kiosk, copy p1:boot.img
-#      (the mainline rescue in the golden slot) to p1:tsxboot.img, verify, remove
-#      p1:tsxboot.off, arm tsx_once=1 if the hook is the v2 once guard, reboot;
-#      wait for ssh with /etc/tsx/rescue-image. (If the panel is already in the
-#      rescue, nothing to do. If nothing answers: stop, this driver never PoE-cycles.)
-#      UART mode reads the rescue's DHCP-leased IP from the serial banner
-#      'tsx-rescue: network: eth0 <ip>'. Network-only mode records the panel's
-#      eth0 MAC over ssh before rebooting, then every ~10s for up to 300s tries
-#      the kiosk's own IP (the rescue sets eth0's MAC from the U-Boot env, so a
-#      DHCP reservation gives it the same address) and, only when the panel's /24
-#      is on-link from this host, sweeps that /24 (fping, or a bounded parallel
-#      ping -c1 -W1 loop) and matches the MAC in `ip neigh` (lib/tsx-rescue.sh
-#      wait_for_rescue), accepting an IP once it answers ssh root@IP test -f
-#      /etc/tsx/rescue-image (password $RPW). For an older rescue with a random
-#      eth0 MAC it also tries the dropbear hosts on that /24 whose card env (1 MiB)
-#      has ethaddr = the recorded MAC; --rescue-ip IP overrides discovery in either mode.
-#   3  payload: without --bundle, first read the live env from the card in the rescue
-#      (results/env-live-<unit>-<date>.bin, CRC + MAC checked; --env FILE overrides)
-#      and build the bundle (mkbundle.sh, no backup) in out/bundle-<unit>-<date>;
-#      then HTTP server on the bundle's parent dir, wget every file of SHA256SUMS into
-#      the rescue's /tmp/b (RAM; needs ~750 MiB free), sha256sum -c on the panel
-#   4  check: tsx-emmc-restore check + tsx-factory-restore check (nothing written)
-#   5  run (gate: type FACTORY unless --yes): tsx-emmc-restore run (boot, system,
-#      recovery, cache, data, misc, logo verify), then tsx-factory-restore run
-#      (card table, p2, p1 golden, p5..p8, env last, hook removed)
-#   6  reboot -f. UART mode waits on the serial log for the stock Android root
-#      prompt. Network-only mode waits for the rescue's ssh to go away, then
-#      polls https://PANEL/ (the unit keeps its own IP; 200/301/302) for up to
-#      420s; if that never answers it falls back to the same MAC lookup as
-#      step 2 and logs the IP it finds.
-#   7  UART mode verifies over the root console: p5 mounted, no fs_mgr error,
-#      wait for Crestron's one-time golden re-install if it runs (fwUpgrade=0 and
-#      the image dir gone), sys.boot_completed=1, then a stability watch of
-#      --stable-min minutes (default 9: the half-boot self-reset comes at ~8.5) with
-#      no new U-Boot banner. Network-only mode cannot check fwUpgrade/boot_completed/p5
-#      (no root without the UART on a factory unit) and logs that they are skipped;
-#      it polls the web UI for reachability, then runs a weaker stability watch
-#      (poll every 30s for --stable-min minutes, fail on >90s straight unreachable).
-#      Both modes then check the Crestron account state (steps/crestron-admin --status:
-#      the web UI's /Device/Authentication): a factory-fresh /data has none (expected);
-#      if one exists, the Crestron SSH console (admin, $TSX_ADMIN_PW) must answer `ver`
+#      helper scripts present. UART mode (see --uart below) also needs the
+#      serial logger to run.
+#   2  get the panel into the RESCUE system. From the kiosk, copy p1:boot.img
+#      (the mainline rescue in the golden slot) to p1:tsxboot.img and verify
+#      it. Remove p1:tsxboot.off. Arm tsx_once=1 if the hook is the v2 once
+#      guard. Reboot. Wait for ssh with /etc/tsx/rescue-image. If the panel is
+#      already in the rescue, there is nothing to do. If nothing answers, stop.
+#      This driver never PoE-cycles.
+#      UART mode reads the DHCP-leased IP of the rescue from the serial banner
+#      'tsx-rescue: network: eth0 <ip>'.
+#      Network-only mode records the eth0 MAC of the panel over ssh before the
+#      reboot. Then it tries the IP of the kiosk every ~10 s for up to 300 s.
+#      The rescue sets the MAC of eth0 from the U-Boot env, so a DHCP
+#      reservation gives it the same address. If the /24 of the panel is
+#      on-link from this host, the driver also sweeps that /24 (fping, or a
+#      bounded parallel ping -c1 -W1 loop). It matches the MAC in `ip neigh`
+#      (lib/tsx-rescue.sh wait_for_rescue). It accepts an IP once that IP
+#      answers ssh root@IP test -f /etc/tsx/rescue-image (password $RPW).
+#      An older rescue uses a random eth0 MAC. For that case the driver also
+#      tries the dropbear hosts on that /24 whose card env (1 MiB) has
+#      ethaddr = the recorded MAC.
+#      --rescue-ip IP overrides discovery in both modes.
+#   3  payload. Without --bundle, first read the live env from the card in the
+#      rescue (results/env-live-<unit>-<date>.bin, CRC and MAC checked, --env
+#      FILE overrides). Then build the bundle (mkbundle.sh, no backup) in
+#      out/bundle-<unit>-<date>. Then start an HTTP server on the parent dir
+#      of the bundle. The panel fetches every file of SHA256SUMS with wget into
+#      /tmp/b of the rescue (RAM, needs ~750 MiB free). Then run sha256sum -c
+#      on the panel.
+#   4  check: tsx-emmc-restore check + tsx-factory-restore check (nothing
+#      written)
+#   5  run (gate: type FACTORY unless --yes). First tsx-emmc-restore run (boot,
+#      system, recovery, cache, data, misc, logo verify). Then
+#      tsx-factory-restore run (card table, p2, p1 golden, p5..p8, env last,
+#      hook removed).
+#   6  reboot -f.
+#      UART mode waits on the serial log for the stock Android root prompt.
+#      Network-only mode waits until the ssh of the rescue goes away. Then it
+#      polls https://PANEL/ for up to 420 s (the unit keeps its own IP, and the
+#      answer is 200, 301 or 302). If that never answers, it falls back to the
+#      same MAC lookup as step 2 and logs the IP it finds.
+#   7  UART mode verifies over the root console:
+#      - p5 is mounted and there is no fs_mgr error
+#      - if the one-time golden re-install of Crestron runs, wait for it
+#        (fwUpgrade=0 and the image dir gone)
+#      - sys.boot_completed=1
+#      - a stability watch of --stable-min minutes (default 9, because the
+#        half-boot self-reset comes at ~8.5) with no new U-Boot banner
+#      Network-only mode cannot check fwUpgrade, boot_completed and p5. A
+#      factory unit has no root without the UART. The driver logs that it
+#      skips them. It polls the web UI for reachability. Then it runs a weaker
+#      stability watch (poll every 30 s for --stable-min minutes, fail on more
+#      than 90 s of straight unreachable).
+#      Both modes then check the Crestron account state (steps/crestron-admin
+#      --status, the /Device/Authentication page of the web UI). A factory-fresh
+#      /data has no account (expected). If an account exists, the Crestron SSH
+#      console (admin, $TSX_ADMIN_PW) must answer `ver`.
 #
-# Options: --puf FILE (the Crestron firmware package; also $TSX_PUF; default: the copy
-#          rootfs/vendor-fetch.sh downloads and sha256-pins into rootfs/vendor-cache/, if
-#          present; not needed with --bundle). Its sha256 is compared with that pinned
-#          pristine package (a different file is used, with a warning)
-#          --env FILE (64 KiB env block instead of the live one)  --bundle DIR
-#          --results FILE  --from-step N  --to-step N  --yes  --rescue-ip IP (overrides
-#          rescue-IP discovery in both UART and network-only mode)  --dry-run
-#          --port N (HTTP, 8081)  --ws-ip IP  --stable-min N  --rescue-pw PW (default tsx)
-#          --uart auto|yes|no (default auto: UART mode is used only if the serial
-#          logger is running and uc.sh exists; otherwise steps 2/6/7 fall back to the
-#          network-only checks described above; --uart yes/no forces the mode)
-#          Root over ssh is ON by default: mkbundle.sh adds a `rootsh` branch to the
-#          sshShell.sh inside the .puf's own system.img, so `ssh -tt $TSX_ADMIN_USER@panel
-#          rootsh` gets root right after the restore with no UART (the Crestron console is
-#          unchanged). It needs the pristine .puf; a modified image is refused in step 3.
-#          --sshshell FILE (bake your own sshShell.sh in as is instead; also $SSHSHELL)
-#          --stock-sshshell (opt out: system.img byte-identical to the .puf). --root-ssh is
-#          accepted and is the default. Only used in step 3 when a bundle is built here (no
-#          --bundle); with --bundle, mkbundle.sh has already run and these are ignored
-# Needs: sshpass ssh python3 sha256sum ip awk curl; to build the bundle (no --bundle)
-# also unzip and e2fsprogs (mke2fs, e2fsck, and debugfs for the rootsh patch); in UART
-# mode (see --uart) also tools/bench/serlog.py running (logging to
-# tools/bench/boot-2200.log, or $TSX_SERIAL_LOG) and tools/bench/uc.sh. Network-only mode's rescue-IP sweep prefers fping if installed.
-# Panel commands are the allowlisted form
+# Options:
+#   --puf FILE  the Crestron firmware package (also $TSX_PUF). The default is
+#          the copy that rootfs/vendor-fetch.sh downloads and sha256-pins into
+#          rootfs/vendor-cache/, if present. --bundle does not need it. The
+#          driver compares its sha256 with that pinned pristine package. It uses
+#          a different file, with a warning.
+#   --env FILE  a 64 KiB env block instead of the live one
+#   --bundle DIR  --results FILE  --from-step N  --to-step N  --yes  --dry-run
+#   --rescue-ip IP  overrides the rescue-IP discovery in UART and network-only mode
+#   --port N (HTTP, 8081)  --ws-ip IP  --stable-min N  --rescue-pw PW (default tsx)
+#   --uart auto|yes|no  the default is auto. UART mode runs only if the serial
+#          logger runs and uc.sh exists. Otherwise steps 2, 6 and 7 fall back to
+#          the network-only checks described above. --uart yes or no forces
+#          the mode.
+#   Root over ssh is ON by default. mkbundle.sh adds a `rootsh` branch to the
+#          sshShell.sh inside the system.img of the .puf. Then
+#          `ssh -tt $TSX_ADMIN_USER@panel rootsh` gets root right after the
+#          restore with no UART. The Crestron console does not change. This
+#          needs the pristine .puf. Step 3 refuses a modified image.
+#   --sshshell FILE  bake your own sshShell.sh in as it is (also $SSHSHELL)
+#   --stock-sshshell  opt out. The system.img stays byte-identical to the .puf.
+#   --root-ssh  accepted, and the default. Step 3 uses these three options only
+#          when it builds a bundle here (no --bundle). With --bundle,
+#          mkbundle.sh has already run and the driver ignores them.
+# Needs: sshpass ssh python3 sha256sum ip awk curl. To build the bundle (no
+# --bundle), also unzip and e2fsprogs (mke2fs, e2fsck, and debugfs for the
+# rootsh patch). UART mode (see --uart) also needs tools/bench/serlog.py to
+# run (logging to tools/bench/boot-2200.log, or $TSX_SERIAL_LOG) and
+# tools/bench/uc.sh. The rescue-IP sweep of network-only mode prefers fping if
+# it is installed.
+# Panel commands use this allowlisted form:
 #   sshpass -p tsx ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@IP '...'
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); WORK=$(cd "$HERE/.." && pwd)
@@ -112,12 +133,13 @@ mkdir -p "$(dirname "$RESULTS")" "$HERE/results"   # results/ also holds the liv
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$RESULTS" >&2; }
 logblock() { log "-- $1 --"; printf '%s\n' "$2" | while IFS= read -r l; do log "  $l"; done; log "-- end $1 --"; }
 die() { log "ERROR: $*"; exit 1; }
-# stream a long-running remote command's output live (via log, so it also lands
-# in $RESULTS as it happens) instead of capturing it silently until the ssh
-# session returns; leaves the full text in $out for any caller that still needs
-# to grep it, and returns the remote command's own exit status. Relies on
-# `set -o pipefail` (already on via set -euo pipefail): the if-condition below
-# reflects $SSH's status, not tee/while's, so this is safe under `set -e` too.
+# Stream the output of a long remote command live, through log. It also lands
+# in $RESULTS as it happens. The alternative is to capture it silently until
+# the ssh session returns. The function leaves the full text in $out for a
+# caller that needs to grep it. It returns the exit status of the remote
+# command. It relies on `set -o pipefail` (already on through set -euo
+# pipefail). The if-condition below reflects the status of $SSH, not of
+# tee or while, so it is also safe under `set -e`.
 run_stream() {  # CMD
 	local cmd=$1 tmp rc
 	tmp=$(mktemp "$RESULTS.XXXXXX")
@@ -138,21 +160,22 @@ rescue_ip_from_log() { tr -d '\0' < "$SERLOG" | grep -a -o 'tsx-rescue: network:
 ssh_ok() { is_crestron_sshd "$RHOST" && return 1; $SSH true >/dev/null 2>&1; }
 in_rescue() { is_crestron_sshd "$RHOST" && return 1; $SSH 'test -f /etc/tsx/rescue-image' >/dev/null 2>&1; }
 # --- network-only (no UART) rescue-IP discovery -----------------------------
-# lib/tsx-rescue.sh (sourced above) has the discovery helpers the install driver
-# uses too: ssh_test_rescue, find_rescue_by_mac/_by_env and wait_for_rescue (the
-# kiosk IP every ~10s, plus a MAC sweep of the PANEL's /24 when it is on-link).
-find_rescue_ip_network() {  # MAC: sets RHOST/RIP to the rescue's ip via set_rhost, or dies after ~300s
+# lib/tsx-rescue.sh (sourced above) has the discovery helpers that the install
+# driver also uses: ssh_test_rescue, find_rescue_by_mac/_by_env and
+# wait_for_rescue. wait_for_rescue tries the kiosk IP every ~10 s. It also
+# sweeps the /24 of the PANEL by MAC when that /24 is on-link.
+find_rescue_ip_network() {  # MAC: sets RHOST/RIP to the IP of the rescue through set_rhost, or dies after ~300 s
 	local mac=$1 cand
 	cand=$(wait_for_rescue "$PANEL" "$mac" "$WSIP" "$RPW" 300 2> >(while IFS= read -r l; do log "$l"; done)) ||
-		die "network-only: could not find the rescue within 300s (ssh at $PANEL, MAC $mac; try --rescue-ip)"
+		die "network-only: could not find the rescue within 300s (ssh at $PANEL, MAC $mac). Try --rescue-ip"
 	set_rhost "$cand"; RIP=$cand; log "  rescue found (network-only): $cand"
 }
 uart() { local w=4; if [ "$1" = -w ]; then w=$2; shift 2; fi; [ ${#1} -le 80 ] || die "UART command >80 chars: $1"; "$UC" -w "$w" "$1"; }
-uart_last() {  # uart_last CMD REGEX: the last line matching REGEX in the answer, echo excluded
+uart_last() {  # uart_last CMD REGEX: print the last line of the answer that matches REGEX (without the echo)
 	uart "$1" | grep -v '^>>> ' | grep -E -- "$2" | tail -n 1 || true
 }
 serial_lines() { if [ -f "$SERLOG" ]; then wc -l < "$SERLOG"; else echo 0; fi; }   # no serial log without the UART
-wait_serial() {  # PATTERN TIMEOUT_S FROMLINE [ABORT...]: waits for PATTERN in log lines after FROMLINE
+wait_serial() {  # PATTERN TIMEOUT_S FROMLINE [ABORT...]: wait for PATTERN in the log lines after FROMLINE
 	local pat=$1 t=$2 from=$3; shift 3; local w=0 new a
 	log "  waiting up to ${t}s on the serial log for: $pat"
 	while [ $w -lt "$t" ]; do
@@ -179,12 +202,12 @@ check_bundle() {
 if [ -n "$BUNDLE" ]; then check_bundle
 else
 	if [ -z "$PUF" ] && [ -f "$PUF_CACHED" ]; then PUF=$PUF_CACHED; log "  no --puf: using the copy rootfs/vendor-fetch.sh downloaded: $PUF"; fi
-	[ -n "$PUF" ] || die "no .puf given (--puf FILE or \$TSX_PUF), and none in rootfs/vendor-cache/: run rootfs/vendor-fetch.sh once (it downloads Crestron's public tsw-xx60_3.002.1061.001.puf and checks its sha256), or pass --puf"
+	[ -n "$PUF" ] || die "no .puf given (--puf FILE or \$TSX_PUF), and none in rootfs/vendor-cache/. Run rootfs/vendor-fetch.sh once. It downloads the public Crestron tsw-xx60_3.002.1061.001.puf and checks its sha256. Or pass --puf"
 	[ -f "$PUF" ] || die "no .puf at $PUF (--puf)"
-	for c in unzip mke2fs e2fsck $([ "$ROOTSSH" = 1 ] && echo debugfs); do command -v $c >/dev/null || die "$c is needed to build the bundle (install unzip / e2fsprogs; /sbin in PATH?)"; done
+	for c in unzip mke2fs e2fsck $([ "$ROOTSSH" = 1 ] && echo debugfs); do command -v $c >/dev/null || die "$c is needed to build the bundle (install unzip and e2fsprogs, and check that /sbin is in PATH)"; done
 	PUFSHA=$(sha256sum < "$PUF" | cut -d' ' -f1)
 	if [ "$PUFSHA" = "$PRISTINE_PUF_SHA" ]; then log "  .puf $PUF: pristine 3.002.1061.001 ($PUFSHA)"
-	else log "  WARNING: .puf $PUF sha256 $PUFSHA is not the known pristine package (rootfs/vendor-fetch.sh)$([ "$ROOTSSH" = 1 ] && [ -z "$SSHSHELL" ] && echo "; the rootsh patch (default) refuses a modified sshShell.sh in step 3: use the pristine .puf, --sshshell FILE or --stock-sshshell")"; fi
+	else log "  WARNING: .puf $PUF sha256 $PUFSHA is not the known pristine package (rootfs/vendor-fetch.sh)$([ "$ROOTSSH" = 1 ] && [ -z "$SSHSHELL" ] && echo ". The rootsh patch (default) refuses a modified sshShell.sh in step 3. Use the pristine .puf, --sshshell FILE or --stock-sshshell")"; fi
 	[ -z "$ENVFILE" ] || { [ -f "$ENVFILE" ] || die "--env $ENVFILE: no such file"; }
 	log "  no bundle given: it is built in step 3 from the .puf + the unit's ${ENVFILE:-live} env (no backup)"
 fi
@@ -199,7 +222,7 @@ if [ "$UART_ON" = 1 ]; then
 	[ -x "$UC" ] || die "$UC missing (--uart $UART)"
 	log "  UART mode: serial logger running, log $SERLOG ($(serial_lines) lines)"
 else
-	log "  network-only mode (--uart $UART): step 2/6/7 use ssh/curl/MAC-based checks instead of the serial log/UART console"
+	log "  network-only mode (--uart $UART): steps 2, 6 and 7 use ssh, curl and MAC-based checks instead of the serial log and the UART console"
 fi
 set_bundle_paths() { BUNDLEABS=$(cd "$BUNDLE" && pwd); PARENT=$(dirname "$BUNDLEABS"); BNAME=$(basename "$BUNDLEABS"); BASEURL="http://$WSIP:$PORT/$BNAME"; }
 if [ -z "$WSIP" ]; then WSIP=$(ip route get "$PANEL" | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}'); fi
@@ -208,22 +231,22 @@ if [ -z "$WSIP" ]; then WSIP=$(ip route get "$PANEL" | awk '{for(i=1;i<=NF;i++) 
 HTTP_PID=; stop_http() { [ -n "$HTTP_PID" ] && kill "$HTTP_PID" 2>/dev/null && log "  HTTP server stopped"; HTTP_PID=; }
 trap stop_http EXIT
 if [ "$DRYRUN" = 1 ]; then
-	log "[dry-run] step 2: ssh root@$PANEL: if kiosk (no /etc/tsx/rescue-image): mount p1, cp boot.img tsxboot.img, sha check, rm tsxboot.off, tsx_once=1 if the hook is the once guard, umount, reboot; wait for ssh + rescue flag (300 s)"
+	log "[dry-run] step 2: ssh root@$PANEL: if kiosk (no /etc/tsx/rescue-image): mount p1, cp boot.img tsxboot.img, sha check, rm tsxboot.off, tsx_once=1 if the hook is the once guard, umount, reboot. Wait for ssh + rescue flag (300 s)"
 	if [ "$UART_ON" = 1 ]; then
 		log "[dry-run] step 2 (UART): rescue IP read from the serial banner 'tsx-rescue: network: eth0 <ip>'"
 	else
-		log "[dry-run] step 2 (network-only): record eth0 MAC over ssh before reboot; every ~10s up to 300s: ssh at the kiosk's own IP $PANEL, plus a MAC sweep of its /24 when that is on-link from $WSIP (lib/tsx-rescue.sh wait_for_rescue); accept once ssh root@IP test -f /etc/tsx/rescue-image succeeds; --rescue-ip overrides"
+		log "[dry-run] step 2 (network-only): record eth0 MAC over ssh before reboot. Every ~10s up to 300s: ssh at the kiosk's own IP $PANEL, plus a MAC sweep of its /24 when that is on-link from $WSIP (lib/tsx-rescue.sh wait_for_rescue). Accept once ssh root@IP test -f /etc/tsx/rescue-image succeeds; --rescue-ip overrides"
 	fi
-	[ -n "$BUNDLE" ] || log "[dry-run] step 3a: rescue: dd if=/dev/mmcblk0 bs=65536 skip=16 count=1 > results/env-live-<unit>-<date>.bin (or --env); tsx-env.py unit (CRC, ethaddr); mkbundle.sh --puf $PUF --env <env> --out out/bundle-<unit>-<date>$(if [ "$ROOTSSH" = 1 ]; then echo "${SSHSHELL:+ --sshshell $SSHSHELL} (rootsh patch)"; else echo " --stock-sshshell"; fi)"
-	log "[dry-run] step 3: python3 -m http.server $PORT --directory <bundle parent>; on the panel: mkdir /tmp/b; wget every file of SHA256SUMS + SHA256SUMS; sha256sum -c SHA256SUMS"
-	log "[dry-run] step 4: sh /tmp/b/tsx-emmc-restore check /tmp/b; TSX_SHARE=/usr/share/tsx sh /tmp/b/tsx-factory-restore check /tmp/b"
-	log "[dry-run] step 5: gate FACTORY; sh /tmp/b/tsx-emmc-restore run /tmp/b --yes; TSX_SHARE=/usr/share/tsx sh /tmp/b/tsx-factory-restore run /tmp/b --yes"
+	[ -n "$BUNDLE" ] || log "[dry-run] step 3a: rescue: dd if=/dev/mmcblk0 bs=65536 skip=16 count=1 > results/env-live-<unit>-<date>.bin (or --env). tsx-env.py unit (CRC, ethaddr). mkbundle.sh --puf $PUF --env <env> --out out/bundle-<unit>-<date>$(if [ "$ROOTSSH" = 1 ]; then echo "${SSHSHELL:+ --sshshell $SSHSHELL} (rootsh patch)"; else echo " --stock-sshshell"; fi)"
+	log "[dry-run] step 3: python3 -m http.server $PORT --directory <bundle parent>. On the panel: mkdir /tmp/b. wget every file of SHA256SUMS + SHA256SUMS. sha256sum -c SHA256SUMS"
+	log "[dry-run] step 4: sh /tmp/b/tsx-emmc-restore check /tmp/b. TSX_SHARE=/usr/share/tsx sh /tmp/b/tsx-factory-restore check /tmp/b"
+	log "[dry-run] step 5: gate FACTORY. sh /tmp/b/tsx-emmc-restore run /tmp/b --yes. TSX_SHARE=/usr/share/tsx sh /tmp/b/tsx-factory-restore run /tmp/b --yes"
 	if [ "$UART_ON" = 1 ]; then
-		log "[dry-run] step 6 (UART): reboot -f; wait_serial 'root@Crestron Touchpanel:/ #' 420 (abort: fs_mgr_mount_all returned unexpected error, Kernel panic, TSX RESCUE SYSTEM, tsx: booting tsxboot.img)"
-		log "[dry-run] step 7 (UART): mount|grep mmcblk0p5, fw_printenv fwUpgrade, ls image dir, getprop sys.boot_completed; stability ${STABLE_MIN} min; steps/crestron-admin --status $PANEL: none (no account, expected) or ssh -tt $ADMIN_USER@$PANEL ver"
+		log "[dry-run] step 6 (UART): reboot -f. wait_serial 'root@Crestron Touchpanel:/ #' 420 (abort: fs_mgr_mount_all returned unexpected error, Kernel panic, TSX RESCUE SYSTEM, tsx: booting tsxboot.img)"
+		log "[dry-run] step 7 (UART): mount|grep mmcblk0p5, fw_printenv fwUpgrade, ls image dir, getprop sys.boot_completed. Stability ${STABLE_MIN} min. steps/crestron-admin --status $PANEL: none (no account, expected) or ssh -tt $ADMIN_USER@$PANEL ver"
 	else
-		log "[dry-run] step 6 (network-only): reboot -f; wait for rescue ssh to go away, then poll https://$PANEL/ (200/301/302) up to 420s; beyond that, MAC lookup as in step 2 and log the IP found"
-		log "[dry-run] step 7 (network-only): fwUpgrade/boot_completed/p5 checks SKIPPED (no root without UART; with the rootsh patch (default) the load driver gets root over ssh once an account exists); poll web UI reachable, then stability watch every 30s for ${STABLE_MIN} min (fail on >90s down straight); steps/crestron-admin --status $PANEL: none (no account, expected) or ssh -tt $ADMIN_USER@$PANEL ver"
+		log "[dry-run] step 6 (network-only): reboot -f. Wait for rescue ssh to go away, then poll https://$PANEL/ (200/301/302) up to 420s. Beyond that, MAC lookup as in step 2 and log the IP found"
+		log "[dry-run] step 7 (network-only): fwUpgrade/boot_completed/p5 checks SKIPPED (no root without UART). With the rootsh patch (default), the load driver gets root over ssh once an account exists. Poll web UI reachable, then stability watch every 30s for ${STABLE_MIN} min (fail on >90s down straight). steps/crestron-admin --status $PANEL: none (no account, expected) or ssh -tt $ADMIN_USER@$PANEL ver"
 	fi
 	log "== dry-run done"; exit 0
 fi
@@ -231,18 +254,19 @@ fi
 # ---------------------------------------------------------------- step 2 --
 if [ "$FROM_STEP" -le 2 ] && [ "$TO_STEP" -ge 2 ]; then
 	log "== step 2: rescue system"
-	ssh_ok || die "ssh root@$PANEL does not answer: the panel must be on mainline (kiosk or rescue); no PoE cycle by this driver"
+	ssh_ok || die "ssh root@$PANEL does not answer: the panel must be on mainline (kiosk or rescue). No PoE cycle by this driver"
 	if in_rescue; then log "  already in the rescue system"; else
 		from=$(serial_lines)
 		if [ "$UART_ON" != 1 ]; then
 			mac=$($SSH 'cat /sys/class/net/eth0/address' 2>/dev/null) || die "could not read the panel's eth0 MAC before reboot (needed for network-only rescue-IP discovery)"
 			log "  panel MAC (for network-only rescue-IP discovery): $mac"
 		fi
-		# The hook only boots p1:tsxboot.img when p1:tsxboot.off is absent, and
-		# with the v2 `once` guard only when tsx_once=1 (docs/boot.md "The v2 env
-		# state machine"). lib/tsx-arm-from-mainline.sh (shared with
-		# tsx-install-mainline's reinstall path) copies the golden rescue to
-		# p1:tsxboot.img, clears tsxboot.off, arms tsx_once=1 (verified) and reboots.
+		# The hook boots p1:tsxboot.img only when p1:tsxboot.off is absent. With
+		# the v2 `once` guard it also needs tsx_once=1 (docs/boot.md "The v2 env
+		# state machine"). lib/tsx-arm-from-mainline.sh does all of this. The
+		# reinstall path of tsx-install-mainline shares it. It copies the golden
+		# rescue to p1:tsxboot.img, clears tsxboot.off, arms tsx_once=1 (verified)
+		# and reboots.
 		out=$($SSH 'cat > /run/tsx-arm-from-mainline.sh && sh /run/tsx-arm-from-mainline.sh' < "$HERE/lib/tsx-arm-from-mainline.sh" 2>&1) || die "p1 rescue copy failed: $out"
 		logblock "p1 rescue copy" "$out"
 		grep -q REBOOTING <<<"$out" || die "no reboot"
@@ -261,7 +285,7 @@ if [ "$FROM_STEP" -le 2 ] && [ "$TO_STEP" -ge 2 ]; then
 	fi
 else
 	if [ "$UART_ON" = 1 ]; then [ -n "$RIP" ] || RIP=$(rescue_ip_from_log); fi
-	[ -n "$RIP" ] && set_rhost "$RIP"; log "== step 2 skipped; rescue host $RHOST"
+	[ -n "$RIP" ] && set_rhost "$RIP"; log "== step 2 skipped. Rescue host $RHOST"
 fi
 if [ "$FROM_STEP" -le 2 ] && [ "$TO_STEP" -ge 2 ]; then
 	[ -n "$RIP" ] && set_rhost "$RIP"
@@ -281,8 +305,8 @@ if [ "$FROM_STEP" -le 3 ] && [ "$TO_STEP" -ge 3 ]; then
 			log "  live env read from the card at 1 MiB -> $ENVSRC ($(sha256sum < "$ENVSRC" | cut -c1-16)...)"
 		fi
 		chk=$($ENVPY check "$ENVSRC" 2>&1 || true); logblock "env check (tsx-env.py check)" "$chk"
-		grep -q 'CRC ok' <<<"$chk" || die "the env at 1 MiB has a bad CRC (U-Boot would run on its default env): pass a saved one with --env (p1:tsxenv.bak, an installer env-0x100000.bin)"
-		unit=$($ENVPY unit "$ENVSRC" 2>&1) || die "the env is not usable (bad CRC?): $unit; pass a saved one with --env (p1:tsxenv.bak, an installer env-0x100000.bin)"
+		grep -q 'CRC ok' <<<"$chk" || die "the env at 1 MiB has a bad CRC, so U-Boot would run on its default env. Pass a saved env with --env (p1:tsxenv.bak or an installer env-0x100000.bin)"
+		unit=$($ENVPY unit "$ENVSRC" 2>&1) || die "the env is not usable (bad CRC?): $unit. Pass a saved one with --env (p1:tsxenv.bak, an installer env-0x100000.bin)"
 		logblock "env identity (tsx-env.py unit)" "$unit"
 		eth=$($ENVPY show "$ENVSRC" ethaddr | sed -n 's/^ethaddr=//p'); [ -n "$eth" ] || die "the env has no ethaddr: the unit's identity is missing (--env)"
 		BUNDLE=$HERE/out/bundle-$(echo "$eth" | tr -d ':' | tr 'A-F' 'a-f')-$(date +%Y%m%d-%H%M)
@@ -319,19 +343,19 @@ if [ "$FROM_STEP" -le 5 ] && [ "$TO_STEP" -ge 5 ]; then
 	log "== step 5: RUN"
 	if [ "$YES" != 1 ]; then read -r -p "Rewrite the eMMC regions and the whole SD card of $PANEL to factory (U-Boot untouched)? Type FACTORY: " a </dev/tty; [ "$a" = FACTORY ] || die "not confirmed"; fi
 	t0=$(date +%s)
-	log "  emmc run (streaming live; this is the ~40 min step):"
-	run_stream 'sh /tmp/b/tsx-emmc-restore run /tmp/b --yes 2>&1' || die "tsx-emmc-restore run FAILED (the rescue is still reachable over ssh at $RHOST: read the output above, re-run step 5 after fixing; U-Boot areas are never written)"
+	log "  emmc run (streaming live. This is the ~40 min step):"
+	run_stream 'sh /tmp/b/tsx-emmc-restore run /tmp/b --yes 2>&1' || die "tsx-emmc-restore run FAILED (the rescue is still reachable over ssh at $RHOST: read the output above, re-run step 5 after fixing. U-Boot areas are never written)"
 	log "  emmc run done in $(( $(date +%s) - t0 )) s"
 	t0=$(date +%s)
 	log "  card run (streaming live):"
 	run_stream 'TSX_SHARE=/usr/share/tsx sh /tmp/b/tsx-factory-restore run /tmp/b --yes 2>&1' || die "tsx-factory-restore run FAILED (rescue still running in RAM)"
 	log "  card run done in $(( $(date +%s) - t0 )) s"
 	logblock "card after" "$($SSH 'cat /proc/partitions | grep mmcblk0; for p in 1 2 5 6 7 8; do echo "p$p: $(blkid /dev/mmcblk0p$p 2>/dev/null | cut -d: -f2-)"; done; echo "/tmp/b/env.bin 0x0 0x10000" > /run/b.cfg; fw_printenv -c /run/b.cfg boot_retry fwUpgrade switch_bootmode tsx_once 2>&1; echo "/dev/mmcblk0 0x100000 0x10000" > /run/c.cfg; fw_printenv -c /run/c.cfg boot_retry fwUpgrade DataRecoveryDone switch_bootmode tsx_boot tsx_once ethaddr tsid product_name 2>&1' 2>&1)"
-	# tsx-env.py unhook (run inside mkbundle.sh when the bundle's env.bin was built)
-	# already resets switch_bootmode to the byte-exact stock value, which has no
-	# tsx-usb-recovery VBUS prefix: the factory restore disables USB recovery as
-	# a side effect of unhooking, with no separate env write needed. Confirm it
-	# (non-fatal: the card is already fully restored either way).
+	# tsx-env.py unhook (mkbundle.sh runs it when it builds env.bin of the bundle)
+	# already resets switch_bootmode to the byte-exact stock value. That value
+	# has no tsx-usb-recovery VBUS prefix. So the unhook also disables USB
+	# recovery, and the factory restore needs no separate env write. Confirm it.
+	# A failure here is not fatal, because the card is fully restored either way.
 	SW=$($SSH 'echo "/dev/mmcblk0 0x100000 0x10000" > /run/c2.cfg; fw_printenv -c /run/c2.cfg -n switch_bootmode' 2>/dev/null) || SW="(check failed)"
 	case "$SW" in "gset GPIOX_18"*) log "  WARNING: switch_bootmode still has the tsx-usb-recovery VBUS prefix after the factory restore: $SW";; *) log "  tsx-usb-recovery: disabled (switch_bootmode is the stock value, no VBUS prefix): $SW";; esac
 fi
@@ -357,7 +381,7 @@ if [ "$FROM_STEP" -le 6 ] && [ "$TO_STEP" -ge 6 ]; then
 		if [ "$ok" = 1 ]; then
 			ANDROID_IP=$PANEL; log "  ok: web UI answers at $PANEL (http $code)"
 		else
-			log "  $PANEL did not answer within 420s; falling back to the MAC-based lookup"
+			log "  $PANEL did not answer within 420s. Falling back to the MAC-based lookup"
 			[ -n "${mac:-}" ] || die "stock Android did not answer at $PANEL within 420s and no MAC was captured for a fallback lookup"
 			prefix=$(echo "$PANEL" | cut -d. -f1-3)
 			cand=$(find_rescue_by_mac "$mac" "$prefix")
@@ -374,12 +398,12 @@ if [ "$FROM_STEP" -le 7 ] && [ "$TO_STEP" -ge 7 ]; then
 	log "== step 7: verify stock Android"
 	if [ "$UART_ON" = 1 ]; then
 	[ -n "${BOOT_FROM:-}" ] || BOOT_FROM=$(( $(serial_lines) - 400 )); [ "$BOOT_FROM" -gt 0 ] || BOOT_FROM=0
-	# Crestron's one-time golden re-install (fresh sdcard): wait for fwUpgrade=0 + image dir gone + boot completed, tolerating a self-reboot
+	# Crestron runs a one-time golden re-install (fresh sdcard). Wait for fwUpgrade=0, the image dir gone and boot completed. Allow a self-reboot.
 	w=0; last_banner=$(tail -n +$((BOOT_FROM + 1)) "$SERLOG" | tr -d '\0' | grep -c 'U-boot-0' || true)   # the boot itself
 	while :; do
 		new=$(tail -n +$((BOOT_FROM + 1)) "$SERLOG" | tr -d '\0')
 		nb=$(printf '%s\n' "$new" | grep -c 'U-boot-0' || true)
-		if [ "$nb" -gt "$last_banner" ]; then log "  U-Boot banner #$nb seen (reboot); waiting for the prompt again"; last_banner=$nb; wait_serial "root@Crestron Touchpanel:/ #" 420 "$(( $(serial_lines) - 50 ))" "fs_mgr_mount_all returned unexpected error"; fi
+		if [ "$nb" -gt "$last_banner" ]; then log "  U-Boot banner #$nb seen (reboot). Waiting for the prompt again"; last_banner=$nb; wait_serial "root@Crestron Touchpanel:/ #" 420 "$(( $(serial_lines) - 50 ))" "fs_mgr_mount_all returned unexpected error"; fi
 		fw=$(uart_last 'fw_printenv fwUpgrade' '^fwUpgrade=')
 		img=$(uart_last 'ls /mnt/sdcard/ROMDISK/romdisk/user/system/image' 'No such|image')
 		bc=$(uart_last 'getprop sys.boot_completed' '^[01]$')
@@ -400,9 +424,9 @@ if [ "$FROM_STEP" -le 7 ] && [ "$TO_STEP" -ge 7 ]; then
 		i=$((i + 1)); [ $((i % 4)) -eq 0 ] && log "  stability watch: $(( $(date +%s) - t0 ))/$((STABLE_MIN * 60)) s elapsed, no reboot seen"
 		sleep 15
 	done
-	log "  ok: no reboot in $STABLE_MIN min; uptime: $(uart_last 'cat /proc/uptime' '^[0-9]')"
+	log "  ok: no reboot in $STABLE_MIN min. uptime: $(uart_last 'cat /proc/uptime' '^[0-9]')"
 	else
-		log "  network-only (--uart $UART): fwUpgrade / boot_completed / p5-mounted checks are SKIPPED (no root console on a factory unit without the UART); with the rootsh patch (default) in system.img, the load driver (steps/tsx-android-to-card) gets root over 'ssh -tt $ADMIN_USER@panel rootsh' as soon as a Crestron account exists, no UART needed"
+		log "  network-only (--uart $UART): the fwUpgrade, boot_completed and p5-mounted checks are SKIPPED, because a factory unit has no root console without the UART. With the rootsh patch (the default) in system.img, a Crestron account is enough. The load driver (steps/tsx-android-to-card) then gets root over 'ssh -tt $ADMIN_USER@panel rootsh' and needs no UART"
 		w=0; ok=0; code=000
 		while [ $w -lt 300 ]; do
 			code=$(curl -sk -m 8 -o /dev/null -w '%{http_code}' "https://$ANDROID_IP/" 2>/dev/null || true); code=${code:-000}
@@ -432,7 +456,7 @@ if [ "$FROM_STEP" -le 7 ] && [ "$TO_STEP" -ge 7 ]; then
 	none) log "  ok: web UI up, no Crestron account (factory-fresh /data): create one at https://$ANDROID_IP/ or with installer/steps/crestron-admin (tsx-install-mainline does it)";;
 	*)	[ -n "$ADMIN_PW" ] || die "a Crestron account already exists: set TSX_ADMIN_PW to its password to verify the console (step 7)"
 		out=$(printf 'ver\r\nbye\r\n' | timeout 30 sshpass -p "$ADMIN_PW" ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$ADMIN_USER@$ANDROID_IP" 2>&1 | tr -d '\r' || true)
-		logblock "Crestron SSH console (admin, 'ver'; account state: ${acct:-web UI did not answer})" "$out"
+		logblock "Crestron SSH console (admin, 'ver', account state: ${acct:-web UI did not answer})" "$out"
 		grep -qiE 'TSW|TSS|\[v3\.' <<<"$out" && log "  ok: Crestron SSH console answers" || log "  WARNING: Crestron SSH console did not answer as expected (password '$ADMIN_PW'?)";;
 	esac
 fi

@@ -1,8 +1,8 @@
 #!/sbin/openrc-run
-# After a good boot (kiosk running for BOOT_OK_DELAY s) reset U-Boot's
-# boot_retry counter, otherwise U-Boot falls back to the golden image after
-# about 10 boots; also keeps DataRecoveryDone=1. Runs in the
-# background so boot is not delayed.
+# After a good boot (the kiosk runs for BOOT_OK_DELAY s), reset the boot_retry
+# counter of U-Boot. Without the reset, U-Boot falls back to the golden image
+# after about 10 boots. This service also keeps DataRecoveryDone=1. It runs
+# in the background, so it does not delay the boot.
 description="Reset U-Boot boot_retry after a successful boot"
 BOOT_OK_DELAY=${BOOT_OK_DELAY:-60}
 depend() { after kiosk sshd; }

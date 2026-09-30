@@ -1,13 +1,18 @@
 #!/bin/sh
-# Runs INSIDE an armv7 Alpine container (see ../build-rootfs.sh), as root.
-# Env: ALPINE (branch, e.g. v3.24), KVER (module dir name(s) under
-#      /modules/lib/modules, space-separated for more than one kernel, or
-#      empty), OUT (output dir), UIDGID (owner for outputs), IMG_MB (ext4
-#      size in MiB), TSX_APK_URL (base URL of this project's apk repository,
-#      written into the panel's /etc/apk/repositories; never fetched here),
-#      TSX_APK_LOCAL (optional: a local copy of that repository's published
-#      tree, <ALPINE>/common + <ALPINE>/xx60; packages-tsx.txt is installed
-#      from it)
+# Runs inside an armv7 Alpine container (see ../build-rootfs.sh), as root.
+# Env:
+#   ALPINE         branch, for example v3.24
+#   KVER           module dir name(s) under /modules/lib/modules, space-separated
+#                  for more than one kernel, or empty
+#   OUT            output dir
+#   UIDGID         owner of the outputs
+#   IMG_MB         ext4 size in MiB
+#   TSX_APK_URL    base URL of the apk repository of this project. The script
+#                  writes it into /etc/apk/repositories of the panel and never
+#                  fetches it.
+#   TSX_APK_LOCAL  optional. A local copy of the published tree of that
+#                  repository, <ALPINE>/common and <ALPINE>/xx60. The script
+#                  installs packages-tsx.txt from it.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 R=/build/rootfs; mkdir -p /build
@@ -17,12 +22,13 @@ log() { echo "== $*"; }
 printf '%s/%s/main\n%s/%s/community\n' "$MIRROR" "$ALPINE" "$MIRROR" "$ALPINE" > /etc/apk/repositories
 apk update -q
 
-# This project's apk repository (tsx-aports). The panel lists it first in
-# /etc/apk/repositories at TSX_APK_URL (panel.conf APK_URL overrides that on
-# the panel, tsx-config apply). Its packages (packages-tsx.txt) go into the
-# image only from a LOCAL copy of the published tree (TSX_APK_LOCAL): the
-# build never depends on TSX_APK_URL being reachable. Without a local copy
-# the image carries what those packages replace (see packages-tsx.txt).
+# The apk repository of this project (tsx-aports). The panel lists it first in
+# /etc/apk/repositories at TSX_APK_URL. On the panel, panel.conf APK_URL
+# overrides that URL (tsx-config apply). The image gets the packages of the
+# repository (packages-tsx.txt) only from a local copy of the published tree
+# (TSX_APK_LOCAL). The build never depends on a reachable TSX_APK_URL.
+# Without a local copy, the image carries what those packages replace (see
+# packages-tsx.txt).
 TSX_APK_URL=${TSX_APK_URL:-https://tsx-aports.unexceptional.net}; TSX_APK_URL=${TSX_APK_URL%/}
 TSX_APK_LOCAL=${TSX_APK_LOCAL:-}
 TSXREPO=0
@@ -40,8 +46,9 @@ gcc -O2 -Wall -s -o /build/tsx-buttons "$HERE/src/tsx-buttons.c"   # front-panel
 apk add -q --no-cache libusb-dev >/dev/null                           # LED bar
 gcc -O2 -Wall -s -o /build/tsx-ledbar "$HERE/src/tsx-ledbar.c" -lusb-1.0
 gcc -O2 -Wall -s -o /build/tsx-peak "$HERE/src/tsx-peak.c" -lm       # audio
-# boot splash: the same tool + artwork as the initramfs (status updates from
-# OpenRC, the compositor background; docs/boot.md "Boot splash")
+# Boot splash: the same tool and artwork as the initramfs. OpenRC sends status
+# updates to it, and the compositor uses it as the background (docs/boot.md
+# "Boot splash").
 gcc -O2 -Wall -s -o /build/tsx-splash "$HERE/src/tsx-splash.c"
 sh "$HERE/splash/mksplash.sh" /build/splash-out >/dev/null
 
@@ -58,9 +65,9 @@ meson setup /build/cage-build /build/cage-$CAGE_VER -Dman-pages=disabled --prefi
 ninja -C /build/cage-build >/dev/null
 strip /build/cage-build/cage
 
-# quick-settings overlay (sway layer-shell client, kiosk user): the layer-shell
-# protocol comes from wlr-protocols; it references xdg_popup, so xdg-shell's
-# glue is linked too
+# Quick-settings overlay (sway layer-shell client, kiosk user). The layer-shell
+# protocol comes from wlr-protocols. The overlay references xdg_popup, so the
+# build also links the xdg-shell glue.
 log "build tsx-overlay"
 apk add -q --no-cache cairo-dev wlr-protocols >/dev/null
 P=/build/tsx-overlay-proto; rm -rf $P; mkdir -p $P
@@ -73,7 +80,7 @@ gcc -O2 -Wall -s -I$P -o /build/tsx-overlay "$HERE/src/tsx-overlay.c" $P/*.c \
 
 log "install packages ($ALPINE, armv7)"
 rm -rf $R; mkdir -p $R/etc/apk/keys
-# trust this project's signing key (the same .pub the tsx-keys package ships)
+# Trust the signing key of this project (the same .pub that the tsx-keys package ships).
 cp "$HERE"/overlay/etc/apk/keys/*.rsa.pub /etc/apk/keys/
 cp -a /etc/apk/keys/. $R/etc/apk/keys/
 PKGS=$(grep -v '^#' "$HERE/packages.txt" | tr '\n' ' ')
@@ -81,7 +88,7 @@ PKGS=$(grep -v '^#' "$HERE/packages.txt" | tr '\n' ' ')
 if [ $TSXREPO = 1 ]; then
 	TSXPKGS=$(grep -v '^#' "$HERE/packages-tsx.txt" | tr '\n' ' ')
 	log "tsx-aports packages from $TSX_APK_LOCAL: $TSXPKGS"
-	# tsx-xx60-chromium provides chromium: no Alpine chromium pin next to it
+	# tsx-xx60-chromium provides chromium, so there is no Alpine chromium pin next to it.
 	PKGS="$(grep -v '^#' "$HERE/packages.txt" | grep -v '^chromium=' | tr '\n' ' ') $TSXPKGS"
 	printf '%s/%s/common\n%s/%s/xx60\n' "$TSX_APK_LOCAL" "$ALPINE" "$TSX_APK_LOCAL" "$ALPINE" > /build/repositories
 fi
@@ -89,11 +96,12 @@ cat /etc/apk/repositories >> /build/repositories
 apk add --root $R --initdb --no-cache -q --keys-dir /etc/apk/keys \
 	--repositories-file /build/repositories $PKGS
 cp -a /etc/apk/keys $R/etc/apk/
-# the panel's list: this project's two repositories FIRST (tsx-xx60-chromium
-# must win the tie with Alpine's chromium; tsx-aports README "Which chromium
-# wins"). The block, marker line included, is what tsx-config apply writes.
+# The panel list has the two repositories of this project first. That way
+# tsx-xx60-chromium wins the tie with the Alpine chromium (tsx-aports README
+# "Which chromium wins"). tsx-config apply writes this block, marker line
+# included.
 {
-	echo "# tsx-aports (tsx-config apply; panel.conf APK_URL)"
+	echo "# tsx-aports (tsx-config apply. panel.conf APK_URL)"
 	echo "$TSX_APK_URL/$ALPINE/common"
 	echo "$TSX_APK_URL/$ALPINE/xx60"
 	cat /etc/apk/repositories
@@ -101,18 +109,20 @@ cp -a /etc/apk/keys $R/etc/apk/
 
 log "overlay"
 cp -a "$HERE"/overlay/. $R/
-# tsx-autoupdate re-applies the Chromium ES2 patch on the panel after an upgrade:
-# ship the patch tool + signature list from their single source in src/.
+# tsx-autoupdate applies the Chromium ES2 patch again on the panel after an
+# upgrade. Ship the patch tool and the signature list from their single
+# source in src/.
 install -D -m 644 "$HERE/src/chromium-es2/patch-chromium.py" $R/usr/local/share/tsx/chromium-es2/patch-chromium.py
 install -D -m 644 "$HERE/src/chromium-es2/sigs.json" $R/usr/local/share/tsx/chromium-es2/sigs.json
-# the build's repository URL: tsx-config apply falls back to it when
-# panel.conf has no APK_URL
+# The repository URL of the build. tsx-config apply uses it when panel.conf
+# has no APK_URL.
 printf '%s\n' "$TSX_APK_URL" > $R/etc/tsx/apk-url.default
-# build id for tsx-autoupdate / the HA update entity (installed_version)
+# The build id for tsx-autoupdate and the HA update entity (installed_version).
 printf '%s\n' "${TSX_BUILD_ID:-$(date -u +%Y%m%d%H%M)}" > $R/etc/tsx/build-id
-# the boot clock's floor (no RTC): swclock sets the clock from this file's
-# mtime, so a new image never boots earlier than its build time
-# (/etc/periodic/15min/tsx-savetime keeps it current while NTP has the time)
+# The floor of the boot clock (the panel has no RTC). swclock sets the clock
+# from the mtime of this file, so a new image never boots earlier than its
+# build time. /etc/periodic/15min/tsx-savetime keeps the mtime current while
+# NTP has the time.
 mkdir -p $R/var/lib/misc && touch $R/var/lib/misc/openrc-shutdowntime
 install -m 755 /build/tsx-idled $R/usr/local/sbin/tsx-idled
 install -m 755 /build/tsx-buttons $R/usr/local/sbin/tsx-buttons
@@ -122,15 +132,15 @@ install -m 755 /build/tsx-overlay $R/usr/local/bin/tsx-overlay
 install -m 755 /build/tsx-splash $R/usr/local/bin/tsx-splash
 mkdir -p $R/usr/share/tsx/splash
 cp /build/splash-out/*.ppm /build/splash-out/*.psf $R/usr/share/tsx/splash/
-# audio: level meter, Sendspin player. sendspin-cli is built from source by
-# rootfs/src/sendspin/build.sh (CI runs it before this script; a local build
-# runs it by hand first) and never committed -- read it from that build's
-# output dir here.
-# voice: the Assist voice satellite linux-voice-assistant (pinned; see
+# audio: level meter, Sendspin player. rootfs/src/sendspin/build.sh builds
+# sendspin-cli from source. CI runs it before this script. For a local build,
+# run it by hand first. The build output is never committed, so this script
+# reads it from the output dir of that build.
+# voice: the Assist voice satellite linux-voice-assistant (pinned, see
 # voice/install-lva.sh below)
 install -m 755 /build/tsx-peak $R/usr/local/bin/tsx-peak
 if [ $TSXREPO = 1 ]; then
-	# the sendspin-cli package: /usr/bin/sendspin-cli (tsx-sendspin prefers it)
+	# The sendspin-cli package installs /usr/bin/sendspin-cli (tsx-sendspin prefers it).
 	[ -x $R/usr/bin/sendspin-cli ] || { echo "sendspin-cli package did not install /usr/bin/sendspin-cli"; exit 1; }
 	SENDSPIN_BIN=/usr/bin/sendspin-cli
 else
@@ -140,27 +150,28 @@ else
 	SENDSPIN_BIN=/usr/local/bin/sendspin-cli
 fi
 log "linux-voice-assistant"
-# TensorFlow Lite C for the wakeword models: the tensorflow-lite-c package
-# (tsx-aports), else built from source by rootfs/voice/build-tflite.sh (never
-# committed) and read from voice/tflite/ here, the same as sendspin-cli above:
-# a local build runs it by hand first.
+# TensorFlow Lite C for the wakeword models comes from the tensorflow-lite-c
+# package (tsx-aports). Without it, rootfs/voice/build-tflite.sh builds it from
+# source. The build output is never committed, and this script reads it from
+# voice/tflite/, as it does for sendspin-cli above. For a local build, run
+# build-tflite.sh by hand first.
 if [ $TSXREPO = 1 ]; then
 	TFLITE_SO=/usr/lib/libtensorflowlite_c.so sh "$HERE/voice/install-lva.sh" $R
 else
-	[ -s "$HERE/voice/tflite/libtensorflowlite_c.so" ] || echo "WARNING: no voice/tflite/libtensorflowlite_c.so (run rootfs/voice/build-tflite.sh first); install-lva.sh will fail its checksum check"
+	[ -s "$HERE/voice/tflite/libtensorflowlite_c.so" ] || echo "WARNING: no voice/tflite/libtensorflowlite_c.so (run rootfs/voice/build-tflite.sh first). install-lva.sh will fail its checksum check"
 	sh "$HERE/voice/install-lva.sh" $R
 fi
 echo "cage $CAGE_VER + argb8888-fallback.patch (built from source, sha256 $CAGE_SHA256)" > $R/usr/share/tsx-cage.version
 chown -R 0:0 $R/etc $R/usr/local
 
-# DSP: TFA9890 CoolFlux DSP tuning containers (.cnt). These are Jabil/NXP
-# proprietary binaries (speaker model, patch, presets) and must NOT be copied
-# into the overlay or published anywhere; install them from the local
-# Android vendor tree at build time only, straight into the rootfs image.
-# Missing containers are a warning, not a build failure: tsx-tfa-dsp
-# checks for the file at load time and does nothing if it is absent.
+# DSP: TFA9890 CoolFlux DSP tuning containers (.cnt). These are proprietary
+# Jabil/NXP binaries (speaker model, patch, presets). Do not copy them into
+# the overlay or publish them anywhere. Install them only at build time, from
+# the local Android vendor tree, straight into the rootfs image.
+# A missing container gives a warning, not a build failure. tsx-tfa-dsp checks
+# for the file at load time and does nothing if the file is absent.
 TFA_VENDOR_LOCAL=${TFA_VENDOR_LOCAL:-"$HERE/vendor-local/tfa9890"}
-TFA_VENDOR_SRC=${TFA_VENDOR_SRC:-}   # required (no default): path to the vendor's device_amlogic_common/audio/tfa9890 tree
+TFA_VENDOR_SRC=${TFA_VENDOR_SRC:-}   # required, no default: path to the device_amlogic_common/audio/tfa9890 tree of the vendor
 TFA_VENDOR_FETCH=${TFA_VENDOR_FETCH:-yes}
 log "TFA9890 DSP containers: $TFA_VENDOR_LOCAL first, then $TFA_VENDOR_SRC (proprietary, not published)"
 if [ "$TFA_VENDOR_FETCH" != no ]; then
@@ -169,8 +180,8 @@ if [ "$TFA_VENDOR_FETCH" != no ]; then
 		[ -r "$TFA_VENDOR_LOCAL/$name/stereo.cnt" ] || tfa_missing=1
 	done
 	if [ "$tfa_missing" = 1 ]; then
-		log "vendor-local/tfa9890 incomplete; fetching from Crestron's public firmware .puf (see ../vendor-fetch.sh)"
-		sh "$HERE/vendor-fetch.sh" || echo "WARNING: vendor-fetch.sh failed (no network in the build container?); falling back to $TFA_VENDOR_SRC or leaving the variant absent (set TFA_VENDOR_FETCH=no to skip this step)"
+		log "vendor-local/tfa9890 incomplete. Fetching from Crestron's public firmware .puf (see ../vendor-fetch.sh)"
+		sh "$HERE/vendor-fetch.sh" || echo "WARNING: vendor-fetch.sh failed (no network in the build container?). Falling back to $TFA_VENDOR_SRC or leaving the variant absent (set TFA_VENDOR_FETCH=no to skip this step)"
 	fi
 fi
 tfa_found=0
@@ -185,17 +196,18 @@ for name in settings_yushan settings_yushan_2nd settings_yushan_3rd; do
 		echo "WARNING: missing $name/stereo.cnt in $TFA_VENDOR_LOCAL or $TFA_VENDOR_SRC (TFA9890 DSP variant $name will not be available on the panel)"
 	fi
 done
-[ "$tfa_found" -gt 0 ] || echo "WARNING: no TFA9890 .cnt containers found in $TFA_VENDOR_LOCAL or $TFA_VENDOR_SRC (tsx-tfa-dsp will have nothing to load; set TFA_VENDOR_LOCAL/TFA_VENDOR_SRC to override)"
+[ "$tfa_found" -gt 0 ] || echo "WARNING: no TFA9890 .cnt containers found in $TFA_VENDOR_LOCAL or $TFA_VENDOR_SRC (tsx-tfa-dsp will have nothing to load. Set TFA_VENDOR_LOCAL/TFA_VENDOR_SRC to override)"
 
-# browser: re-enable Chromium's ES 3.0 -> 2.0 context fallback (2-byte patch,
-# src/chromium-es2/). Only a build listed in sigs.json with the exact
-# instruction bytes is patched; anything else keeps the stock binary (warning,
-# the build goes on). Record: /etc/tsx/chromium-es2-patched. The unpatched
-# binary is not kept (192 MB); tsx-chromium-es2 revert or apk fix chromium.
+# browser: enable the Chromium ES 3.0 to 2.0 context fallback again (2-byte
+# patch, src/chromium-es2/). The build patches only a build that sigs.json
+# lists with the exact instruction bytes. Any other build keeps the stock
+# binary. The script then warns and the build goes on. The record is
+# /etc/tsx/chromium-es2-patched. The build does not keep the unpatched binary
+# (192 MB). To undo the patch, run tsx-chromium-es2 revert or apk fix chromium.
 CHROMIUM_ES2_PATCH=${CHROMIUM_ES2_PATCH:-1}
 ES2_RESULT="not requested (CHROMIUM_ES2_PATCH=$CHROMIUM_ES2_PATCH)"
 if [ $TSXREPO = 1 ]; then
-	# tsx-xx60-chromium: patched when the package was built; only verify
+	# The package build already patched tsx-xx60-chromium. Only verify the patch.
 	log "chromium: tsx-xx60-chromium (ES2 patch built into the package)"
 	apk add -q --no-cache python3 >/dev/null || echo "WARNING: python3 for the patch tool not installed"
 	if [ -r $R/etc/tsx/chromium-es2-patched ] && python3 "$HERE/src/chromium-es2/patch-chromium.py" --check $R/usr/lib/chromium/chromium >/dev/null; then
@@ -221,9 +233,9 @@ elif [ "$CHROMIUM_ES2_PATCH" = 1 ]; then
 fi
 echo "chromium-es2-patch: $ES2_RESULT"
 
-# every binary built above must find its shared libraries in the image
-# (a package missing from packages.txt, e.g. libusb for tsx-ledbar, only
-# shows up on the panel otherwise: "Error loading shared library")
+# Every binary built above must find its shared libraries in the image.
+# Otherwise a package missing from packages.txt (for example libusb for
+# tsx-ledbar) only shows up on the panel: "Error loading shared library".
 log "shared library check"
 for bin in /usr/local/sbin/tsx-idled /usr/local/sbin/tsx-buttons /usr/local/bin/tsx-ledbar \
 	/usr/local/bin/tsx-peak /usr/local/bin/tsx-overlay /usr/local/bin/tsx-splash /usr/bin/cage $SENDSPIN_BIN; do
@@ -241,12 +253,13 @@ addgroup -S render 2>/dev/null || true
 adduser -D -H -h /var/lib/kiosk -s /sbin/nologin -g "kiosk browser" kiosk
 for g in video input seat render audio; do addgroup kiosk $g 2>/dev/null || true; done
 mkdir -p /var/lib/kiosk && chown kiosk:kiosk /var/lib/kiosk
-# on-panel setup page (docs/rootfs.md "Setup page"): deliberately its OWN
-# unprivileged user, not "kiosk" -- it parses HTTP from the LAN before any
-# pairing has happened, a smaller and different trust boundary than the
-# always-unsandboxed browser, and it never needs kiosk's video/input/audio
-# group access. No home directory; talks to root only through
-# tsx-setup-helper's FIFOs (group tsx-setup, created by that service).
+# The on-panel setup page (docs/rootfs.md "Setup page") deliberately has its
+# own unprivileged user, not "kiosk". The page parses HTTP from the LAN before
+# any pairing has happened. That is a smaller and different trust boundary
+# than the browser, which always runs unsandboxed. The page also does not need
+# the video, input and audio groups of kiosk. It has no home directory. It
+# talks to root only through the FIFOs of tsx-setup-helper (group tsx-setup,
+# which that service creates).
 adduser -D -H -s /sbin/nologin -g "on-panel setup page" tsx-setup
 for s in devfs dmesg udev udev-trigger udev-settle; do rc-update add $s sysinit; done
 for s in root localmount tsx-data tsx-config modules sysctl hostname bootmisc syslog swclock seedrng tsx-setup tsx-hostname udev-postmount machine-id; do
@@ -259,12 +272,13 @@ for s in mount-ro killprocs savecache; do rc-update add $s shutdown; done
 echo tsx-kiosk > /etc/hostname
 printf '127.0.0.1\tlocalhost tsx-kiosk\n::1\t\tlocalhost\n' > /etc/hosts
 mkdir -p /etc/crontabs && touch /etc/crontabs/root
-# ssh: root with password or key (same as the rescue image; change on deploy)
+# ssh: root logs in with a password or a key (the same as the rescue image).
+# Change this on deploy.
 sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
-# allow ssh -L (DevTools tunnel for the first HA login); Alpine ships "no"
+# Allow ssh -L (the DevTools tunnel for the first HA login). Alpine ships "no".
 sed -i 's/^AllowTcpForwarding.*/AllowTcpForwarding local/' /etc/ssh/sshd_config
 grep -q '^PermitRootLogin' /etc/ssh/sshd_config || echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
-# U-Boot env tool: never use Android's /dev/mmcblk0 copy by accident
+# U-Boot env tool: never use the Android /dev/mmcblk0 copy by accident.
 rm -f /etc/fw_env.config
 CH
 H=$(echo tsx | mkpasswd -m sha-512 -s); case "$H" in \$6\$*) ;; *) echo "password hash failed"; exit 1;; esac
@@ -274,7 +288,7 @@ if [ -s "$HERE/authorized_keys" ]; then
 fi
 
 log "blank cursor theme"
-# one 1x1 fully transparent Xcursor image
+# The theme has one 1x1 fully transparent Xcursor image.
 C=$R/usr/share/tsx/cursors/blank/cursors; mkdir -p $C
 printf 'Xcur\020\000\000\000\000\000\001\000\001\000\000\000' > $C/left_ptr
 printf '\002\000\375\377\030\000\000\000\034\000\000\000' >> $C/left_ptr     # toc: type image, size 24, pos 28
@@ -291,52 +305,53 @@ printf '[Icon Theme]\nName=blank\n' > $R/usr/share/tsx/cursors/blank/index.theme
 ln -sfn blank $R/usr/share/tsx/cursors/default
 
 log "trim"
-# /etc/machine-id: the dbus apk package's own post-install trigger runs
-# dbus-uuidgen (or equivalent) against THIS build container the moment
-# `apk add` installs it, baking one fixed id into the image -- every panel
-# flashed from the same rootfs.tar.gz would then share that identical id
-# until the next rebuild. Ship it empty instead: /etc/init.d/machine-id
-# (OpenRC's own script, part of the openrc package, now added to the boot
-# runlevel above) only fills it in `if [ -s /etc/machine-id ]; then return
-# 0; fi` -- i.e. exactly when empty/missing -- so each unit's first real
-# boot generates its own, once, straight onto that unit's own root fs.
+# /etc/machine-id: the post-install trigger of the dbus apk package runs
+# dbus-uuidgen (or equivalent) against this build container when `apk add`
+# installs the package. That bakes one fixed id into the image. Every panel
+# flashed from the same rootfs.tar.gz would then share that id until the next
+# rebuild. Ship the file empty instead. The OpenRC script /etc/init.d/machine-id
+# (part of the openrc package, and added to the boot runlevel above) fills it
+# in only when it is empty or missing, in this check:
+# `if [ -s /etc/machine-id ]; then return 0; fi`
+# So the first real boot of each unit generates its own id once, straight onto
+# the root fs of that unit.
 : > $R/etc/machine-id
-# Chromium UI locales: keep en-US only
+# Chromium UI locales: keep only en-US.
 [ -d $R/usr/lib/chromium/locales ] && find $R/usr/lib/chromium/locales -name '*.pak' ! -name 'en-US.pak' -delete
-# man pages / doc / info: never read on a headless kiosk
+# Man pages, docs and info: nobody reads them on a headless kiosk.
 rm -rf $R/usr/share/man $R/usr/share/doc $R/usr/share/info
-# apk's own index cache (APKINDEX*.tar.gz, ~3 MiB); apk info in the manifest
-# step below re-populates this, so it is also cleared a second time just
-# before the tarball is made
+# The apk index cache (APKINDEX*.tar.gz, ~3 MiB). The apk info calls in the
+# manifest step below fill it again, so the build clears it a second time
+# just before it makes the tarball.
 rm -rf $R/var/cache/apk/* $R/lib/apk/db/scripts.tar
-# locale data (gettext .mo files): nothing in this package set currently
-# ships /usr/share/locale, but keep only en/C defensively if that changes
+# Locale data (gettext .mo files). Nothing in this package set ships
+# /usr/share/locale now. If that changes, keep only en and C.
 [ -d $R/usr/share/locale ] && find $R/usr/share/locale -mindepth 1 -maxdepth 1 -type d ! -name 'en*' ! -name C -exec rm -rf {} +
-# py3-numpy-tests (~13 MiB): apk's install_if binds it to py3-numpy, so
-# `apk del --root $R py3-numpy-tests` is refused ("not removed due to:
-# py3-numpy-tests: py3-numpy") as long as py3-numpy stays installed
-# (verified against this Alpine release); remove the test trees directly
+# py3-numpy-tests (~13 MiB): the install_if rule of apk binds it to py3-numpy.
+# So `apk del --root $R py3-numpy-tests` fails ("not removed due to:
+# py3-numpy-tests: py3-numpy") while py3-numpy stays installed (verified
+# against this Alpine release). Remove the test trees directly.
 find $R/usr/lib/python3*/site-packages/numpy -depth -type d -name tests -exec rm -rf {} +
-# sway-wallpapers (~5 MiB, /usr/share/backgrounds/sway): same install_if
-# binding to sway blocks `apk del`. Unused here: the kiosk's generated sway
-# config uses the boot splash as the only background (usr/local/bin/kiosk-session),
-# so no wallpaper path is ever read
+# sway-wallpapers (~5 MiB, /usr/share/backgrounds/sway): the same install_if
+# binding to sway blocks `apk del`. The image does not use it. The sway config
+# that the kiosk generates uses the boot splash as its only background
+# (usr/local/bin/kiosk-session), so nothing reads a wallpaper path.
 rm -rf $R/usr/share/backgrounds/sway
-# python .pyc bytecode caches (~25 MiB combined): apk's split -pyc
-# subpackages (python3-pycache-pyc0, py3-numpy-pyc) are install_if-bound to
-# python3/py3-numpy the same way py3-numpy-tests is above, so `apk del` is
-# refused there too; the interpreter just recompiles bytecode on first
-# import (a few ms, once, per file) so dropping the caches is safe
+# Python .pyc bytecode caches (~25 MiB combined). The split -pyc subpackages
+# of apk (python3-pycache-pyc0, py3-numpy-pyc) have an install_if binding to
+# python3 and py3-numpy, as py3-numpy-tests has above. So `apk del` fails
+# there too. The interpreter compiles the bytecode again on the first import
+# of each file (a few ms), so dropping the caches is safe.
 find $R/usr/lib/python3* -depth \( -type d -name '__pycache__' -o -type f -name '*.pyc' \) -exec rm -rf {} +
 
 copied=0
 for kv in ${KVER:-}; do
 	if [ $TSXREPO = 1 ] && [ -d "$R/lib/modules/$kv" ]; then
-		# installed (and owned) by tsx-xx60-kernel-<flavor>: keep the package's tree
+		# The package tsx-xx60-kernel-<flavor> installs and owns this tree. Keep it.
 		log "kernel modules $kv: from its tsx-xx60-kernel package"
 		copied=$((copied + 1))
 	elif [ -d "/modules/lib/modules/$kv" ]; then
-		[ $TSXREPO = 1 ] && echo "WARNING: kernel modules $kv: no tsx-xx60-kernel package in $TSX_APK_LOCAL has them; copied as unowned files"
+		[ $TSXREPO = 1 ] && echo "WARNING: kernel modules $kv: no tsx-xx60-kernel package in $TSX_APK_LOCAL has them. Copied as unowned files"
 		log "kernel modules $kv"
 		mkdir -p $R/lib/modules
 		cp -a "/modules/lib/modules/$kv" $R/lib/modules/
@@ -372,16 +387,17 @@ apk info --root $R -v 2>/dev/null | sort > "$OUT/rootfs.manifest"
 } > "$OUT/rootfs.sizes"
 cat "$OUT/rootfs.sizes"
 
-# the apk info calls above re-populate $R/var/cache/apk with the index cache
-# cleared earlier in "trim"; clear it again so it doesn't ship in the image
+# The apk info calls above fill $R/var/cache/apk with the index cache again,
+# after the "trim" step cleared it. Clear it once more so it does not ship in
+# the image.
 rm -rf $R/var/cache/apk/*
 
 log "tarball"
 tar -C $R --numeric-owner -cpf - . | gzip -6 > "$OUT/rootfs.tar.gz"
 log "ext4 image (${IMG_MB} MiB, label tsxroot)"
 rm -f "$OUT/rootfs.ext4"
-# no metadata_csum_seed / orphan_file, which the vendor 3.10
-# kernel (Android on the same p5) rejects
+# Do not use metadata_csum_seed or orphan_file. The vendor 3.10 kernel
+# (Android on the same p5) rejects them.
 mke2fs -q -t ext4 -O ^metadata_csum_seed,^orphan_file -L tsxroot -m 1 -d $R "$OUT/rootfs.ext4" "${IMG_MB}M"
 e2fsck -fn "$OUT/rootfs.ext4" >/dev/null && echo "e2fsck clean"
 (cd "$OUT" && sha256sum rootfs.tar.gz rootfs.ext4 > rootfs.sha256)

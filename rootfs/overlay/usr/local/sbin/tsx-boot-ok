@@ -1,41 +1,43 @@
 #!/bin/sh
-# tsx-boot-ok [--status|--dry-run]: after a good boot, put U-Boot's env (the copy
-# U-Boot really reads) into the "healthy mainline" state:
+# tsx-boot-ok [--status|--dry-run]: after a good boot, put the U-Boot env (the
+# copy that U-Boot really reads) into the "healthy mainline" state:
 #   boot_retry=0, golden_boot_retry=0 (if set)  so the hook keeps booting mainline
-#   DataRecoveryDone=1    so Crestron's golden recovery image
-#       does not format p5/p7 and empty /data if it ever runs (its crestInit.sh
-#       reformats when DataRecoveryDone != 1; stock Android's logBootComplete.sh
-#       sets it back to 0 on every good Android boot, so it is re-set here).
+#   DataRecoveryDone=1    so the Crestron golden recovery image does not
+#       format p5/p7 or empty /data if it ever runs. Its crestInit.sh
+#       reformats when DataRecoveryDone != 1. The logBootComplete.sh of stock
+#       Android sets it back to 0 on every good Android boot, so this script
+#       sets it again.
 #       DEFUSE_GOLDEN=no in /etc/tsx/uboot-env.conf turns this part off.
-# One env write at most (fw_setenv --script), none if everything is already
-# right. The write is read back: CRC valid, the new values present, every other
-# variable unchanged. Refuses to write unless /etc/tsx/uboot-env.conf is marked
-# ENV_VERIFIED=yes and the env read before has a valid CRC and looks like this
-# board's env.
+# It writes the env once at most (fw_setenv --script), and not at all if
+# everything is already right. It reads the write back: the CRC is valid, the
+# new values are present, and every other variable is unchanged. It refuses
+# to write unless /etc/tsx/uboot-env.conf has ENV_VERIFIED=yes, and the env
+# that it read before has a valid CRC and looks like the env of this board.
 set -eu
 CONF=${TSX_ENV_CONF:-/etc/tsx/uboot-env.conf}   # override for host tests only
 . "$CONF"
 mode=${1:-write}
 die() { echo "tsx-boot-ok: $*" >&2; exit 1; }
-# Every fw_printenv/fw_setenv call below is bounded by `timeout -s KILL`
-# (TSX_FWENV_TIMEOUT, default 10s): u-boot-tools' fw_env.c read loop spins at
-# 100% CPU forever on a config/file size mismatch instead of erroring out
-# (docs/boot.md "fw_printenv can hang"). This runs unattended in the
-# background after every boot (see /etc/init.d/tsx-boot-ok), so a hang here
-# would otherwise burn a CPU core silently forever instead of just failing.
+# `timeout -s KILL` limits every fw_printenv and fw_setenv call below
+# (TSX_FWENV_TIMEOUT, default 10s). The read loop in fw_env.c of u-boot-tools
+# spins at 100% CPU forever on a config/file size mismatch, and does not
+# report an error (docs/boot.md "fw_printenv can hang"). This script runs
+# unattended in the background after every boot (see /etc/init.d/tsx-boot-ok).
+# Without the limit, a hang would burn a CPU core silently forever instead of
+# failing.
 FWTO=${TSX_FWENV_TIMEOUT:-10}
 FWTO_CMD=; command -v timeout >/dev/null 2>&1 && FWTO_CMD="timeout -s KILL $FWTO"
 
-# find the disk: "emmc" = the MMC-type device that has boot0 hw partitions;
-# "sd" = the SD-class device holding the Crestron MBR or the card layout
+# Find the disk. "emmc" = the MMC-type device that has boot0 hw partitions.
+# "sd" = the SD-class device that holds the Crestron MBR or the card layout.
 disk=
 for d in /sys/block/mmcblk[0-9]; do
 	[ -e "$d" ] || continue
 	t=$(cat "$d/device/type" 2>/dev/null || true)
 	case "$ENV_DISK" in
 	emmc) [ "$t" = MMC ] && [ -e "${d}boot0" ] && disk=/dev/${d##*/};;
-	# p1 at 81920 and p2 at 206849: the Crestron MBR (p5 = rootfs) and the card layout
-	# (p2 = rootfs, no p5; installer) alike
+	# p1 at 81920 and p2 at 206849 match both the Crestron MBR (p5 = rootfs)
+	# and the card layout (p2 = rootfs, no p5, made by the installer).
 	sd) [ -e "$d/${d##*/}p2" ] && [ "$(cat "$d/${d##*/}p1/start" 2>/dev/null)" = 81920 ] && [ "$(cat "$d/${d##*/}p2/start")" = 206849 ] && disk=/dev/${d##*/};;
 	/dev/*) disk=$ENV_DISK;;
 	esac
@@ -48,12 +50,12 @@ if [ "$mode" = --status ]; then
 	echo "env disk: ${disk:-not found} ($ENV_DISK) offset $ENV_OFFSET size $ENV_SIZE verified=$ENV_VERIFIED defuse_golden=$defuse"
 fi
 [ "$ENV_VERIFIED" = yes ] && [ "$ENV_OFFSET" != TODO ] || die "U-Boot env location not verified (edit /etc/tsx/uboot-env.conf, see REPORT.md). boot_retry NOT reset."
-[ -n "$disk" ] && [ -b "$disk" ] || die "env disk ($ENV_DISK) not found; does the kernel DT enable that MMC controller?"
+[ -n "$disk" ] && [ -b "$disk" ] || die "env disk ($ENV_DISK) not found. Does the kernel DT enable that MMC controller?"
 
 run=${TSX_RUN:-/run}
 cfg=$run/tsx-fw_env.config
 echo "$disk $ENV_OFFSET $ENV_SIZE" > "$cfg"
-readenv() {   # full env text; dies on a read error, a bad CRC or a foreign env
+readenv() {   # full env text. It dies on a read error, a bad CRC or a foreign env
 	out=$($FWTO_CMD fw_printenv -c "$cfg" 2>&1) || die "fw_printenv failed or timed out after ${FWTO}s: $out"
 	echo "$out" | grep -qi 'bad crc' && die "env CRC bad at $disk $ENV_OFFSET: refusing to write"
 	echo "$out" | grep -q '^bootcmd=' && echo "$out" | grep -q '^aml_dt=yushan_one' || die "env at $disk $ENV_OFFSET does not look like the yushan_one U-Boot env"
@@ -63,7 +65,7 @@ getv() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
 env0=$(readenv)
 br=$(getv "$env0" boot_retry); gr=$(getv "$env0" golden_boot_retry); drd=$(getv "$env0" DataRecoveryDone)
 
-# what has to change (name value per line = fw_setenv --script syntax)
+# What must change (name value per line = fw_setenv --script syntax)
 want=
 [ "$br" = 0 ] || want="${want}boot_retry 0
 "
@@ -86,7 +88,8 @@ scr=$run/tsx-boot-ok.setenv
 printf '%s' "$want" > "$scr"
 $FWTO_CMD fw_setenv -c "$cfg" -s "$scr" || die "fw_setenv failed or timed out after ${FWTO}s (wanted: $names)"
 rm -f "$scr"
-# verify: CRC + board check (readenv), new values, every other variable unchanged
+# Verify the CRC and the board check (readenv), the new values, and that every
+# other variable is unchanged.
 env1=$(readenv)
 while read -r n v; do
 	[ -n "$n" ] || continue

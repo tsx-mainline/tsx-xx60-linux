@@ -1,9 +1,9 @@
 #!/bin/bash
-# Host test of rootfs/overlay/usr/local/sbin/tsx-boot-ok (boot_retry
-# reset + keep DataRecoveryDone=1). Runs the script as the panel
-# runs it: armv7 Alpine 3.24 (qemu-user binfmt), busybox sh, u-boot-tools
-# 2026.04 (= the rootfs package), on a loop block device that holds a REAL env
-# block at 0x100000:
+# Host test of rootfs/overlay/usr/local/sbin/tsx-boot-ok. The script resets
+# boot_retry and keeps DataRecoveryDone=1. The test runs it as the panel
+# does: armv7 Alpine 3.24 (qemu-user binfmt), busybox sh, and u-boot-tools
+# 2026.04 (the rootfs package). The script works on a loop block device
+# that holds a REAL env block at 0x100000:
 #   unit B  captures/tsw-1060-unitB/backup/... (the bench panel, hook installed,
 #           snapshot with boot_retry=1, DataRecoveryDone=0)
 #   unit A  captures/tsw-1060/backup/tsw1060-mmcblk0p3-env.img (stock env)
@@ -12,24 +12,25 @@ set -euo pipefail
 INSTALLER_DIR=$(cd "$(dirname "$0")/.." && pwd)
 ROOTFS_DIR=$(cd "$INSTALLER_DIR/../rootfs" && pwd)
 
-# == 0. a short/truncated env file fails fast, it does not hang (regression for
-# the fw_env.c CPU-spin bug: u-boot-tools' read loop treats a short read (EOF)
-# the same as a partial one and never advances -- confirmed on both
-# uboot-tools 2026.07 and Alpine's 2026.04; see docs/boot.md
-# "fw_printenv can hang". This one check does not need the real unit captures
-# CAPTURES_DIR needs (below), or ARM emulation: tsx-boot-ok's shell logic is
-# architecture-independent, so a plain x86_64 alpine:latest (u-boot-tools
-# 2026.04-r1, the panel's own version) is enough.
+# == 0. A short or truncated env file must fail fast and must not hang.
+# This is a regression test for the fw_env.c CPU-spin bug. The read loop of
+# u-boot-tools treats a short read (EOF) like a partial read and never
+# advances. We confirmed this on uboot-tools 2026.07 and on Alpine 2026.04.
+# See docs/boot.md, "fw_printenv can hang".
+# This check needs neither the real unit captures (CAPTURES_DIR, below) nor
+# ARM emulation. The shell logic of tsx-boot-ok does not depend on the
+# architecture. A plain x86_64 alpine:latest is enough. It has u-boot-tools
+# 2026.04-r1, the version on the panel.
 W0=${TMPDIR:-/tmp}/tsx-bootok-eof-test; rm -rf "$W0"; mkdir -p "$W0"
 trap 'rm -rf "$W0"' EXIT
 cp "$ROOTFS_DIR/overlay/usr/local/sbin/tsx-boot-ok" "$ROOTFS_DIR/overlay/etc/tsx/uboot-env.conf" "$W0/"
 docker run --rm --privileged -v "$W0:/w" alpine:latest sh -euc '
 apk add -q --no-cache u-boot-tools losetup coreutils >/dev/null
 for i in $(seq 0 7); do [ -b /dev/loop$i ] || mknod /dev/loop$i b 7 $i; done
-# a disk that ends 32 KiB into the declared 64 KiB env block: the same
-# size/file mismatch that spins fw_env.c (a short read hits EOF, read() keeps
-# returning 0, the loop never advances) -- confirmed on both uboot-tools
-# 2026.07 and Alpine 2026.04-r1, the panel'"'"'s own version.
+# This disk ends 32 KiB into the declared 64 KiB env block. The size and file
+# mismatch is the one that spins fw_env.c: a short read hits EOF, read()
+# keeps returning 0, and the loop never advances. We confirmed this on
+# uboot-tools 2026.07 and on Alpine 2026.04-r1, the version on the panel.
 truncate -s $((0x100000 + 0x8000)) /w/short.img
 L=$(losetup -f --show /w/short.img); trap "losetup -d $L" EXIT
 sed "s|^ENV_DISK=.*|ENV_DISK=$L|" /w/uboot-env.conf > /w/conf.trunc
@@ -45,7 +46,7 @@ CAPTURES=${CAPTURES_DIR:-}
 BFILE=$CAPTURES/tsw-1060-unitB/backup/tsw1060B-mmcblk0-20260926.img
 AFILE=$CAPTURES/tsw-1060/backup/tsw1060-mmcblk0p3-env.img
 if [ -z "$CAPTURES" ] || [ ! -f "$BFILE" ] || [ ! -f "$AFILE" ]; then
-	echo "SKIPPED: needs real unit env captures (CAPTURES_DIR); not present here"
+	echo "SKIPPED: needs real unit env captures (CAPTURES_DIR). Not present here"
 	exit 0
 fi
 W=${TMPDIR:-/tmp}/tsx-bootok-test; rm -rf "$W"; mkdir -p "$W"

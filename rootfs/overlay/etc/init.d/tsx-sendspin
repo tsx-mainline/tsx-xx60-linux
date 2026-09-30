@@ -1,10 +1,10 @@
 #!/sbin/openrc-run
-# Sendspin player (Music Assistant) on the panel speakers. Off by default: not
-# in a runlevel until the audio path works (the sendspin bring-up notes).
+# Sendspin player (Music Assistant) on the panel speakers. Off by default: it
+# is not in a runlevel until the audio path works (the sendspin bring-up notes).
 description="Sendspin synchronized-audio player (/etc/tsx/sendspin.conf)"
 supervisor=supervise-daemon
-# the sendspin-cli package (tsx-aports) when installed, else the copy a rootfs
-# built without that repository carries (rootfs/src/sendspin/build.sh)
+# Use the sendspin-cli package (tsx-aports) if it is installed. Otherwise use
+# the copy in a rootfs built without that repository (rootfs/src/sendspin/build.sh).
 command=/usr/bin/sendspin-cli
 [ -x "$command" ] || command=/usr/local/bin/sendspin-cli
 respawn_delay=10
@@ -14,7 +14,8 @@ error_log=/var/log/tsx-sendspin.log
 command_user="kiosk:audio"
 depend() { need net; use avahi-daemon; after tsx-setup; }
 start_pre() {
-	# supervise-daemon opens the log after switching to command_user: it must exist and be writable by kiosk
+	# supervise-daemon opens the log after it switches to command_user. The log
+	# must exist, and kiosk must be able to write it.
 	checkpath -f -m 0644 -o kiosk:audio /var/log/tsx-sendspin.log
 	[ -x "$command" ] || { eerror "no sendspin-cli (apk add sendspin-cli)"; return 1; }
 	[ -e /proc/asound/TSW1060 ] || ewarn "no TSW1060 sound card (audio not brought up yet)"

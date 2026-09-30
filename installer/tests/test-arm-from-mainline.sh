@@ -1,10 +1,10 @@
 #!/bin/bash
 # Host test: installer/lib/tsx-arm-from-mainline.sh (arm one rescue boot from
-# a running mainline kiosk; shared by tsx-install-mainline's reinstall path
+# a running mainline kiosk. Shared by tsx-install-mainline's reinstall path
 # and tsx-restore-factory). No panel, no root: mount/umount/fw_printenv/
 # fw_setenv/reboot are PATH shims working on a directory (the "p1") and a
 # key=value file (the "env"). Syntax is checked with busybox sh -n (the
-# panel's shell); the functional cases run it under bash --posix, because a
+# panel's shell). The functional cases run it under bash --posix, because a
 # busybox sh built with standalone applets runs its own mount/umount/reboot
 # and ignores the PATH shims.
 set -uo pipefail
@@ -67,7 +67,7 @@ grep -qx 'tsx_once=1' "$W/env" && ok "tsx_once=1 armed" || bad "tsx_once not arm
 echo "$OUT" | grep -qx ARMED && ok "prints ARMED (--no-reboot)" || bad "no ARMED line: $OUT"
 [ ! -e "$W/env.rebooted" ] && ok "no reboot with --no-reboot" || bad "rebooted despite --no-reboot"
 
-echo "== 2. default source is the golden slot (p1:boot.img); reboot"
+echo "== 2. default source is the golden slot (p1:boot.img). Reboot"
 setup "$ONCE"
 OUT=$(run_arm); RC=$?; sleep 3
 [ $RC = 0 ] && ok "exit 0" || bad "exit $RC: $OUT"
@@ -100,10 +100,11 @@ echo "== 6. a hung fw_printenv is bounded, it does not hang the script (regressi
 setup "$ONCE"
 cat > "$W/bin/fw_printenv" <<'EOF'
 #!/bin/sh
-# simulates u-boot-tools' fw_env.c spinning forever on a size/file mismatch
-# (a short read hits EOF, read() keeps returning 0): sleep, not busy-spin, is
-# enough to prove the TIMEOUT bound in tsx-arm-from-mainline.sh works, since
-# it wraps the call in `timeout`, which kills either kind of hang the same way.
+# simulates the fw_env.c of u-boot-tools, which spins forever on a size and
+# file mismatch (a short read hits EOF, read() keeps returning 0). A sleep is
+# enough to prove that the TIMEOUT bound in tsx-arm-from-mainline.sh works.
+# The script wraps the call in `timeout`, and `timeout` kills both kinds of
+# hang the same way.
 exec sleep 300
 EOF
 chmod +x "$W/bin/fw_printenv"

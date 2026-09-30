@@ -1,47 +1,54 @@
 /*
  * tsx-idled: screen blanking with wake-on-touch for the xx60 kiosk.
  *
- * Compositor independent: it watches every /dev/input/event* device itself.
- *  - After BLANK_TIMEOUT seconds without input it sets the backlight to 0 and
- *    grabs (EVIOCGRAB) all input devices, so the touch that wakes the screen
+ * It does not depend on the compositor. It watches every /dev/input/event*
+ * device itself.
+ *  - After BLANK_TIMEOUT seconds without input, it sets the backlight to 0 and
+ *    grabs (EVIOCGRAB) all input devices. The touch that wakes the screen then
  *    does not also press a button on the dashboard.
- *  - On the first event while blank it restores the backlight, swallows the
- *    rest of that gesture (until no event for WAKE_SWALLOW_MS) and ungrabs.
+ *  - On the first event while the screen is blank, it restores the backlight,
+ *    swallows the rest of that gesture (until no event for WAKE_SWALLOW_MS)
+ *    and ungrabs.
  *  - Brightness follows a day/night schedule (BRIGHTNESS_DAY/NIGHT in
- *    backlight steps, NIGHT_START/NIGHT_END hours, local time), clamped to
- *    BACKLIGHT_MAX (the TSX panels: MP3309C 0..31, vendor cap 23, U-Boot 17).
- *  - KEY_POWER (the TSX power key, gpio-keys-polled) toggles blank/wake when
- *    POWER_KEY=blank.
+ *    backlight steps, NIGHT_START/NIGHT_END hours, local time). BACKLIGHT_MAX
+ *    limits it (the TSX panels: MP3309C 0..31, vendor cap 23, U-Boot 17).
+ *  - KEY_POWER (the TSX power key, gpio-keys-polled) toggles blank and wake
+ *    when POWER_KEY=blank.
  *  - On-screen keyboard toggle (OSK_GESTURE=threefinger|twofinger|off): a
- *    short tap with exactly three (two) fingers (all released within
- *    OSK_TAP_MS, moved less than 40 px) runs OSK_TOGGLE_CMD (default
- *    "/usr/local/bin/tsx-osk toggle"). Not while blank or swallowing.
- *    Default three: Chromium opens its context menu on a two-finger tap.
+ *    short tap with exactly three (or two) fingers runs OSK_TOGGLE_CMD
+ *    (default "/usr/local/bin/tsx-osk toggle"). The fingers must all lift
+ *    within OSK_TAP_MS and move less than 40 px. The tap does nothing while
+ *    the screen is blank or the daemon swallows a gesture.
+ *    The default is three fingers, because Chromium opens its context menu on
+ *    a two-finger tap.
  *  - Signals: SIGUSR1 = wake now, SIGUSR2 = blank now, SIGHUP = reload config.
- *  - State is written to /run/tsx-idled.state ("on <level>" or "blank").
- *  - Every 5 s the level is re-applied if the schedule or someone else
- *    (drm panel enable on unblank, brightnessctl) changed it.
- *  - Boot hold: started within the first minute after boot with the
- *    backlight still lit (U-Boot's logo level, kept by the kernel), it does
- *    not step the level to the day/night schedule until tsx-als has
- *    published its first level (als-level), at most 15 s (TSX_BOOT_HOLD
- *    seconds overrides; 0 = off). The state is "on <current>" meanwhile, so
- *    tsx-als ramps from what is on the glass: no jump up to the schedule
- *    and back down to the ambient level while the boot splash shows.
+ *  - The daemon writes its state to /run/tsx-idled.state ("on <level>" or
+ *    "blank").
+ *  - Every 5 s, the daemon applies the level again if the schedule or someone
+ *    else (drm panel enable on unblank, brightnessctl) changed it.
+ *  - Boot hold: the daemon can start within the first minute after boot while
+ *    the backlight is still lit (the U-Boot logo level, which the kernel
+ *    keeps). Then it does not step the level to the day/night schedule until
+ *    tsx-als has published its first level (als-level), for 15 s at most
+ *    (TSX_BOOT_HOLD seconds overrides it, 0 = off). Meanwhile the state is
+ *    "on <current>", so tsx-als ramps from what is on the glass. The level
+ *    does not jump up to the schedule and back down to the ambient level
+ *    while the boot splash shows.
  *
- * Runtime files in /run/tsx (TSX_RUN_DIR), watched with inotify so a change
- * applies at once (als-level is only read, it changes every second):
+ * Runtime files in /run/tsx (TSX_RUN_DIR). The daemon watches them with
+ * inotify, so a change applies at once (it only reads als-level, which changes
+ * every second):
  *    brightness         absolute level (front keys "brightness N", the HA
- *                       Backlight number); wins over everything below
- *    als-level          tsx-als level while fresh (< 30 s), else the
- *                       day/night schedule = the "base" level
+ *                       Backlight number). It wins over everything below.
+ *    als-level          tsx-als level while it is fresh (< 30 s). Otherwise
+ *                       the day/night schedule, which is the "base" level.
  *    brightness-offset  signed steps added to the base (the local manual
- *                       setting: key-strip slide, quick-settings overlay);
- *                       the result is clamped to 1..BACKLIGHT_MAX
+ *                       setting: key-strip slide, quick-settings overlay).
+ *                       The result is clamped to 1..BACKLIGHT_MAX.
  *    blank-timeout      seconds, replaces BLANK_TIMEOUT (tsx-config apply
- *                       writes it from panel.conf; the HA "Blank timeout")
- *  Written here: brightness.state ("level L", "base B", "offset O",
- *  "override V" (0 = none), "max M", "blank_timeout T"), and last-input
+ *                       writes it from panel.conf. The HA "Blank timeout")
+ *  The daemon writes brightness.state ("level L", "base B", "offset O",
+ *  "override V" (0 = none), "max M", "blank_timeout T") and last-input
  *  (epoch seconds of the last real input event, at most once per second).
  *
  * Config: shell-style KEY=VALUE file (default /etc/kiosk.conf).
@@ -161,7 +168,8 @@ static int read_int(const char *dir, const char *name)
 	return v;
 }
 
-/* signed value; 0 = read, -1 = missing/garbage (a -1 value is not an error) */
+/* Read a signed value. Return 0 if the read worked. Return -1 if the value is
+ * missing or garbage (a value of -1 is not an error). */
 static int read_sint(const char *dir, const char *name, int *out)
 {
 	char p[PATH_MAX + 64]; FILE *f; int v, ok;
@@ -194,7 +202,7 @@ static void find_backlight(void)
 	}
 	if (!base) base = "/sys/class/backlight";
 	if (!(d = opendir(base))) return;
-	/* prefer the first entry in name order for stable behaviour */
+	/* Prefer the first entry in name order, so the choice stays stable. */
 	char best[NAME_MAX + 1] = "";
 	while ((e = readdir(d)))
 		if (e->d_name[0] != '.' && (!best[0] || strcmp(e->d_name, best) < 0))
@@ -203,8 +211,8 @@ static void find_backlight(void)
 	if (best[0]) snprintf(bldir, sizeof bldir, "%s/%s", base, best);
 }
 
-/* the level without any manual setting: tsx-als while its file is fresh,
- * else the day/night schedule */
+/* The level without any manual setting. It is the tsx-als level while its
+ * file is fresh. Otherwise it is the day/night schedule. */
 static int base_level(void)
 {
 	time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
@@ -225,13 +233,13 @@ static int st_base, st_offset, st_override, st_max = -1;
 static int target_level(void)
 {
 	int off = 0;
-	/* absolute level (front keys "brightness N", HA Backlight number):
-	 * until the next day/night change (tsx-buttons removes the file then)
-	 * or "auto brightness" on */
+	/* Absolute level (front keys "brightness N", HA Backlight number). It
+	 * holds until the next day/night change (tsx-buttons then removes the
+	 * file) or until "auto brightness" turns on. */
 	st_override = read_int(ovrdir, "brightness");
 	if (st_override < 0) st_override = 0;
 	st_base = base_level();
-	/* the local manual setting: an offset on top of ALS / the schedule */
+	/* The local manual setting: an offset on top of ALS or the schedule. */
 	if (read_sint(ovrdir, "brightness-offset", &off) || off < -64 || off > 64) off = 0;
 	st_offset = off;
 	return st_override > 0 ? st_override : st_base + off;
@@ -243,7 +251,7 @@ static void set_state(const char *s)
 	if (f) { fputs(s, f); fputc('\n', f); fclose(f); }
 }
 
-/* write a small /run/tsx file atomically (readers never see it half written) */
+/* Write a small /run/tsx file atomically. A reader never sees a half-written file. */
 static void write_run_file(const char *name, const char *text)
 {
 	char p[PATH_MAX + 64], tmp[PATH_MAX + 80]; FILE *f;
@@ -257,8 +265,9 @@ static void write_run_file(const char *name, const char *text)
 
 static int eff_timeout;   /* BLANK_TIMEOUT, or the runtime file */
 
-/* brightness.state for the overlay / tsx-buttons / Home Assistant: how the
- * level came about. Rewritten only when something in it changed. */
+/* brightness.state for the overlay, tsx-buttons and Home Assistant. It shows
+ * how the level came about. The daemon rewrites it only when something in it
+ * changed. */
 static void write_bstate(int lvl)
 {
 	static char last[160];
@@ -273,7 +282,7 @@ static void write_bstate(int lvl)
 	write_run_file("brightness.state", b);
 }
 
-/* als-level written within the last 30 s (wall clock, as base_level) */
+/* True if tsx-als wrote als-level within the last 30 s (wall clock, as in base_level). */
 static int als_fresh(void)
 {
 	char p[PATH_MAX + 16]; struct stat st;
@@ -282,7 +291,7 @@ static int als_fresh(void)
 }
 
 static int cur_level = -1;
-static long long hold_until;   /* boot hold, see the header; 0 = none */
+static long long hold_until;   /* boot hold (see the header), 0 = none */
 static void backlight_on(void)
 {
 	int max, lvl = target_level();
@@ -305,8 +314,9 @@ static void backlight_on(void)
 	if (lvl > max) lvl = max;
 	if (lvl < 1) lvl = 1;
 	write_bstate(lvl);
-	/* rewrite also when someone else changed it (drm/meson's panel enable
-	 * restores 16 on unblank; brightnessctl); the config is authoritative */
+	/* Write the level again also when someone else changed it (the panel
+	 * enable of drm/meson restores 16 on unblank, and so does brightnessctl).
+	 * The config is authoritative. */
 	if (lvl != cur_level || read_int(bldir, "brightness") != lvl) {
 		write_int(bldir, "bl_power", 0);
 		if (write_int(bldir, "brightness", lvl)) logm("write brightness failed: %s", strerror(errno));
@@ -379,8 +389,8 @@ static void run_osk_cmd(void)
 	if (pid < 0) logm("fork: %s", strerror(errno));
 }
 
-/* Multitouch type B tracking for the OSK tap. Returns 1 when a tap with
- * exactly OSK_GESTURE fingers just ended. */
+/* Multitouch type B tracking for the OSK tap. Return 1 when a tap with
+ * exactly OSK_GESTURE fingers has just ended. */
 static int mt_event(struct dev *d, const struct input_event *e, long long t)
 {
 	int s = d->slot, n = 0, fired = 0;
@@ -414,7 +424,7 @@ static int mt_event(struct dev *d, const struct input_event *e, long long t)
 	return fired;
 }
 
-/* BLANK_TIMEOUT, replaced by /run/tsx/blank-timeout while that exists */
+/* BLANK_TIMEOUT. /run/tsx/blank-timeout replaces it while that file exists. */
 static void load_timeout(int quiet)
 {
 	int v, old = eff_timeout, src_file = 0;
@@ -424,7 +434,7 @@ static void load_timeout(int quiet)
 		logm("blank timeout %ds (%s)", eff_timeout, src_file ? "runtime override" : "BLANK_TIMEOUT");
 }
 
-/* last-input: epoch seconds of the last real input, for "touched recently" */
+/* last-input: epoch seconds of the last real input, used for "touched recently". */
 static void note_input(void)
 {
 	static time_t written;
@@ -447,9 +457,9 @@ static void watch_rundir(void)
 	}
 }
 
-/* 1 = a brightness input changed, 2 = the blank timeout file changed.
- * als-level is left to the 5 s re-apply: it is rewritten every second and
- * tsx-als ramps the backlight toward it itself. */
+/* Return 1 if a brightness input changed, or 2 if the blank timeout file
+ * changed. The 5 s re-apply handles als-level. The file changes every second,
+ * and tsx-als ramps the backlight toward it itself. */
 static int read_inotify(void)
 {
 	char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
@@ -489,7 +499,7 @@ int main(int argc, char **argv)
 	sigemptyset(&sa.sa_mask);
 	sigaction(SIGUSR1, &sa, NULL); sigaction(SIGUSR2, &sa, NULL);
 	sigaction(SIGHUP, &sa, NULL); sigaction(SIGTERM, &sa, NULL); sigaction(SIGINT, &sa, NULL);
-	signal(SIGCHLD, SIG_IGN);   /* OSK_TOGGLE_CMD children reap themselves */
+	signal(SIGCHLD, SIG_IGN);   /* OSK_TOGGLE_CMD children clean up after themselves */
 
 	cfg_load(&C); find_backlight();
 	{
@@ -531,7 +541,7 @@ int main(int argc, char **argv)
 		if (!blanked && !swallowing && t - last_sched >= 5000) { backlight_on(); last_sched = t; }
 		if (swallowing && t >= swallow_until) { swallowing = 0; grab_all(0); if (verbose) logm("ungrab"); }
 
-		/* poll timeout: until the next deadline, at most 1 s */
+		/* The poll timeout runs until the next deadline, 1 s at most. */
 		int to = 1000;
 		if (!blanked && eff_timeout > 0) {
 			long long left = last_input + (long long)eff_timeout * 1000 - t;
@@ -549,8 +559,8 @@ int main(int argc, char **argv)
 		if (ino_fd >= 0 && (pfd[ndev].revents & POLLIN)) {
 			int m = read_inotify();
 			if (m & 2) load_timeout(0);
-			/* a manual level / offset / timeout change applies now, not at
-			 * the next 5 s tick (key-strip slide, overlay slider) */
+			/* A manual level, offset or timeout change applies now, not at
+			 * the next 5 s tick (key-strip slide, overlay slider). */
 			if (m && !blanked && !swallowing) backlight_on();
 		}
 		t = now_ms();
@@ -569,13 +579,13 @@ int main(int argc, char **argv)
 					if (ev[k].type == EV_SYN) continue;
 					if (ev[k].type == EV_KEY && ev[k].code == KEY_POWER) {
 						if (ev[k].value == 1) { power = 1; got = 1; }
-						continue;   /* release/repeat of the power key is no activity */
+						continue;   /* a release or repeat of the power key is no activity */
 					}
-					/* A key release is no activity either: tsx-buttons blanks on a
-					 * front-key press (SIGUSR2); if that signal is handled before
-					 * this loop reads the key's release, the release would wake the
-					 * screen it just blanked (b race). Touch lifts still count
-					 * through their ABS/MT events. */
+					/* A key release is no activity either. tsx-buttons blanks the
+					 * screen on a front-key press (SIGUSR2). If the daemon handles
+					 * that signal before this loop reads the release of the key,
+					 * the release would wake the screen that it just blanked (a
+					 * race). Touch lifts still count through their ABS/MT events. */
 					if (ev[k].type == EV_KEY && ev[k].value == 0) continue;
 					got = 1;
 				}
@@ -596,7 +606,7 @@ int main(int argc, char **argv)
 				else grab_all(0);
 				if (verbose) logm("wake");
 			} else if (swallowing) {
-				swallow_until = t + C.swallow_ms; /* extend until the gesture ends */
+				swallow_until = t + C.swallow_ms; /* extend the swallow until the gesture ends */
 			} else if (osk && C.osk_gesture) {
 				run_osk_cmd();
 			}

@@ -1,7 +1,7 @@
 #!/bin/sh
 # zlgaintest.sh TAG GAIN LEVELS... : ZL master bypass for the mic (0x0300 |= 2) and
 # TDMB-1/2 (amp feed) cross-point gain 0x0244/0x0246 = GAIN (signed dB, e.g. 0x0000)
-# for the measurement; both restored at the end.
+# for the measurement. Both restored at the end.
 TAG=$1; G=$2; shift 2
 A0=$(sh /tmp/zlreg.sh 0x0300 | cut -d' ' -f2); G1=$(sh /tmp/zlreg.sh 0x0244 | cut -d' ' -f2); G2=$(sh /tmp/zlreg.sh 0x0246 | cut -d' ' -f2)
 sh /tmp/zlreg.sh -w 0x0300 $((A0 | 2)); sh /tmp/zlreg.sh -w 0x0244 $G; sh /tmp/zlreg.sh -w 0x0246 $G

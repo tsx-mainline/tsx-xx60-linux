@@ -2,7 +2,7 @@
 # Host test of tsx-autoupdate's pure decision logic: the night window, the
 # reboot-needed check on an apk upgrade package list, and the Chromium
 # hold/timeout decision. These three take every input as a plain argument
-# (no apk/date stubbing needed here; see test-autoupdate-flow.sh for the
+# (no apk/date stubbing needed here. See test-autoupdate-flow.sh for the
 # end-to-end check/install/status/healthcheck flow with a stubbed apk/date).
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd); BIN=$HERE/../../rootfs/overlay/usr/local/sbin/tsx-autoupdate

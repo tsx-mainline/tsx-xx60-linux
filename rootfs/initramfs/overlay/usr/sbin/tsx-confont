@@ -1,22 +1,24 @@
 #!/bin/sh
-# tsx-confont: load the console font that suits the LCD, once the text console
-# has the screen (`tsx-splash console` bound fbcon to fb0).
+# tsx-confont: load the console font that suits the LCD. Run it after the text
+# console has the screen (`tsx-splash console` bound fbcon to fb0).
 #
-# The kernel's built-in font is the 8x16 VGA font: 160x50 cells on the
-# 1280x800 LCD, small and hard to read, and its / \ _ glyphs do not join, so
-# the figlet banner of the rescue screen falls apart. This picks the largest
-# Terminus bold font that still gives at least 80x25 cells on fb0:
+# The kernel built-in font is the 8x16 VGA font. On the 1280x800 LCD it gives
+# 160x50 cells, which are small and hard to read. Its / \ _ glyphs do not
+# join, so the figlet banner of the rescue screen falls apart. This script
+# picks the largest Terminus bold font that still gives at least 80x25 cells
+# on fb0:
 #   1280x800 (TSW-1060 / TSS-10)  ter-132b 16x32 -> 80x25
 #   1024x600 (TSW-760)            ter-124b 12x24 -> 85x25
 #   portrait (the console turned a quarter, fbcon rotate 1/3): 800x1280
-#   ter-120b 10x20 -> 80x64; 600x1024 has no font with 80 columns: the
-#   kernel's font (75x64)
-# The fonts are PSF files from Alpine's font-terminus, copied into the
-# initramfs at build time (rootfs/initramfs/mkinitramfs-switchroot.sh), and
-# loaded with busybox setfont (KDFONTOP) on TTY (default /dev/tty0, the
-# visible console; the font then stays for the rest of the boot, also after
-# switch_root). Never fails: without a framebuffer size, a font that fits or
-# a working setfont, the kernel's default font stays and the exit code is 0.
+#   ter-120b 10x20 -> 80x64. 600x1024 has no font with 80 columns, so the
+#   kernel font stays (75x64).
+# The fonts are PSF files from the Alpine package font-terminus. The build
+# copies them into the initramfs (rootfs/initramfs/mkinitramfs-switchroot.sh).
+# The script loads a font with busybox setfont (KDFONTOP) on TTY. The default
+# TTY is /dev/tty0, the visible console. The font then stays for the rest of
+# the boot, also after switch_root. The script never fails. If it has no
+# framebuffer size, no font that fits, or no working setfont, the kernel
+# default font stays and the exit code is 0.
 #
 #   tsx-confont [-n] [TTY]    -n: only print "FONT COLSxROWS" (or "default")
 # Env (tests): TSX_SYSFS (default /sys), TSX_CONFONT_DIR (default
@@ -29,8 +31,9 @@ dry=
 TTY=${1:-/dev/tty0}
 say() { [ -n "$dry" ] || echo "tsx-confont: $*" 2>/dev/null > /dev/kmsg; }
 
-# fb0's visible size: the current mode ("U:1280x800p-0"), else virtual_size
-# ("1280,800"; the fbdev emulation's virtual size is the visible one here)
+# The visible size of fb0 comes from the current mode ("U:1280x800p-0"). If
+# there is none, it comes from virtual_size ("1280,800"). Here the fbdev
+# emulation virtual size is the visible size.
 fb=$SYS/class/graphics/fb0
 wh=$(head -n 1 "$fb/modes" 2>/dev/null | sed -n 's/^[^:]*:\([0-9]*\)x\([0-9]*\).*/\1 \2/p')
 [ -n "$wh" ] || wh=$(sed -n 's/^\([0-9]*\),\([0-9]*\)$/\1 \2/p' "$fb/virtual_size" 2>/dev/null)
@@ -41,12 +44,12 @@ if [ $# -ne 2 ] || [ "$1" -lt 1 ] || [ "$2" -lt 1 ]; then
 	exit 0
 fi
 W=$1 H=$2
-# a console turned a quarter (fbcon rotate 1 or 3: ORIENTATION portrait or
-# portrait-flipped, /init) has the width and height swapped: 800x1280 on the
-# 1280x800 LCD gets ter-120b 10x20 -> 80x64
+# A console turned a quarter (fbcon rotate 1 or 3: ORIENTATION portrait or
+# portrait-flipped, set by /init) swaps width and height. On the 1280x800 LCD
+# it is 800x1280 and gets ter-120b 10x20 -> 80x64.
 case $(cat "$SYS/class/graphics/fbcon/rotate" 2>/dev/null) in 1|3) W=$2 H=$1;; esac
 
-# largest first: NAME:CELL_WIDTHxCELL_HEIGHT (Terminus bold)
+# List the largest font first: NAME:CELL_WIDTHxCELL_HEIGHT (Terminus bold)
 pick=
 for f in ter-132b:16x32 ter-128b:14x28 ter-124b:12x24 ter-122b:11x22 ter-120b:10x20 ter-118b:10x18 ter-116b:8x16; do
 	name=${f%%:*} cell=${f#*:}

@@ -1,17 +1,18 @@
 #!/bin/bash
 # Host test: the "keep /data on a reinstall" decision of
 # installer/steps/tsx-rescue-install --keep-data (docs/install.md
-# "Reinstalling or updating a mainline panel"). No docker, no root, no loop
-# device: installer/lib/tsx-rescue.sh's tsx_tsxdata_keepable runs under
-# busybox sh (the rescue's shell) against small file-backed ext4 images, and
-# tsx_conf_set_flavor against a panel.conf copy.
+# "Reinstalling or updating a mainline panel"). The test needs no docker, no
+# root and no loop device. It runs tsx_tsxdata_keepable of
+# installer/lib/tsx-rescue.sh under busybox sh (the shell of the rescue)
+# against small file-backed ext4 images. It runs tsx_conf_set_flavor against
+# a copy of panel.conf.
 #   1. a clean ext4 LABEL=tsxdata            -> 0 (keep)
 #   2. ext4 with another label, or no fs     -> 1 (format)
-#   3. a tsxdata ext4 with an inconsistency  -> 2 (repair, then ask again);
-#      after e2fsck -fp it is 0 again
-#   4. tsx_conf_set_flavor replaces or appends KERNEL_FLAVOR, keeps the rest
-#   5. tsx_rootinfo_set_flavor replaces or appends kernel_flavor= in a fresh
-#      root's etc/tsx/emmc-root.info (tsx-rescue-install step 3)
+#   3. a tsxdata ext4 with an inconsistency  -> 2 (repair, then ask again).
+#      After e2fsck -fp the result is 0 again.
+#   4. tsx_conf_set_flavor replaces or appends KERNEL_FLAVOR and keeps the rest
+#   5. tsx_rootinfo_set_flavor replaces or appends kernel_flavor= in
+#      etc/tsx/emmc-root.info of a fresh root (tsx-rescue-install step 3)
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 LIB="$HERE/lib/tsx-rescue.sh"

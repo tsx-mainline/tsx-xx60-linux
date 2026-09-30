@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Log a USB UART (115200 8N1) with host timestamps; survives replugs.
+# Log a USB UART (115200 8N1) with host timestamps. Survives replugs.
 # Lines written to the FIFO <logdir>/cmd are sent to the target (CR appended).
 # With --stop, sends CRs from the U-Boot banner until abortboot, to reach the prompt.
 # Usage: serlog.py LOGFILE [--stop]

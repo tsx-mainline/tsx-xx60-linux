@@ -1,8 +1,9 @@
 #!/bin/sh
-# Host test of tsx-ledbar: frame encoder against the frames captured from the
-# vendor userland (LED.md), hex parsing, packet validation, the kernel (sysfs)
-# backend against a fake LED directory, screen-blank scaling, state file.
-# Builds without libusb (-DNO_LIBUSB); the libusb path needs the panel.
+# Host test of tsx-ledbar. It checks these parts: the frame encoder (against
+# the frames captured from the vendor userland, LED.md), hex parsing, and
+# packet validation. It also checks the kernel (sysfs) backend against a fake
+# LED directory, screen-blank scaling and the state file.
+# The test builds without libusb (-DNO_LIBUSB). The libusb path needs the panel.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd); SRC=$HERE/../../rootfs/src/tsx-ledbar.c
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
@@ -40,9 +41,9 @@ eq "want kept" "$(sed -n 's/^want //p' "$T/run/ledbar.state")" "10 20 30"
 echo "on 17" > "$T/idled"; $B off
 eq "off" "$(cat "$T/led/multi_intensity")" "0 0 0"
 $B on
-eq "on = last colour" "$(cat "$T/led/multi_intensity")" "10 20 30"
+eq "on = last color" "$(cat "$T/led/multi_intensity")" "10 20 30"
 $B boot
-eq "boot colour" "$(cat "$T/led/multi_intensity")" "0 0 20"
+eq "boot color" "$(cat "$T/led/multi_intensity")" "0 0 20"
 $B raw 00 03 00 02 80
 eq "raw via sysfs" "$(od -An -tx1 "$T/led/raw" | tr -s ' ' | sed 's/^ //')" "00 03 00 02 80"
 echo "green red blue" > "$T/led/multi_index"; $B set 1 2 3

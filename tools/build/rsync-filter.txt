@@ -3,7 +3,7 @@
 # The kernel fork checkout (LINUX_DIR, sibling of this repo) is mirrored separately
 # by remote-build.sh's own rsync call, with its own build-artifact excludes.
 - /.git
-# Build output: never sent up; combined with rsync's own --delete-excluded=false
+# Build output: never sent up. Combined with rsync's own --delete-excluded=false
 # behavior, these are effectively protected on the host (never removed by --delete).
 - /kernel/out/
 - /rootfs/out/

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Host test of tsx-als (fake IIO + backlight sysfs) and of the tsx-mqtt ALS
-# entities (dry-run mode). No compiler needed; busybox/dash sh.
+# entities (dry-run mode). No compiler needed. busybox/dash sh.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd); O=$HERE/../../rootfs/overlay
 ALS=$O/usr/local/sbin/tsx-als
@@ -36,7 +36,7 @@ rm -f "$T/run/"*; run 4 "ALS_START_WAIT=3"
 [ "$(cat "$T/run/als-level" 2>/dev/null)" = 3 ] && ok "start: still 0 lx after ALS_START_WAIT: dark room level 3" || bad "start wait over: level $(cat "$T/run/als-level" 2>/dev/null)"
 rm -f "$T/run/"*; echo 13 > "$T/bl/mp3309c/brightness"; lux 135.000000; run 1 "ALS_START_WAIT=3"
 [ "$(cat "$T/run/als-level")" = 13 ] && ok "start: a real reading is used at once" || bad "start 135 lx: level $(cat "$T/run/als-level")"
-# 3. hysteresis: 300 lx -> 17; 340 lx (+13 %) stays 17; 450 lx (+50 %) moves
+# 3. hysteresis: 300 lx -> 17. 340 lx (+13 %) stays 17. 450 lx (+50 %) moves
 # (hysteresis state lives inside one daemon run: feed values while it runs)
 rm -f "$T/run/"*; echo 17 > "$T/bl/mp3309c/brightness"
 printf 'ALS_SMOOTH=1\nALS_HOLD=0\nALS_RAMP_MS=0\n' > "$T/als.conf"

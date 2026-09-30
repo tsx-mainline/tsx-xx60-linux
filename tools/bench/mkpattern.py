@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # Test pattern for the TSW-1060 simple-framebuffer (1280x800, r8g8b8 = bytes B,G,R in memory).
 # Writes pattern.raw (for /dev/fb0) and pattern.png (what the panel should look like).
-# Top 2/3: 8 colour bars (white yellow cyan green magenta red blue black).
-# Bottom 1/3: 4 ramps (red, green, blue, grey), dark on the left.
-# Red square top-left, green top-right, blue bottom-left, white bottom-right; 2 px white border.
+# Top 2/3: 8 color bars (white yellow cyan green magenta red blue black).
+# Bottom 1/3: 4 ramps (red, green, blue, gray), dark on the left.
+# Red square top-left, green top-right, blue bottom-left, white bottom-right. 2 px white border.
 import struct, zlib
 W, H = 1280, 800
 bars = [(255,255,255),(255,255,0),(0,255,255),(0,255,0),(255,0,255),(255,0,0),(0,0,255),(0,0,0)]

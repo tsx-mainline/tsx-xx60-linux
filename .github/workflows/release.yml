@@ -16,10 +16,10 @@ on:
 #   kernel (matrix lts/stable) -> rescue -----\
 #                               \-> rootfs ---> payload (matrix lts/stable) -> bundle -> publish
 # rootfs and the armv7 initramfs steps need the qemu-user armv7 binfmt
-# (docker/setup-qemu-action); the kernel build is a plain x86 cross-compile
+# (docker/setup-qemu-action). The kernel build is a plain x86 cross-compile
 # and needs no qemu. NOTE: GitHub's arm64 hosted runners (Azure Cobalt 100,
 # an Armv9 core) most likely cannot execute armv7 (AArch32) code natively, so
-# the armv7 steps would still need qemu there and would gain little; the x86
+# the armv7 steps would still need qemu there and would gain little. The x86
 # runners are used for everything.
 jobs:
   kernel:
@@ -151,7 +151,7 @@ jobs:
       # no-proprietary-files step below checks this on the build's output,
       # not just this env var. KVER is left at its default (every release dir
       # under rootfs/modules/lib/modules -- both flavors, merged above), so
-      # this ONE rootfs tarball carries both kernels' modules; see
+      # this ONE rootfs tarball carries both kernels' modules. See
       # installer/emmc/mk-tsxroot-emmc.sh's header for why the eMMC root
       # image built from it later keeps only one flavor's tree.
       - name: build the rootfs (rootfs/build-rootfs.sh rootfs)
@@ -216,7 +216,7 @@ jobs:
 
       # --bytes is the eMMC "system/root" region size (2932 MiB, i.e. the
       # rest of a 4 GB Hynix device past the "boot" region -- see
-      # docs/boot.md's eMMC region table); mk-tsxroot-emmc.sh refuses if the
+      # docs/boot.md's eMMC region table). mk-tsxroot-emmc.sh refuses if the
       # compact image would not fit it, and records it in the manifest for
       # installer/steps/tsx-rescue-install's own sanity check.
       - name: this flavor's compact eMMC root image (installer/emmc/mk-tsxroot-emmc.sh)
@@ -382,8 +382,8 @@ jobs:
           path: release/out
 
       # tsx-aports' xx60/tsx-xx60-kernel-<flavor> package (source= a URL to
-      # exactly this asset, pinned by tag + sha512sums) is the only consumer;
-      # see the kbundle job above and tools/build/README.md.
+      # exactly this asset, pinned by tag + sha512sums) is the only consumer.
+      # See the kbundle job above and tools/build/README.md.
       - uses: actions/download-artifact@v4
         with:
           name: kbundle-lts

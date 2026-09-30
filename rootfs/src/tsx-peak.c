@@ -1,8 +1,8 @@
 /*
- * tsx-peak: level meter for the TSW-1060 audio bring-up .
- * Reads a WAV file or raw PCM (S16_LE or S32_LE) from a file or stdin and
- * prints, per channel, the peak and RMS level in dBFS, the DC offset and
- * the number of full-scale samples.
+ * tsx-peak: level meter for the TSW-1060 audio bring-up.
+ * It reads a WAV file or raw PCM (S16_LE or S32_LE) from a file or stdin.
+ * For each channel it prints the peak and RMS level in dBFS, the DC offset
+ * and the number of full-scale samples.
  *
  *   arecord -D hw:TSW1060,1 -f S16_LE -r 48000 -c 2 -d 5 -t raw | tsx-peak -c 2
  *   tsx-peak rec.wav                       (format from the WAV header)

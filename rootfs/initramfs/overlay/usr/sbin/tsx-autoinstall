@@ -1,30 +1,30 @@
 #!/bin/sh
-# tsx-autoinstall: stage 2 of the UART-free install. Runs in the mainline
-# switch_root initramfs (busybox ash), called by /init BEFORE the root search:
+# tsx-autoinstall: stage 2 of the UART-free install. It runs in the mainline
+# switch_root initramfs (busybox ash). /init calls it BEFORE the root search:
 #
 #   /usr/sbin/tsx-autoinstall || rescue "tsx-autoinstall failed"
 #
-# Exit 0 = nothing to do (normal boot goes on). On a successful install it
-# reboots and does not return. Exit 1 = an install was requested but failed
-# (or waits for deploy.sh): /init drops to the rescue system (DHCP, dropbear
-# root/tsx), the reason is on the screen and in /run/tsx-autoinstall.log.
+# Exit 0 = nothing to do (the normal boot goes on). After a successful install
+# it reboots and does not return. Exit 1 = an install was requested but failed
+# (or waits for deploy.sh). /init then drops to the rescue system (DHCP,
+# dropbear root/tsx). The reason is on the screen and in /run/tsx-autoinstall.log.
 #
 # Triggers (anything else, e.g. a random USB stick, is ignored):
 #   p1:tsxinst.cfg          written by tsx-android-install.sh (stage 1 on stock Android)
 #   stick tsx-install/GO    hands-off (re)install on a unit that already boots mainline:
-#                           plug the stick, power-cycle (GO is renamed after the install)
-#   U-Boot jabil boot       the image was booted from the stick by the stock jabil_factory
-#                           hook (cmdline has androidboot.selinux=permissive); only if
+#                           plug the stick, power-cycle (the script renames GO after the install)
+#   U-Boot jabil boot       the stock jabil_factory hook booted the image from the stick
+#                           (the cmdline has androidboot.selinux=permissive). This works only if
 #                           U-Boot USB works on the unit (REPORT.md section 1)
 #
-# Uses /usr/share/tsx/{install.sh,tsx-disk.sh} (unchanged) and tsx-lib.sh.
+# It uses /usr/share/tsx/{install.sh,tsx-disk.sh} (unchanged) and tsx-lib.sh.
 # Test hooks: TSX_SYSBLOCK TSX_DEVDIR TSX_STICK (stick root, skips USB detection)
 #             TSX_USB_SYSFS (fake /sys/bus/usb/devices) TSX_USB_WAIT TSX_STICK_WAIT
 #             TSX_SHARE TSX_NO_REBOOT=1 TSX_CMDLINE TSX_DT_MODEL TSX_RUN
 #             TSX_FWENV_TIMEOUT: every fw_printenv/fw_setenv call (direct, or
-#             through tsx_env/tsx_env_sane) goes through tsx-lib.sh's
-#             tsx_fw_bound, default 10s (docs/boot.md
-#             "fw_printenv can hang": fw_env.c's read loop can spin at 100% CPU forever)
+#             through tsx_env/tsx_env_sane) goes through tsx_fw_bound of tsx-lib.sh,
+#             default 10 s (docs/boot.md "fw_printenv can hang": the read loop of
+#             fw_env.c can spin at 100% CPU forever)
 SHARE=${TSX_SHARE:-/usr/share/tsx}
 . "$SHARE/tsx-lib.sh"
 RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
@@ -34,8 +34,8 @@ CMDLINE=$(cat "${TSX_CMDLINE:-/proc/cmdline}" 2>/dev/null)
 msg() {
 	echo "tsx-autoinstall: $*" >> "$LOG"
 	if [ -n "${TSX_NO_REBOOT:-}" ]; then echo "tsx-autoinstall: $*" >&2; return 0; fi
-	# an install is running: the text console gets the screen (the boot
-	# splash would hide these lines; docs/boot.md "Boot splash")
+	# An install is running, so the text console gets the screen. The boot
+	# splash would hide these lines (docs/boot.md "Boot splash").
 	[ -n "${CONSOLE_BOUND:-}" ] || { CONSOLE_BOUND=1; /usr/sbin/tsx-splash console 2>/dev/null; /usr/sbin/tsx-confont 2>/dev/null; }
 	echo "tsx-autoinstall: $*" > /dev/kmsg 2>/dev/null
 	echo "tsx-autoinstall: $*" > /dev/tty0 2>/dev/null
@@ -43,9 +43,9 @@ msg() {
 }
 up() { cut -d. -f1 /proc/uptime; }
 
-# the SD card normally shows up ~1.3 s before /init runs (mmcblk0 at 1.56 s,
-# /init at 2.84 s on the TSW-1060); wait up to TSX_DISK_WAIT s in case the
-# MMC probe is late, so a pending p1:tsxinst.cfg is never skipped silently
+# The SD card normally shows up ~1.3 s before /init runs (mmcblk0 at 1.56 s,
+# /init at 2.84 s on the TSW-1060). Wait up to TSX_DISK_WAIT s in case the
+# MMC probe is late, so the script never skips a pending p1:tsxinst.cfg silently.
 end=$(( $(up) + ${TSX_DISK_WAIT:-5} ))
 until tsx_find_disk; do
 	[ "$(up)" -ge "$end" ] && exit 0         # not a xx60 disk layout: nothing to do
@@ -60,22 +60,22 @@ mount -t vfat -o ro "$P1" "$P1M" 2>/dev/null || exit 0
 
 # ---------------------------------------------------------------- card stage: /data setup (p4 = tsxdata)
 # p2 = kiosk rootfs, p4 = one primary partition over the old extended area. The
-# Android installer leaves p1:tsxlayout.cfg (MKDATA=p4): format p4 as tsxdata
+# Android installer leaves p1:tsxlayout.cfg (MKDATA=p4). Format p4 as tsxdata
 # ONCE, then rename the order. No order = never format. Nothing else runs here.
 if [ "$TSX_DISK_LAYOUT" = card ]; then
 	if [ -f "$P1M/tsxlayout.cfg" ] && [ "$(tsx_conf MKDATA "$P1M/tsxlayout.cfg")" = p4 ]; then
 		WANT_UUID=$(tsx_conf MKDATA_UUID "$P1M/tsxlayout.cfg")
 		umount "$P1M"
-		# The label alone is not proof p4 already holds THIS order's tsxdata: a
-		# previous conversion's ext4 superblock can survive a factory restore
-		# at the start of what is now p4 (the restore only rewrites the EBR
-		# sector and p5..p8 inside the old extended area, not the sector before
-		# it), so blkid still finds LABEL=tsxdata there while the filesystem is
-		# actually stale/corrupt for THIS card. MKDATA_UUID (written fresh by
-		# the installer for every conversion) tells the two apart; mkfs writes
-		# it with -U so the check is exact next time. Older orders with no
-		# MKDATA_UUID fall back to label + e2fsck -fn (both present in this
-		# initramfs: package list in mkinitramfs-switchroot.sh).
+		# The label alone is not proof that p4 already holds the tsxdata of THIS
+		# order. The ext4 superblock of a previous conversion can survive a factory
+		# restore at the start of what is now p4. The restore only rewrites the EBR
+		# sector and p5..p8 inside the old extended area, not the sector before it.
+		# So blkid still finds LABEL=tsxdata there, while the file system is stale
+		# or corrupt for THIS card. MKDATA_UUID (the installer writes it fresh for
+		# every conversion) tells the two apart. mkfs writes it with -U, so the
+		# check is exact next time. Older orders with no MKDATA_UUID fall back to the
+		# label + e2fsck -fn (both present in this initramfs: see the package list in
+		# mkinitramfs-switchroot.sh).
 		FORMAT=1
 		if [ -n "$WANT_UUID" ]; then
 			GOT_UUID=$(blkid -s UUID -o value "$P4" 2>/dev/null)
@@ -87,23 +87,23 @@ if [ "$TSX_DISK_LAYOUT" = card ]; then
 			fi
 		else
 			LBL=$(blkid -s LABEL -o value "$P4" 2>/dev/null)
-			# Accept the pre-rename label (tswdata) too: a card converted by an older
-			# build of this installer (before the tsw->tsx rename) still carries it
-			# on disk, and treating it as valid here avoids wiping real /data just
-			# because the label string changed.
+			# Accept the pre-rename label (tswdata) too. A card that an older build of
+			# this installer converted (before the tsw->tsx rename) still carries it on
+			# disk. Treating it as valid here avoids wiping real /data just because the
+			# label string changed.
 			if { [ "$LBL" = tsxdata ] || [ "$LBL" = tswdata ]; } && e2fsck -fn "$P4" >> "$LOG" 2>&1; then
 				FORMAT=0
-				msg "card stage: no MKDATA_UUID in this order (older installer); p4 label=$LBL and e2fsck -fn clean, not formatted again"
+				msg "card stage: no MKDATA_UUID in this order (older installer). p4 label=$LBL and e2fsck -fn clean, not formatted again"
 			else
-				msg "card stage: no MKDATA_UUID in this order (older installer); p4 label=$LBL or e2fsck -fn failed: formatting"
+				msg "card stage: no MKDATA_UUID in this order (older installer). p4 label=$LBL or e2fsck -fn failed: formatting"
 			fi
 		fi
 		if [ $FORMAT = 1 ]; then
 			msg "card stage: formatting p4 ($P4) as ext4 tsxdata (ordered by p1:tsxlayout.cfg)"
 			if [ -n "$WANT_UUID" ]; then
-				mkfs.ext4 -F -q -O ^metadata_csum_seed,^orphan_file -L tsxdata -m 1 -U "$WANT_UUID" "$P4" >> "$LOG" 2>&1 || { msg "mkfs of p4 failed (see $LOG); the kiosk boots without /data"; exit 0; }
+				mkfs.ext4 -F -q -O ^metadata_csum_seed,^orphan_file -L tsxdata -m 1 -U "$WANT_UUID" "$P4" >> "$LOG" 2>&1 || { msg "mkfs of p4 failed (see $LOG). The kiosk boots without /data"; exit 0; }
 			else
-				mkfs.ext4 -F -q -O ^metadata_csum_seed,^orphan_file -L tsxdata -m 1 "$P4" >> "$LOG" 2>&1 || { msg "mkfs of p4 failed (see $LOG); the kiosk boots without /data"; exit 0; }
+				mkfs.ext4 -F -q -O ^metadata_csum_seed,^orphan_file -L tsxdata -m 1 "$P4" >> "$LOG" 2>&1 || { msg "mkfs of p4 failed (see $LOG). The kiosk boots without /data"; exit 0; }
 			fi
 		fi
 		mount -t vfat -o rw "$P1" "$P1M" && { mv -f "$P1M/tsxlayout.cfg" "$P1M/tsxlayout.done"; sync; umount "$P1M"; }
@@ -129,7 +129,7 @@ if [ "$SOURCE" = net ]; then
 		msg "p1:tsxinst.cfg SOURCE=net and p5 holds tsxroot: install finished by deploy.sh"
 		p1_rename tsxinst.cfg tsxinst.done; exit 0
 	fi
-	msg "SOURCE=net: staying in the rescue system; run work/rootfs/deploy.sh <ip> from the host"
+	msg "SOURCE=net: staying in the rescue system. Run work/rootfs/deploy.sh <ip> from the host"
 	exit 1
 fi
 
@@ -137,10 +137,10 @@ fi
 USB=${TSX_USB_SYSFS:-/sys/bus/usb/devices}
 has_msc() { grep -qx 08 "$USB"/*/bInterfaceClass 2>/dev/null; }
 # The panel has ONE external USB-A socket (usb 1-1). If the Crestron LED bar
-# (14be:001b) is what enumerated there and no hub is in between, no stick can be
-# plugged in: stop waiting at once. Otherwise (nothing yet, or something else)
-# wait for a mass-storage interface, at most TSX_USB_WAIT s (default 3; USB
-# devices enumerate ~1.2 s after /init on the TSW-1060).
+# (14be:001b) is what enumerated there and no hub is in between, no stick can
+# be plugged in. Then stop waiting at once. Otherwise (nothing yet, or something
+# else) wait for a mass-storage interface, at most TSX_USB_WAIT s (default 3.
+# USB devices enumerate ~1.2 s after /init on the TSW-1060).
 ledbar_only() {
 	local d bar=0
 	for d in "$USB"/[0-9]*-*; do
@@ -155,8 +155,8 @@ STICK=
 if [ -n "${TSX_STICK:-}" ]; then STICK=$TSX_STICK
 else
 	if [ -z "$TRIG" ]; then
-		# no pending order: look for a stick only if a USB mass-storage
-		# interface shows up (the LED bar is vendor class 0xff and is ignored)
+		# No pending order: look for a stick only if a USB mass-storage interface
+		# shows up (the LED bar is vendor class 0xff and is ignored).
 		t0=$(cut -d' ' -f1 /proc/uptime)
 		end=$(( $(up) + ${TSX_USB_WAIT:-3} ))
 		while ! has_msc && [ "$(up)" -lt "$end" ]; do
@@ -255,10 +255,10 @@ if [ $ENVOK = 1 ]; then
 		[ "$(tsx_env tsx_boot 2>/dev/null)" = "$TSX_BOOT_CMD" ] || tsx_fw_bound "$FWS" -c "$FWCFG" tsx_boot "$TSX_BOOT_CMD"
 		[ "$st" = "$GUARD" ] || tsx_fw_bound "$FWS" -c "$FWCFG" switch_bootmode "$WANT"
 		tsx_fw_bound "$FWS" -c "$FWCFG" boot_retry 0
-		# on by default (keeps DataRecoveryDone=1 so the golden image does not format
-		# p5 / wipe /data); only DEFUSE_GOLDEN=0 in the stick's tsx-install.conf turns it off
+		# On by default. It keeps DataRecoveryDone=1, so the golden image does not format
+		# p5 or wipe /data. Only DEFUSE_GOLDEN=0 in tsx-install.conf on the stick turns it off.
 		[ "$(tsx_conf DEFUSE_GOLDEN "$CONF")" != 0 ] && [ "$(tsx_env DataRecoveryDone 2>/dev/null)" != 1 ] && tsx_fw_bound "$FWS" -c "$FWCFG" DataRecoveryDone 1
-		tsx_env_sane >/dev/null 2>&1 && [ "$(tsx_env switch_bootmode)" = "$WANT" ] || fail "env hook readback failed; env backup: $BK/env-0x100000.bin"
+		tsx_env_sane >/dev/null 2>&1 && [ "$(tsx_env switch_bootmode)" = "$WANT" ] || fail "env hook readback failed. Env backup: $BK/env-0x100000.bin"
 		msg "U-Boot hook: $GUARD";;
 	*) msg "WARNING: switch_bootmode has foreign content, hook not installed";;
 	esac

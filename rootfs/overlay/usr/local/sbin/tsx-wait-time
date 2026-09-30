@@ -1,6 +1,6 @@
 #!/bin/sh
-# tsx-wait-time [SECONDS]: wait until chrony has synced (leap status normal),
-# at most SECONDS (default 20). Exit 0 if synced, 1 on timeout.
+# tsx-wait-time [SECONDS]: wait until chrony has synced (leap status normal).
+# Wait at most SECONDS (default 20). Exit 0 if synced, 1 on timeout.
 max=${1:-20}; i=0
 while [ $i -lt "$max" ]; do
 	chronyc -n tracking 2>/dev/null | grep -q '^Leap status *: Normal' && exit 0

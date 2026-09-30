@@ -1,9 +1,10 @@
 #!/bin/bash
 # Host test: installer/tsx-install-mainline --dry-run against a synthetic
-# payload directory (no docker, no panel, no network beyond argument
-# validation). Checks that the v2 driver validates the payload (missing
-# files, sha256 mismatches) before it would ever touch a panel, and that
-# --dry-run prints the step list without needing $TSX_ADMIN_PW or a real IP.
+# payload directory. The test needs no docker, no panel and no network beyond
+# argument validation. It checks that the v2 driver validates the payload
+# (missing files, sha256 mismatches) before it would touch a panel. It also
+# checks that --dry-run prints the step list and needs neither $TSX_ADMIN_PW
+# nor a real IP.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 DRIVER="$HERE/tsx-install-mainline"
@@ -31,7 +32,7 @@ echo "== 1. --dry-run with a valid payload: no PANEL_IP needed error, but usage 
 mkpayload "$W/good"
 OUT=$("$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --dry-run 2>&1) && ok "dry-run exits 0" || bad "dry-run failed: $OUT"
 echo "$OUT" | grep -q "dry-run done" && ok "prints 'dry-run done'"
-echo "$OUT" | grep -q "dry-run\] 1:" && ok "prints step 1 (ensure root)"
+echo "$OUT" | grep -q "dry-run\] 1:" && ok "prints step 1 (get root)"
 echo "$OUT" | grep -q "dry-run\] 3:" && ok "prints step 3 (discover the rescue)"
 
 echo "== 2. --kernel is required"
@@ -74,13 +75,13 @@ echo "== 6. TFA9890 DSP files: the panel first, the .puf download as the fallbac
 OUT=$(TSX_PANEL_KIND=android "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run 2>&1)
 echo "$OUT" | grep -q "tfa-source=auto" && ok "default --tfa-source is auto" || bad "default tfa-source not auto: $OUT"
 echo "$OUT" | grep -q "tsx-rescue-install tfa /tmp/b (read-only: the current root on eMMC p8, then stock Android's boot image on eMMC p7" && ok "auto: the panel is searched first" || bad "auto plan does not search the panel: $OUT"
-echo "$OUT" | grep -q "only if that finds no valid set: rootfs/vendor-fetch.sh" && ok "auto: the .puf download only as the fallback" || bad "auto plan has no .puf fallback"
+echo "$OUT" | grep -q "Only if that finds no valid set: rootfs/vendor-fetch.sh" && ok "auto: the .puf download only as the fallback" || bad "auto plan has no .puf fallback"
 echo "$OUT" | grep -q "tsx-tfa.sh" && ok "the bundle carries lib/tsx-tfa.sh" || bad "tsx-tfa.sh not in the bundle"
 OUT=$(TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run --tfa-source puf 2>&1)
 echo "$OUT" | grep -q "(--tfa-source puf): rootfs/vendor-fetch.sh here" && ok "puf: the download only" || bad "puf plan wrong: $OUT"
 echo "$OUT" | grep -q "tsx-rescue-install tfa" && bad "puf still searches the panel" || ok "puf: the panel is not searched"
 OUT=$("$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run --tfa-source panel 2>&1)
-echo "$OUT" | grep -q "no .puf download" && ok "panel: no .puf download" || bad "panel plan wrong: $OUT"
+echo "$OUT" | grep -q "No .puf download" && ok "panel: no .puf download" || bad "panel plan wrong: $OUT"
 OUT=$("$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run --tfa-source none 2>&1)
 echo "$OUT" | grep -q "(--tfa-source none): none" && ok "none: no DSP files" || bad "none plan wrong: $OUT"
 "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --dry-run --tfa-source cloud >"$W/o6.txt" 2>&1 && bad "--tfa-source cloud accepted" || ok "--tfa-source cloud refused"

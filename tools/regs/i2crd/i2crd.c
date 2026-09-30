@@ -2,7 +2,7 @@
  * Writes CMDBYTEs then reads N bytes after a repeated start (I2C_RDWR, so it also
  * works on addresses bound to a kernel driver), prints them in hex.
  * Only the command phase is written: for the TFA9890 that is the register pointer,
- * for the ZL38051 the HBI read command; no register is ever modified. */
+ * for the ZL38051 the HBI read command. No register is ever modified. */
 #include <fcntl.h>
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>

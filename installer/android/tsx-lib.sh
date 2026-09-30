@@ -1,28 +1,29 @@
 # tsx-lib.sh: shared code for the xx60 installers.
-# Sourced by tsx-android-install.sh / tsx-android-uninstall.sh (stock Android
-# root shell: /system/bin/bash 3.2 + /system/bin/busybox) and by
-# tsx-autoinstall (mainline initramfs: busybox ash). POSIX sh + `local` only.
+# These scripts source it: tsx-android-install.sh and tsx-android-uninstall.sh
+# (stock Android root shell: /system/bin/bash 3.2 + /system/bin/busybox) and
+# tsx-autoinstall (mainline initramfs: busybox ash). Use POSIX sh + `local` only.
 #
-# Nothing in this file writes anything. Writers are in the callers.
+# Nothing in this file writes anything. The callers do the writes.
 #
-# Test hooks (host tests only; never set them on a panel):
+# Test hooks (host tests only, never set them on a panel):
 #   TSX_SYSBLOCK  sysfs dir of the boot disk   (default: autodetect /sys/block/mmcblk*)
 #   TSX_DEVDIR    dir of the block device nodes (default /dev/block on Android, /dev elsewhere)
 #   TSX_BB        busybox binary                (default /system/bin/busybox, else busybox in PATH)
 #   TSX_FWENV     fw_printenv binary            (default /system/bin/fw_printenv, else in PATH)
-#   TSX_FWENV_TIMEOUT   bound on every fw_printenv/fw_setenv call, seconds (default 10)
+#   TSX_FWENV_TIMEOUT   time limit for every fw_printenv/fw_setenv call, seconds (default 10)
 
-# ---- the Crestron MBR layout, as shipped from the factory (the Crestron MBR
+# ---- the Crestron MBR layout as shipped from the factory (see the Crestron MBR
 # layout notes, from the 2026-09-25 backup) ----
 # p1 FAT16 golden boot.img, p2 ext4 golden /system, p3 U-Boot env (raw, at 1 MiB),
 # p4 extended, p5 ext2 "sdcard" (now tsxroot), p6 data, p7 cache, p8 logs.
 TSX_LAYOUT_STOCK="1:81920:81920 2:206849:1638400 3:2048:2048 4:1845249:- 5:1847297:3055616 6:4904961:1024000 7:5931009:204800 8:6137857:614400"
-# The card stage (the fixed layout the installer converts every unit to): the
-# same MBR with ONE byte changed, entry 4 type 0x05 (extended: p5..p8 =
-# Android sdcard/data/cache/logs) -> 0x83: p4 = one primary partition over the
-# old extended area (tsxdata), p2 = the kiosk rootfs. The logical partitions
-# p5..p8 are gone. This is a temporary step inside tsx-install-mainline: the
-# panel then migrates from here onto the eMMC (boot p7 + root p8).
+# The card stage is the fixed layout that the installer converts every unit to.
+# It is the same MBR with ONE byte changed: entry 4 goes from type 0x05
+# (extended: p5..p8 = Android sdcard/data/cache/logs) to 0x83. Then p4 is one
+# primary partition over the old extended area (tsxdata), and p2 is the kiosk
+# rootfs. The logical partitions p5..p8 are gone. This is a temporary step
+# inside tsx-install-mainline. The panel then migrates from here onto the eMMC
+# (boot p7 + root p8).
 TSX_LAYOUT_CARD="1:81920:81920 2:206849:1638400 3:2048:2048 4:1845249:5928959"
 TSX_MBR_P4_TYPE_OFFSET=498   # 446 + 3*16 + 4
 TSX_P5_SECTORS=3055616
@@ -35,17 +36,17 @@ TSX_BOOT_CMD='mmcinfo; if fatexist mmc 0 tsxboot.off; then echo tsx: mainline di
 # guard "fallback" (tested on hardware 2026-09-26): after 5 boots without
 # tsx-boot-ok, U-Boot skips the hook and boots stock Android.
 TSX_SWITCH_FALLBACK="${TSX_STOCK_SWITCH}"'if itest ${boot_retry} -lt 6; then run tsx_boot; fi'
-# guard "nogolden" (NOT tested on hardware): also runs
-# the hook when boot_retry > 9, so U-Boot never reaches the golden (factory
-# recovery) image, which formats p5 and wipes /data.
+# guard "nogolden" (NOT tested on hardware): it also runs the hook when
+# boot_retry > 9. So U-Boot never reaches the golden (factory recovery) image,
+# which formats p5 and wipes /data.
 TSX_SWITCH_NOGOLDEN="${TSX_STOCK_SWITCH}"'if itest ${boot_retry} -lt 6 || itest ${boot_retry} -gt 9; then run tsx_boot; fi'
-# guard "once" (tested on hardware 2026-09-27, tsx-rescue-arm.sh's default):
+# guard "once" (tested on hardware 2026-09-27, the default of tsx-rescue-arm.sh):
 # a TRUE one-shot, gated on tsx_once instead of boot_retry. U-Boot clears
-# tsx_once (setenv 0; saveenv) BEFORE running tsx_boot, so the shot is spent
-# the instant this line is reached -- whether or not tsxboot.img is present,
-# and whether or not the rescue it boots ever checks in. With tsx_once unset
-# or 0 the hook does nothing and stock bootcmd runs (see docs/boot.md "The v2
-# env state machine"). boot_retry plays no part in this guard.
+# tsx_once (setenv 0; saveenv) BEFORE it runs tsx_boot. So the shot is spent
+# as soon as U-Boot reaches this line. It does not matter whether tsxboot.img
+# is present, or whether the rescue that it boots ever checks in. With tsx_once
+# unset or 0, the hook does nothing and the stock bootcmd runs (see docs/boot.md
+# "The v2 env state machine"). boot_retry plays no part in this guard.
 TSX_SWITCH_ONCE="${TSX_STOCK_SWITCH}"'if itest ${tsx_once} -eq 1; then setenv tsx_once 0; saveenv; run tsx_boot; fi'
 
 # ---- tools ----
@@ -57,7 +58,7 @@ tsx_pick_bb() {
 	[ -n "$BB" ] && [ -x "$BB" ]
 }
 # Every tool below runs as a busybox applet, never as the Android toolbox
-# version that shadows it in PATH (toolbox dd/mount/cat behave differently).
+# version that shadows it in PATH (toolbox dd, mount and cat behave differently).
 # tests/check-applets.sh checks this list against the busybox in system.img.
 TSX_APPLETS="awk basename cat chmod cmp cp cut date dd df dirname find grep gunzip head id ls mkdir mount mv od readlink rm sed sha256sum sleep sort stat sync tail tee touch tr umount uname wc zcat"
 tsx_wrap_applets() {
@@ -71,18 +72,18 @@ tsx_pick_fwenv() {
 	FWS=$(dirname "$FWP")/fw_setenv
 	[ -n "$FWP" ] && [ -x "$FWP" ] && [ -x "$FWS" ]
 }
-# tsx_fw_bound CMD ARGS...: run a fw_printenv/fw_setenv invocation bounded by
-# TSX_FWENV_TIMEOUT seconds (default 10). u-boot-tools' fw_env.c read loop
-# treats a short read (EOF) the same as a partial one and never advances, so
-# a config whose declared env size does not match the real device/file size
-# spins the tool at 100% CPU forever instead of erroring out (confirmed on
-# both uboot-tools 2026.07 and Alpine's 2026.04; see docs/boot.md
-# "fw_printenv can hang"). No dependency on a `timeout` binary being on
-# PATH -- not guaranteed on the Android side, where /system/bin/busybox is
-# whatever Crestron bundled: a background job, polled once a second, killed
-# if it is still alive past the bound. Every fw_printenv/fw_setenv call in
-# this file, and any direct call a caller makes with $FWP/$FWS, should go
-# through this.
+# tsx_fw_bound CMD ARGS...: run a fw_printenv or fw_setenv call with a time
+# limit of TSX_FWENV_TIMEOUT seconds (default 10). The read loop in fw_env.c of
+# u-boot-tools treats a short read (EOF) like a partial one and never advances.
+# So a config whose declared env size differs from the real device or file size
+# spins the tool at 100% CPU forever instead of an error. This is confirmed on
+# uboot-tools 2026.07 and on Alpine 2026.04 (see docs/boot.md "fw_printenv can
+# hang"). The function does not need a `timeout` binary in PATH. The Android
+# side cannot guarantee one, because /system/bin/busybox is whatever Crestron
+# bundled. Instead the function runs a background job, polls it once a second,
+# and kills it if it is still alive after the limit. Every fw_printenv and
+# fw_setenv call in this file must go through this function. So must any direct
+# call that a caller makes with $FWP or $FWS.
 tsx_fw_bound() {
 	"$@" &
 	local fwb_pid=$! fwb_n=0
@@ -98,10 +99,10 @@ tsx_fw_bound() {
 }
 
 # ---- the boot disk ----
-# tsx_find_disk: sets DISK (e.g. mmcblk0), DEVDIR, P1..P8 device paths and
-# TSX_DISK_LAYOUT = stock (Crestron factory: p5..p8 logical) or card (the
-# installer's fixed layout: p4 primary tsxdata). TSX_WANT_LAYOUT=stock|card
-# restricts the match (default: either).
+# tsx_find_disk: set DISK (e.g. mmcblk0), DEVDIR, the P1..P8 device paths and
+# TSX_DISK_LAYOUT. The layout is stock (Crestron factory: p5..p8 logical) or
+# card (the fixed layout of the installer: p4 primary tsxdata).
+# TSX_WANT_LAYOUT=stock|card restricts the match (default: either).
 tsx_layout_match() {   # tsx_layout_match SYSDIR LAYOUT
 	local d=$1 n=${1##*/} p e st sz
 	for e in $2; do
@@ -133,13 +134,14 @@ tsx_find_disk() {
 	[ -b "$P1" ] && [ -b "$P2" ] && [ -b "$WHOLE" ] || return 1
 	[ "$TSX_DISK_LAYOUT" = card ] || [ -b "$P5" ]
 }
-# mount points of a block device (one per line). Matched by major:minor through
-# /proc/self/mountinfo (field 3), because Android's vold mounts the same device
-# under an alias name (p1 = /dev/block/vold/179:1 on /mnt/media_rw/sdcard1: a
-# second mount by name then fails with EBUSY, 2026-09-26); by name as a fallback.
+# Print the mount points of a block device (one per line). Match by major:minor
+# through /proc/self/mountinfo (field 3), because vold of Android mounts the
+# same device under an alias name (p1 = /dev/block/vold/179:1 on
+# /mnt/media_rw/sdcard1). A second mount by name then fails with EBUSY
+# (2026-09-26). Match by name as a fallback.
 tsx_mounts_of() {
 	local mm
-	# the stock busybox stat has no -c: take major:minor from sysfs
+	# The stock busybox stat has no -c, so take major:minor from sysfs.
 	if [ -b "$1" ] && [ -r /proc/self/mountinfo ] && mm=$(cat "/sys/class/block/${1##*/}/dev" 2>/dev/null) && [ -n "$mm" ]; then
 		awk -v mm="$mm" '$3==mm{print $5}' /proc/self/mountinfo
 	fi
@@ -147,13 +149,13 @@ tsx_mounts_of() {
 }
 
 # ---- the U-Boot env through fw_printenv (Android: /system/etc/fw_env.config) ----
-# tsx_env NAME: prints the value, returns 1 if the variable is not set
+# tsx_env NAME: print the value, return 1 if the variable is not set
 tsx_env() {
 	local out
 	out=$(tsx_fw_bound "$FWP" ${FWCFG:+-c "$FWCFG"} "$1" 2>/dev/null) || return 1
 	case "$out" in "$1="*) printf '%s\n' "${out#"$1="}";; *) return 1;; esac
 }
-# tsx_env_sane: the env block has a valid CRC and is this board's env
+# tsx_env_sane: succeed if the env block has a valid CRC and is the env of this board
 tsx_env_sane() {
 	local all
 	all=$(tsx_fw_bound "$FWP" ${FWCFG:+-c "$FWCFG"} 2>&1) || { echo "fw_printenv failed or timed out: $all"; return 1; }
@@ -163,7 +165,7 @@ tsx_env_sane() {
 	echo "$all" | grep -q '^preboot=.*run switch_bootmode' || { echo "preboot does not end in 'run switch_bootmode'"; return 1; }
 	return 0
 }
-# tsx_hook_state: prints stock | fallback | nogolden | foreign
+# tsx_hook_state: print stock | fallback | nogolden | foreign (also once | plain)
 tsx_hook_state() {
 	local sw
 	sw=$(tsx_env switch_bootmode) || { echo foreign; return; }
@@ -176,7 +178,7 @@ tsx_hook_state() {
 }
 
 # ---- which panel is this ----
-# prints tsw1060 | tsw760, or returns 1. Sources: env lcdsize, product_name, aml_dt.
+# Print tsw1060 | tsw760, or return 1. It reads the env variables lcdsize, product_name and aml_dt.
 tsx_model() {
 	local lcd prod dt
 	lcd=$(tsx_env lcdsize) || lcd=
@@ -188,7 +190,7 @@ tsx_model() {
 	*) return 1;;
 	esac
 }
-# unit id for backup file names: MAC without colons, else tsid
+# Print the unit id for backup file names: the MAC without colons, else the tsid.
 tsx_unit_id() {
 	local m
 	m=$(tsx_env ethaddr 2>/dev/null) && [ -n "$m" ] && { echo "$m" | tr -d ':' | tr 'A-F' 'a-f'; return; }
@@ -197,7 +199,7 @@ tsx_unit_id() {
 }
 
 # ---- the stick ----
-# tsx_find_stick [DIR...]: prints the stick root that holds tsx-install/tsx-install.conf
+# tsx_find_stick [DIR...]: print the stick root that holds tsx-install/tsx-install.conf
 tsx_find_stick() {
 	local d
 	for d in "$@" /mnt/media_rw/udisk0 /mnt/media_rw/udisk1 /storage/udisk0 /storage/udisk1 /mnt/usb /mnt/udisk /mnt/tsx-stick; do
@@ -205,21 +207,21 @@ tsx_find_stick() {
 	done
 	return 1
 }
-# tsx_size FILE: size in bytes (the stock Android busybox stat has no -c; wc -c works everywhere)
+# tsx_size FILE: print the size in bytes. The stock Android busybox stat has no -c, but wc -c works everywhere.
 tsx_size() { wc -c < "$1" | tr -d ' '; }
 
 # tsx_reboot_detached TRACE [DELAY]: reboot after DELAY (3) seconds, from a
-# job that does not depend on the ssh session this runs in: its own session
-# (busybox setsid, when there is one), SIGHUP ignored, no tty on any fd.
-# Every step is appended to TRACE (put it on /data: it survives the reboot,
-# and if the reboot never happens the host can read why). After
-# `busybox reboot -f` it waits 5 s and falls back to sysrq b. Returns at once.
-# Needs $BB (tsx_pick_bb). Test hooks: TSX_REBOOT_CMD (instead of
-# "$BB reboot -f"), TSX_SYSRQ_DIR (instead of /proc).
+# job that does not depend on the ssh session it runs in. The job has its own
+# session (busybox setsid, when there is one), ignores SIGHUP and has no tty on
+# any fd. The function appends every step to TRACE. Put TRACE on /data. It
+# survives the reboot, and if the reboot never happens, the host can read why.
+# After `busybox reboot -f`, the job waits 5 s and falls back to sysrq b. The
+# function returns at once. It needs $BB (tsx_pick_bb). Test hooks:
+# TSX_REBOOT_CMD (instead of "$BB reboot -f") and TSX_SYSRQ_DIR (instead of /proc).
 tsx_reboot_detached() {
 	local trace=$1 delay=${2:-3} setsid=
 	"$BB" setsid true </dev/null >/dev/null 2>&1 && setsid="$BB setsid"
-	echo "$("$BB" date '+%F %T' 2>/dev/null) arming a detached reboot in ${delay}s (setsid: ${setsid:-no}; parent pid $$)" >> "$trace"
+	echo "$("$BB" date '+%F %T' 2>/dev/null) arming a detached reboot in ${delay}s (setsid: ${setsid:-no}. Parent pid $$)" >> "$trace"
 	$setsid "$BB" sh -c '
 		BB=$1 T=$2 D=$3 R=$4 Q=$5
 		trap "" HUP
@@ -235,5 +237,5 @@ tsx_reboot_detached() {
 	' tsx-reboot "$BB" "$trace" "$delay" "${TSX_REBOOT_CMD:-$BB reboot -f}" "${TSX_SYSRQ_DIR:-/proc}" \
 		</dev/null >/dev/null 2>&1 &
 }
-# tsx_conf KEY FILE: value of KEY=... in a plain key=value file (no shell evaluation)
+# tsx_conf KEY FILE: print the value of KEY=... in a plain key=value file (no shell evaluation)
 tsx_conf() { sed -n "s/^$1=//p" "$2" | tail -n 1 | sed 's/^"\(.*\)"$/\1/'; }

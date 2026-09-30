@@ -1,34 +1,37 @@
 #!/bin/sh
-# tsx-rescue-status: the rescue screen. Tux + "TSX - LINUX" banner, the unit and
-# network facts, what an install/restore is doing right now (only while one is
-# running), and "Press Enter for a rescue shell". Shown by BOTH rescues: the
-# standalone rescue image and the initramfs's own rescue (force-rescue,
-# tsx.rescue, no usable root). It is drawn on /dev/tty0 (the panel's LCD, via
-# fbcon: docs/recovery.md "The rescue screen") and mirrored as one line to
-# /dev/kmsg (kernel-timestamped, reaches ttyAML0). busybox ash only.
+# tsx-rescue-status: the rescue screen. It shows the Tux and "TSX - LINUX"
+# banner, the unit and network facts, and "Press Enter for a rescue shell".
+# While an install or restore runs, it also shows what that operation does.
+# Both rescues use this screen: the standalone rescue image and the initramfs
+# own rescue (force-rescue, tsx.rescue, no usable root). The script draws on
+# /dev/tty0 (the panel LCD, through fbcon: docs/recovery.md "The rescue
+# screen"). It also mirrors the screen as one line to /dev/kmsg (with a
+# kernel timestamp, so it reaches ttyAML0). busybox ash only.
 #
-#   tsx-rescue-status loop    (the inittab entry "tty1::respawn:", which gives it
-#                              tty1 as stdin and controlling tty): redraws when
-#                              something changed, and waits for Enter on tty1
-#                              (a USB keyboard) for at most 2 s each round.
-#                              Enter runs a root shell there, no password (a
-#                              person at the panel has physical access; ssh and
-#                              the serial console are unchanged); `exit`
-#                              returns to the screen.
+#   tsx-rescue-status loop    The inittab entry "tty1::respawn:" runs this mode
+#                             and gives it tty1 as stdin and controlling tty.
+#                             It redraws when something changed. Each round it
+#                             waits at most 2 s for Enter on tty1 (a USB
+#                             keyboard). Enter runs a root shell there with no
+#                             password, because a person at the panel has
+#                             physical access. ssh and the serial console are
+#                             unchanged. `exit` returns to the screen.
 #   tsx-rescue-status once    prints one frame and exits (scripts/tests)
 #
 # Reads (never writes, except its own scratch file under $RUN):
 #   /run/tsx-install-state    free text: the current step of an install/restore
 #                             (installer/steps/tsx-rescue-install, the factory
-#                             restore tools); "idle*" / "checked OK*" = none
-#   /run/tsx-op               "PID NAME" of the running tool (NAME "install" if absent)
+#                             restore tools). "idle*" and "checked OK*" mean none.
+#   /run/tsx-op               "PID NAME" of the running tool (NAME is "install" if absent)
 #   /run/tsx-progress         "POS_BYTES OFF_BYTES LEN_BYTES NAME...", written by pr_dd
-#                             (installer/lib/tsx-rescue.sh) every ~15 s; ignored when older than 2 min
-#   /run/rescue-reason        why the rescue was entered: NOT on the screen, printed when
-#                             the shell opens and by `tsx-rescue status`
+#                             (installer/lib/tsx-rescue.sh) every ~15 s.
+#                             The script ignores it when it is older than 2 min.
+#   /run/rescue-reason        why the rescue started. The screen does not show it.
+#                             The shell prints it when it opens, and so does
+#                             `tsx-rescue status`.
 #   /run/tsx-eth0-mac-src     uboot|random (rootfs/initramfs/overlay/etc/init.d/rcS)
-#   /etc/tsx/rescue-version   the rescue image's own version line (absent in the initramfs rescue)
-#   the U-Boot env (product_name, ethaddr) via tsx-lib.sh
+#   /etc/tsx/rescue-version   the version line of the rescue image (absent in the initramfs rescue)
+#   the U-Boot env (product_name, ethaddr) through tsx-lib.sh
 # Test hooks: TSX_RUN TSX_STATUS_TTY (output) TSX_STATUS_IN (keyboard tty)
 # TSX_STATUS_SHELL TSX_STATUS_COLS (default 80) TSX_STATUS_LOOPS (rounds, default endless) TSX_STATUS_WAIT (default 2 s)
 set -u
@@ -43,9 +46,10 @@ VERFILE=${TSX_VERFILE:-/etc/tsx/rescue-version}
 
 # ---- banner: small enough for an 80x25 console (63 columns). On the LCD the
 # console font is Terminus bold sized for the screen (tsx-confont: 16x32 on
-# 1280x800 = 80x25, 12x24 on 1024x600 = 85x25); the kernel's 8x16 VGA font
-# would break the slanted figlet letters. Tux: the classic public-domain ASCII
-# penguin; the name is `figlet -f smslant "TSX - LINUX"` (spaces around the dash).
+# 1280x800 = 80x25, 12x24 on 1024x600 = 85x25). The kernel 8x16 VGA font
+# would break the slanted figlet letters. Tux is the classic public-domain
+# ASCII penguin. The name is `figlet -f smslant "TSX - LINUX"` (spaces around
+# the dash).
 splash() {
 	cat <<'BANNER'
     .--.
@@ -60,18 +64,20 @@ BANNER
 
 kmsg_line() { echo "tsx-rescue-status: $1" > /dev/kmsg 2>/dev/null || true; }
 
-# Kernel messages go to the serial console and dmesg only, not onto this screen:
-# the kernel's VT output is redirected to VT 12 (busybox setlogcons =
-# TIOCL_SETKMSGREDIRECT), which nobody shows; opening /dev/tty12 once allocates
-# it. Without this every kernel line would scribble over the frame.
+# Kernel messages go to the serial console and dmesg only, not to this screen.
+# The kernel redirects its VT output to VT 12 (busybox setlogcons, which uses
+# TIOCL_SETKMSGREDIRECT), and nobody shows VT 12. One open of /dev/tty12
+# allocates it. Without this step, every kernel line would scribble over the
+# frame.
 kmsg_off_lcd() {
 	[ "$TTY" = /dev/tty0 ] || return 0
 	[ -c /dev/tty12 ] && : < /dev/tty12 2>/dev/null
 	setlogcons 12 >/dev/null 2>&1 || true
 }
 
-# The Terminus console font for the LCD size (see tsx-confont); /init already
-# loaded it, again in case the console was reset since. No-op without the tool.
+# Load the Terminus console font for the LCD size (see tsx-confont). /init
+# already loaded it. This loads it again in case something reset the console.
+# It does nothing without the tool.
 lcd_font() {
 	[ "$TTY" = /dev/tty0 ] || return 0
 	[ -x /usr/sbin/tsx-confont ] && /usr/sbin/tsx-confont "$TTY" 2>/dev/null
@@ -79,8 +85,8 @@ lcd_font() {
 }
 
 # ---- the operation section -------------------------------------------------
-# sets OP_KIND (none|running|done|failed|stopped), OP_NAME, OP_STATE, OP_BAR (the
-# progress line, or empty)
+# This function sets OP_KIND (none|running|done|failed|stopped), OP_NAME,
+# OP_STATE and OP_BAR (the progress line, or empty).
 read_op() {
 	OP_KIND=none OP_NAME=install OP_STATE= OP_BAR=
 	local pid f now mt
@@ -97,13 +103,14 @@ read_op() {
 	done*|DONE*) OP_KIND=done; return 0;;
 	esac
 	OP_KIND=running
-	# the tool died without saying so (killed, ssh session lost): not "running"
+	# If the tool died without a message (killed, ssh session lost), it is not "running".
 	if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then OP_KIND=stopped; return 0; fi
 	f=$RUN/tsx-progress
 	[ -f "$f" ] || return 0
 	now=$(date +%s); mt=$(stat -c %Y "$f" 2>/dev/null || echo 0)
 	[ $((now - mt)) -le 120 ] || return 0
-	# "POS OFF LEN NAME..." (numbers first: the name may contain spaces)
+	# The format is "POS OFF LEN NAME...". The numbers come first because the
+	# name can contain spaces.
 	OP_BAR=$(awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {
 		d = ($1 - $2) / 1048576; if (d < 0) d = 0; len = $3 / 1048576
 		if (len > 0) {
@@ -128,7 +135,7 @@ frame_text() {
 	pname=; punit=
 	if type tsx_find_disk >/dev/null 2>&1; then
 		if tsx_find_disk 2>/dev/null; then
-			# fw_env.config wants hex offset/size (see installer/steps/tsx-rescue-arm.sh for why)
+			# fw_env.config needs a hex offset and size (installer/steps/tsx-rescue-arm.sh says why)
 			printf '%s 0x%x 0x%x\n' "$WHOLE" "${TSX_ENV_OFFSET:-1048576}" "${TSX_ENV_SIZE:-65536}" > "$RUN/tsx-status-env.cfg" 2>/dev/null
 			FWCFG=$RUN/tsx-status-env.cfg
 			tsx_pick_fwenv 2>/dev/null
@@ -136,8 +143,9 @@ frame_text() {
 			punit=$(tsx_unit_id 2>/dev/null || true)
 		fi
 	fi
-	# product_name is "TSS-10_[v3.002.1061,_#0A1B2C3D]": the model, then the stock
-	# firmware version and the tsid, which stays off the screen
+	# product_name looks like "TSS-10_[v3.002.1061,_#0A1B2C3D]". It has the
+	# model, then the stock firmware version and the tsid. The tsid stays off
+	# the screen.
 	model=${pname%%_\[*}
 	fw=$(echo "$pname" | sed -n 's/^[^[]*\[\(v[0-9][0-9.]*\).*/\1/p')
 
@@ -164,14 +172,15 @@ frame_text() {
 	done) echo "$OP_NAME: $OP_STATE"
 		echo "----------------------------------------------------------------";;
 	esac
-	# no power-cycle advice: what a power cycle does depends on the U-Boot env
-	# (one-shot armed or not, eMMC layout or not), which the screen cannot promise
+	# No power-cycle advice. The result of a power cycle depends on the U-Boot
+	# env (one-shot armed or not, eMMC layout or not), and the screen cannot
+	# promise it.
 	echo "Press Enter for a rescue shell"
 }
 
-# Build the frame first; redraw only when it changed, and without `clear`
-# (cursor home + overwrite + clear-to-end-of-line), so the LCD never blanks.
-# Every line is cut to the console width: it must never wrap.
+# Build the frame first. Redraw only when it changed, and without `clear`
+# (cursor home, overwrite, clear to end of line), so the LCD never blanks.
+# Cut every line to the console width. A line must never wrap.
 frame() {
 	read_op
 	txt=$(frame_text | cut -c1-"$COLS")
@@ -187,8 +196,9 @@ frame() {
 	if [ "$kline" != "${LAST_KLINE:-}" ]; then LAST_KLINE=$kline; kmsg_line "$kline"; fi
 }
 
-# Enter: a root shell on the local console. No password (physical access, and
-# the serial console is the same); `exit` comes back to the status screen.
+# Enter opens a root shell on the local console. It needs no password, because
+# a person at the panel has physical access, and the serial console works the
+# same way. `exit` returns to the status screen.
 open_shell() {
 	local reason
 	reason=$(cat "$RUN/rescue-reason" 2>/dev/null || echo "(unknown)")
@@ -200,20 +210,20 @@ open_shell() {
 	echo
 	} > "$TTY" 2>/dev/null
 	$SHELLCMD
-	# a shell can leave the terminal in any state
+	# A shell can leave the terminal in any state.
 	stty -F "$IN" sane -echo 2>/dev/null
 	printf '\033[2J' > "$TTY" 2>/dev/null
 	LAST_TXT=
 }
 
-# Wait up to 2 s for Enter on the keyboard tty (typed text is not echoed onto the
-# screen; anything followed by Enter counts). Returns 0 when Enter was pressed.
+# Wait up to 2 s for Enter on the keyboard tty. The screen does not echo typed
+# text. Any text followed by Enter counts. Return 0 when the user pressed Enter.
 wait_key() {
 	local rc junk
 	read -r -t "$WAIT" junk < "$IN" 2>/dev/null; rc=$?
 	[ $rc -eq 0 ] && return 0
-	# 129+: the timeout. Anything else (no such tty, end of input) returned at
-	# once: still wait, do not spin.
+	# A code of 129 or more is the timeout. Any other code (no such tty, end
+	# of input) returned at once. Still wait, so the loop does not spin.
 	[ $rc -gt 128 ] || sleep "$WAIT"
 	return 1
 }

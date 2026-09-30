@@ -72,7 +72,7 @@ async def main(args) -> int:
 
         client.number_command(by_id["backlight"].key, 5.0)
         await asyncio.sleep(0.5)
-        print("OK: backlight number sent (5.0; test-esphome.sh checks the brightness file)")
+        print("OK: backlight number sent (5.0, test-esphome.sh checks the brightness file)")
 
         orient = by_id.get("orientation")
         assert orient is not None, "no orientation select"
@@ -95,7 +95,7 @@ async def main(args) -> int:
         await asyncio.sleep(0.5)
         bt_state = states.get(by_id["blank_timeout"].key)
         assert bt_state is not None and bt_state.state == 600.0, bt_state
-        print("OK: blank timeout reported (120 s) and set (600 s; test-esphome.sh checks tsx-config)")
+        print("OK: blank timeout reported (120 s) and set (600 s, test-esphome.sh checks tsx-config)")
 
         vb_state = states.get(by_id["verbose_boot"].key)
         assert vb_state is not None and not vb_state.state, vb_state
@@ -122,7 +122,7 @@ async def main(args) -> int:
         print("OK: update entity Install sent (test-esphome.sh checks tsx-autoupdate ran)")
 
         # test-esphome.sh rewrites the fixture's buttons.state "last" line
-        # after this point, to simulate a front-key press; give the daemon's
+        # after this point, to simulate a front-key press. Give the daemon's
         # 1 s poll loop a couple of ticks to notice it.
         key_state = None
         for _ in range(40):

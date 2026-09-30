@@ -1,14 +1,15 @@
 #!/bin/sh
-# Chromium ES3 -> ES2 fallback patch on the panel , without python.
+# Chromium ES3 -> ES2 fallback patch on the panel, without python.
 # The rootfs build (mkrootfs.sh, CHROMIUM_ES2_PATCH=1) patches the binary with
 # patch-chromium.py and records the site in /etc/tsx/chromium-es2-patched.
 #   tsx-chromium-es2 check    exit 0 if the binary has the patch bytes (fast: 8 bytes)
 #   tsx-chromium-es2 status   check + sha256 of the whole binary against the record
 #   tsx-chromium-es2 revert   write the original 2 bytes back (sha256 verified)
 #   tsx-chromium-es2 apply    patch again after a revert (sha256 verified)
-# After "apk upgrade chromium" the record no longer matches: check fails, the
-# kiosk uses software rendering. Rebuild the rootfs (new sigs.json entry) to
-# get the patch for a new Chromium. Full undo without the record: apk fix chromium.
+# After "apk upgrade chromium", the record no longer matches. Then check
+# fails and the kiosk uses software rendering. To get the patch for a new
+# Chromium, rebuild the rootfs (new sigs.json entry). To undo the patch
+# without the record, run: apk fix chromium.
 # Restart the kiosk afterwards: rc-service kiosk restart
 M=${TSX_ES2_MARKER:-/etc/tsx/chromium-es2-patched}
 [ -r "$M" ] || { echo "no patch record $M (rootfs built without CHROMIUM_ES2_PATCH=1)"; exit 2; }
@@ -37,7 +38,7 @@ status)
 	case "$h" in "$SHA256_PATCHED") w="sha256 = patched build";; "$SHA256_ORIG") w="sha256 = original build";; *) w="sha256 UNKNOWN ($h)";; esac
 	echo "$B: site $s, $w, $BUILD"; [ "$s" = patched ] && [ "$h" = "$SHA256_PATCHED" ];;
 revert|apply)
-	# a running executable cannot be written (ETXTBSY)
+	# The system cannot write a running executable (ETXTBSY).
 	pidof chromium >/dev/null 2>&1 && { echo "Chromium is running: rc-service kiosk stop first"; exit 1; }
 	[ "$1" = revert ] && { want=patched new=$ORIG sha=$SHA256_ORIG; } || { want=orig new=$PATCHED sha=$SHA256_PATCHED; }
 	s=$(site)
@@ -47,6 +48,6 @@ revert|apply)
 	put "$OFFSET" "$new"
 	h=$(sha256sum "$B" | cut -d' ' -f1)
 	[ "$h" = "$sha" ] || { echo "sha256 after write $h != $sha, restoring"; [ "$1" = revert ] && put "$OFFSET" "$PATCHED" || put "$OFFSET" "$ORIG"; exit 1; }
-	echo "$B: $1 done (sha256 $h); rc-service kiosk restart";;
+	echo "$B: $1 done (sha256 $h). rc-service kiosk restart";;
 *) sed -n '2,13p' "$0"; exit 2;;
 esac

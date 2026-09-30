@@ -1,13 +1,15 @@
 #!/bin/bash
 # Host test for the eMMC-boot root-selection fallback fix (2026-09-27) in
-# rootfs/initramfs/overlay/init: without tsx.root=, try LABEL=tsxroot-emmc
-# then LABEL=tsxroot, using a candidate only if it mounts AND has an init,
-# so a stale tsxroot-emmc superblock (left behind by an earlier eMMC install,
-# fs since overwritten) falls through to the card instead of dropping to
-# rescue. Extracts the real selection code (up()/find_dev()/candidate loop)
-# from the init script by line range and runs it, unmodified, against
-# loop-mounted ext4 images in a privileged Alpine 3.24 container (pattern:
-# installer/tests/test-factory.sh). Host-only, no panel/serial involved.
+# rootfs/initramfs/overlay/init. Without tsx.root=, init tries LABEL=tsxroot-emmc
+# and then LABEL=tsxroot. It uses a candidate only if the candidate mounts
+# and has an init. A stale tsxroot-emmc superblock (left by an earlier eMMC
+# install, the file system since overwritten) must fall through to the card.
+# It must not drop to rescue.
+# The test extracts the real selection code (up(), find_dev(), the candidate
+# loop) from the init script by line range. It runs the code unmodified
+# against loop-mounted ext4 images in a privileged Alpine 3.24 container
+# (same pattern as installer/tests/test-factory.sh).
+# Host only: no panel and no serial port.
 #   tests/test-root-fallback.sh
 set -uo pipefail
 EMMC=$(cd "$(dirname "$0")/.." && pwd); ROOT=$(cd "$EMMC/../.." && pwd)
@@ -39,18 +41,19 @@ for i in $(seq 0 31); do [ -b /dev/loop$i ] || mknod /dev/loop$i b 7 $i; done
 mkdir -p /newroot
 
 # stand-ins for the two functions defined earlier in the real init (not part
-# of the extracted range): msg() is harmless as-is; rescue() here records
+# of the extracted range): msg() is harmless as-is. Rescue() here records
 # that it was called instead of exec-ing /sbin/init (there is none in this
 # sandbox).
 msg() { echo "MSG: $*"; }
 rescue() { echo "RESCUE-CALLED: $*"; RESCUED=1; }
-# This host is shared (other loop-mounted tsx disk images, some also labelled
-# tsxroot/tsxroot-emmc, are visible here -- loop devices are a global kernel
-# resource, not per-container). Real findfs would pick those up too and make
-# the test flaky/wrong through no fault of the selection logic, so scope the
-# LABEL lookup to only the two devices this test run itself attached; the
-# extracted selection code (find_dev, the candidate loop, fsck/mount/init
-# checks, rescue fallback) runs completely unmodified.
+# This host is shared. Other loop-mounted tsx disk images are visible here,
+# and some carry the labels tsxroot or tsxroot-emmc. Loop devices are a global
+# kernel resource, not a per-container one. The real findfs would find those
+# images too, and the test would fail for a reason that is not in the
+# selection logic. So this findfs limits the LABEL lookup to the two devices
+# this test run attached. The extracted selection code (find_dev, the
+# candidate loop, the fsck, mount and init checks, the rescue fallback)
+# runs unmodified.
 findfs() {
 	want=${1#LABEL=}
 	for cand in "$le" "$lc"; do

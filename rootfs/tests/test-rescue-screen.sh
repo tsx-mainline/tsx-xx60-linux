@@ -1,16 +1,18 @@
 #!/bin/sh
 # Host test for the rescue screen (rootfs/initramfs/overlay/usr/sbin/tsx-rescue-status),
 # no panel needed:
-#   - idle: banner + "rescue", no "reason for rescue" / "status" rows, the model without
-#     the firmware/tsid suffix, the Enter line; an operation section ONLY while an
-#     install/restore runs (name, step, progress bar, do-not-power-off warning);
-#     failed / done / stopped / stale-progress cases;
-#   - no line is longer than the console (80 on 1280x800, 85 on 1024x600), rows <= 24;
-#   - no power-cycle advice on any rescue path;
-#   - Enter on the keyboard tty opens the shell (fake tty = a file), no Enter does not,
-#     the shell banner warns while an operation runs;
-#   - the state files the tools write (tsx-install-state / tsx-op).
-# busybox/dash sh, no compiler.
+#   - idle: the banner and "rescue", no "reason for rescue" or "status" rows,
+#     the model without the firmware/tsid suffix, and the Enter line. An
+#     operation section appears ONLY while an install or restore runs (name,
+#     step, progress bar, do-not-power-off warning). The test also covers the
+#     failed, done, stopped and stale-progress cases.
+#   - no line is longer than the console (80 on 1280x800, 85 on 1024x600),
+#     and there are at most 24 rows.
+#   - no power-cycle advice on any rescue path.
+#   - Enter on the keyboard tty opens the shell (the fake tty is a file). No
+#     Enter does not. The shell banner warns while an operation runs.
+#   - the state files that the tools write (tsx-install-state, tsx-op).
+# The test runs under busybox or dash sh and needs no compiler.
 set -eu
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
 RS=$HERE/rootfs/initramfs/overlay/usr/sbin/tsx-rescue-status

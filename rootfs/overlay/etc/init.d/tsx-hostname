@@ -1,31 +1,33 @@
 #!/sbin/openrc-run
-# tsx-hostname: name the panel like the factory firmware, <model>-<MAC uppercase
-# no colons> (e.g. TSW-1060-XXXXXXXXXXXX), before anything on the network cares:
-#   1. lan_hostname from the U-Boot env (read only, via fw_printenv; the same
-#      env tsx-boot-ok writes to, see /etc/tsx/uboot-env.conf). This is the
-#      exact string the factory firmware itself used.
-#   2. <model>-<MAC>: model = product_name up to "_[" (e.g. "TSW-1060" from
-#      "TSW-1060_[v3.002.1055,_#XXXXXXXX]"), also from the env; MAC = eth0's
-#      (set by tsx-setup, which must run first: the kernel's own MAC is
-#      random on this board).
+# tsx-hostname: name the panel like the factory firmware does,
+# <model>-<MAC uppercase, no colons> (for example TSW-1060-XXXXXXXXXXXX),
+# before anything on the network needs the name. The order of the sources:
+#   1. lan_hostname from the U-Boot env. The script reads it with fw_printenv
+#      (read only). It is the same env that tsx-boot-ok writes to (see
+#      /etc/tsx/uboot-env.conf). The factory firmware itself used this exact
+#      string.
+#   2. <model>-<MAC>. The model is product_name up to "_[" (for example
+#      "TSW-1060" from "TSW-1060_[v3.002.1055,_#XXXXXXXX]"), also from the
+#      env. The MAC is the one of eth0. tsx-setup sets it and must run first,
+#      because the MAC of the kernel is random on this board.
 #   3. tsx-kiosk.
 # PANEL_NAME in the panel config (tsx-config, docs/rootfs.md "Panel
-# configuration") overrides all of the above: if set, tsx-config apply
-# writes it (already validated against the same charset) to
-# /run/tsx/panel-name before this service runs, and it wins outright -- it
-# is also what names the sendspin player and the voice satellite, so a
-# panel has one name everywhere once it is set.
-# Every candidate is checked against ^[A-Za-z0-9-]{1,63}$ before use. This
-# script only ever READS the U-Boot env (fw_printenv); it never calls
-# fw_setenv.
+# configuration") overrides all of the above. If it is set, tsx-config apply
+# writes it to /run/tsx/panel-name before this service runs (it already
+# validated the name against the same charset). It wins outright. It also
+# names the sendspin player and the voice satellite, so the panel has one
+# name everywhere.
+# The script checks every candidate against ^[A-Za-z0-9-]{1,63}$ before it
+# uses it. The script only READS the U-Boot env (fw_printenv). It never
+# calls fw_setenv.
 #
-# Must run before "networking": ifupdown-ng's dhcp executor defaults to
-# use_hostname_for_dhcp=1 (queries the live hostname itself, no interfaces
-# file change needed), so udhcpc sends whatever hostname is set here as soon
-# as it starts. And before "syslog": busybox syslogd stamps every line with
-# the hostname it saw when it started, so a syslogd started first would log
-# the image's default (tsx-kiosk, from /etc/hostname) for the whole first
-# boot.
+# It must run before "networking". The dhcp executor of ifupdown-ng defaults
+# to use_hostname_for_dhcp=1. It reads the live hostname itself, so the
+# interfaces file needs no change. udhcpc sends the hostname that this script
+# sets as soon as it starts. It must also run before "syslog". The busybox
+# syslogd stamps every line with the hostname that it saw at its start. A
+# syslogd that starts first would log the default name of the image
+# (tsx-kiosk, from /etc/hostname) for the whole first boot.
 description="TSX hostname: PANEL_NAME from panel.conf, else lan_hostname from the U-Boot env, else <model>-<MAC>, else tsx-kiosk"
 depend() { need localmount; after tsx-setup tsx-config; before networking syslog; }
 
@@ -44,7 +46,7 @@ start() {
 	if [ -r "$CONF" ]; then
 		ENV_DISK= ENV_OFFSET= ENV_SIZE=
 		. "$CONF"
-		# same disk-detection logic as /usr/local/sbin/tsx-boot-ok (read only here)
+		# Same disk detection as /usr/local/sbin/tsx-boot-ok (read only here)
 		disk=
 		for d in /sys/block/mmcblk[0-9]; do
 			[ -e "$d" ] || continue
@@ -61,12 +63,13 @@ start() {
 		if [ -n "$disk" ] && [ -b "$disk" ] && [ -n "${ENV_OFFSET:-}" ] && [ "$ENV_OFFSET" != TODO ]; then
 			cfg=${TSX_RUN:-/run}/tsx-fw_env.config
 			echo "$disk $ENV_OFFSET ${ENV_SIZE:-0x10000}" > "$cfg"
-			# Bounded: this runs before networking/syslog in the main boot
-			# sequence (see "depend" above), so a hang here would stall the
-			# WHOLE boot. u-boot-tools' fw_env.c read loop spins at 100% CPU
-			# forever on a config/size mismatch instead of erroring out
-			# (docs/boot.md "fw_printenv can hang"); fail soft (fall
-			# through to <model>-<MAC>, or tsx-kiosk) instead of hanging boot.
+			# Limit the run time. This service runs before networking and
+			# syslog in the main boot sequence (see "depend" above), so a
+			# hang here would stall the WHOLE boot. The read loop in
+			# fw_env.c of u-boot-tools spins at 100% CPU forever on a
+			# config/size mismatch, and does not report an error
+			# (docs/boot.md "fw_printenv can hang"). Fail soft instead of
+			# hanging the boot: fall through to <model>-<MAC>, or tsx-kiosk.
 			fwto=${TSX_FWENV_TIMEOUT:-10}
 			fwto_cmd=; command -v timeout >/dev/null 2>&1 && fwto_cmd="timeout -s KILL $fwto"
 			out=$($fwto_cmd fw_printenv -c "$cfg" 2>/dev/null) || { out=; ewarn "fw_printenv failed or timed out after ${fwto}s: falling back to <model>-<MAC>/tsx-kiosk"; }

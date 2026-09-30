@@ -6,7 +6,7 @@
 #   tools/regs/build.sh          -> tools/regs/regdump
 #
 # BUILD_HOST (optional, no default): build on that host over ssh instead of
-# here; pass it on the command line.
+# here. Pass it on the command line.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 

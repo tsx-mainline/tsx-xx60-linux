@@ -1,20 +1,20 @@
 #!/bin/sh
-# tsx-ledbard: sets BOOT_COLOR of /etc/tsx/ledbar.conf once the LED bar is
-# there (the STM32 enumerates a few seconds into the boot), then re-applies
-# the wanted colour whenever tsx-idled blanks or wakes the screen
-# (/run/tsx-idled.state, the same file tsx-buttons follows).
+# tsx-ledbard: set BOOT_COLOR of /etc/tsx/ledbar.conf once the LED bar is
+# there (the STM32 enumerates a few seconds into the boot). Then apply the
+# wanted color again whenever tsx-idled blanks or wakes the screen
+# (/run/tsx-idled.state, the same file that tsx-buttons follows).
 STATE=${TSX_IDLED_STATE:-/run/tsx-idled.state}
 log() { echo "$(date '+%F %T') tsx-ledbar: $*"; }
 
 n=0
 until tsx-ledbar boot 2>/dev/null; do
 	n=$((n + 1))
-	[ $n = 1 ] && log "LED bar not there yet (lsusb 14be:001b); retrying every 5 s"
-	[ $n = 60 ] && log "still no LED bar after 5 min; keep polling slowly"
+	[ $n = 1 ] && log "LED bar not there yet (lsusb 14be:001b). Retrying every 5 s"
+	[ $n = 60 ] && log "still no LED bar after 5 min. Keep polling slowly"
 	[ $n -ge 60 ] && sleep 55
 	sleep 5
 done
-log "boot colour set ($(tsx-ledbar get | sed -n 's/^want //p'))"
+log "boot color set ($(tsx-ledbar get | sed -n 's/^want //p'))"
 
 prev=
 while :; do

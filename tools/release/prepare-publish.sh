@@ -1,47 +1,50 @@
 #!/bin/bash
-# Push-day prep: squash tsx-xx60-linux's "import" branch tree into one clean
-# commit, then scan every repo that would be pushed for the things that must
-# never leave this workstation. Prints a report and the exact push commands
-# a person would run -- this script never pushes, never adds a remote, and
-# never touches an existing branch other than the squash target.
+# Push-day prep. The script squashes the "import" branch tree of
+# tsx-xx60-linux into one clean commit. Then it scans every repo that a push
+# would send, for things that must never leave this workstation. It prints a
+# report and the exact push commands that a person would run. The script never
+# pushes, never adds a remote, and never touches an existing branch other than
+# the squash target.
 #
 #   tools/release/prepare-publish.sh --leak-patterns PATH [options]
 #
 # Required:
-#   --leak-patterns PATH   extended-regex (case-insensitive) patterns file,
-#                          one per line, '#'/blank ignored (see
-#                          local-tools/leak-patterns.txt in this project --
-#                          NOT part of this repo; the path is yours to give).
-#                          Its content is read into a throwaway temp file for
-#                          grep -f and never written anywhere else.
+#   --leak-patterns PATH   file of extended-regex patterns (case-insensitive),
+#                          one per line, '#' and blank lines ignored. See
+#                          local-tools/leak-patterns.txt in this project. That
+#                          file is NOT part of this repo, so give the path.
+#                          The script reads the content into a throwaway temp
+#                          file for grep -f and never writes it anywhere else.
 #
 # Options:
-#   --squash-branch NAME   branch this script (re)creates from import's tree
-#                          (default: publish-candidate)
-#   --skip-squash          scan only, do not create/update the squash branch
+#   --squash-branch NAME   branch that this script (re)creates from the tree
+#                          of import (default: publish-candidate)
+#   --skip-squash          only scan, do not create or update the squash branch
 #   --max-blob-size BYTES  flag tracked blobs bigger than this (default: 2097152 = 2 MiB)
-#   --repo NAME=PATH       override a repo path, repeatable; NAME is one of
-#                          xx60-linux, aports, linux (default: this repo,
-#                          ../tsx-aports, ../linux -- the sibling layout used
-#                          by tools/build/remote-build.sh)
-#   --linux-branch BRANCH  a branch of the "linux" repo to scan, repeatable
-#                          (default: tsx-xx60-6.18 tsx-xx60-7.2 tsx-xx60 --
-#                          any that do not exist are skipped, silently)
+#   --repo NAME=PATH       override a repo path (repeatable). NAME is one of
+#                          xx60-linux, aports, linux. Defaults: this repo,
+#                          ../tsx-aports, ../linux (the sibling layout that
+#                          tools/build/remote-build.sh uses)
+#   --linux-branch BRANCH  a branch of the "linux" repo to scan (repeatable).
+#                          Default: tsx-xx60-6.18 tsx-xx60-7.2 tsx-xx60.
+#                          The script skips branches that do not exist,
+#                          without a message.
 #   --linux-upstream-remote NAME  a remote of the "linux" repo whose history
-#                          counts as already-public (repeatable; default:
-#                          torvalds stable linux-next xdarklight -- commits
-#                          reachable from one of these are NOT re-scanned,
-#                          same convention as local-tools/leak-hook.sh's
-#                          pre-push hook: "git log <tip> --not --remotes")
-#   --push-url NAME=URL    override the URL printed in the push command for
-#                          a repo (default: https://github.com/tsx-mainline/<repo-dirname>,
-#                          the org this project already publishes docs
-#                          under -- see README.md / docs/kernel.md)
+#                          counts as already public (repeatable). Default:
+#                          torvalds stable linux-next xdarklight. The script
+#                          does not scan again the commits that one of these
+#                          remotes has. This is the same convention as the
+#                          pre-push hook of local-tools/leak-hook.sh:
+#                          "git log <tip> --not --remotes"
+#   --push-url NAME=URL    override the URL in the printed push command for a
+#                          repo (default: https://github.com/tsx-mainline/<repo-dirname>,
+#                          the org where this project already publishes docs.
+#                          See README.md and docs/kernel.md)
 #
 # Exit status: 0 if the squash (unless skipped) succeeded and every scan came
-# back clean; 1 if any repo/category found something. Either way the full
-# report is printed; nothing is pushed and nothing beyond the squash branch
-# is written.
+# back clean. 1 if any repo or category found something. In both cases the
+# script prints the full report. It pushes nothing and writes nothing beyond
+# the squash branch.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)          # .../tsx-xx60-linux
@@ -63,13 +66,13 @@ while [ $# -gt 0 ]; do case $1 in
 	--max-blob-size) MAXBLOB=$2; shift;;
 	--repo) k=${2%%=*}; REPOPATH[$k]=${2#*=}; shift;;
 	# first --linux-branch/--linux-upstream-remote replaces the built-in
-	# default list; later ones append to what the user is building up.
+	# default list. Later ones append to what the user is building up.
 	--linux-branch) [ "$LINUX_BRANCHES_SET" = 1 ] || { LINUX_BRANCHES=(); LINUX_BRANCHES_SET=1; }
 	                LINUX_BRANCHES+=("$2"); shift;;
 	--linux-upstream-remote) [ "$UPSTREAM_REMOTES_SET" = 1 ] || { UPSTREAM_REMOTES=(); UPSTREAM_REMOTES_SET=1; }
 	                UPSTREAM_REMOTES+=("$2"); shift;;
 	--push-url) k=${2%%=*}; PUSHURL[$k]=${2#*=}; shift;;
-	-h|--help) sed -n '2,45p' "$0"; exit 0;;
+	-h|--help) sed -n '2,47p' "$0"; exit 0;;
 	*) echo "prepare-publish: unknown option $1" >&2; exit 1;; esac; shift; done
 
 [ -n "$LEAKPATS" ] || { echo "prepare-publish: --leak-patterns PATH is required" >&2; exit 1; }
@@ -78,7 +81,7 @@ while [ $# -gt 0 ]; do case $1 in
 say() { echo "[prepare-publish] $*"; }
 FAIL=0
 
-# --- leak-patterns file -> a throwaway grep -f file (comments/blanks out); ---
+# --- leak-patterns file -> a throwaway grep -f file (comments/blanks out). ---
 # never copied anywhere that could end up committed.
 patf=$(mktemp); trap 'rm -f "$patf"' EXIT
 grep -v -e '^#' -e '^[[:space:]]*$' "$LEAKPATS" > "$patf"
@@ -116,11 +119,12 @@ squash_xx60_linux() {
 }
 
 # ---------------------------------------------------------------------------
-# scan_range REPO_KEY LABEL REV...   -- REV... is what "git log" takes to
-# enumerate the commits that would actually be pushed (a full-history REF for
-# a repo with no remotes yet, or "BRANCH --not --remotes=U1 --remotes=U2 .."
-# to scan only what is not already reachable from a known-public remote --
-# the same idiom local-tools/leak-hook.sh's pre-push hook already uses).
+# scan_range REPO_KEY LABEL REV...
+# REV... is what "git log" takes to list the commits that a push would send.
+# For a repo with no remotes yet, REV is a full-history REF. Otherwise REV is
+# "BRANCH --not --remotes=U1 --remotes=U2 ..." so that the scan skips what a
+# known-public remote already has. The pre-push hook of local-tools/leak-hook.sh
+# uses the same idiom.
 # ---------------------------------------------------------------------------
 scan_range() {
 	local key=$1 label=$2; shift 2

@@ -1,32 +1,32 @@
 #!/usr/bin/env bash
-# eMMC migration: move a unit that boots the mainline kiosk from the SD card
-# (the card stage: root p2, /data p4, p1 = tsxboot.img + rescue) to the eMMC
-# boot, the way it was first done on unit B (installer/emmc migration, see
-# its NOTES.md "Result"). This is an internal step of tsx-install-mainline;
-# calling it directly is an expert/debug path.
+# eMMC migration. It moves a unit that boots the mainline kiosk from the SD
+# card (the card stage: root p2, /data p4, p1 = tsxboot.img + rescue) to the
+# eMMC boot. Unit B was first done this way (installer/emmc migration, see
+# its NOTES.md "Result"). This is an internal step of tsx-install-mainline.
+# Calling it directly is an expert and debug path.
 #   1 inputs: emmc/out/tsxboot-emmc.img (+ .sha256), emmc/migrate-to-emmc.sh,
-#     emmc/tsx-update-boot; the panel answers mainline ssh with root = mmcblk0p2
-#   2 copy them to /data/tmp on the panel; tsx-update-boot puts tsxboot-emmc.img on
-#     p1 (golden/rescue boot.img verified unchanged)
-#   3 reboot; the eMMC-aware kernel (blkdevparts) shows mmcblk1p1..p8; root still p2
-#   4 migrate-to-emmc.sh: discard eMMC cache/recovery, mkfs p8 tsxroot-emmc, copy the
-#     root, fstab, write the image into p7 (readback verified)
-#   5 p1:tsxboot.off; reboot: U-Boot's stock bootcmd boots eMMC p7, root = p8
-#   6 finalise p1 (only boot.img = rescue, tsxenv.bak, tsxlayout.done stay); reboot;
-#     verify: eMMC boot, root p8, 6 binds from p4, services, DSP, boot_retry reset,
+#     emmc/tsx-update-boot. The panel answers mainline ssh with root = mmcblk0p2
+#   2 copy them to /data/tmp on the panel. tsx-update-boot puts tsxboot-emmc.img on
+#     p1 (it verifies that the golden/rescue boot.img stays unchanged)
+#   3 reboot. The eMMC-aware kernel (blkdevparts) shows mmcblk1p1..p8. Root is still p2
+#   4 migrate-to-emmc.sh: discard eMMC cache and recovery, mkfs p8 tsxroot-emmc, copy the
+#     root and fstab, write the image into p7 (verified by readback)
+#   5 p1:tsxboot.off. Reboot: the stock bootcmd of U-Boot boots eMMC p7, root = p8
+#   6 finalize p1 (only boot.img = rescue, tsxenv.bak, tsxlayout.done stay). Reboot.
+#     Verify: eMMC boot, root p8, 6 binds from p4, services, DSP, boot_retry reset,
 #     kiosk time from the serial log
 #   7 optional --wake-local: WAKE=local in /etc/tsx/voice.conf, restart tsx-voice,
 #     log check, 30 s CPU sample
 #   tsx-card-to-emmc PANEL_IP [--img FILE] [--from-step N] [--to-step N] [--wake-local]
 #                    [--results FILE] [--dry-run]
 #   --img   the eMMC boot image (default emmc/out/tsxboot-emmc.img). Its sha256 comes
-#           from FILE.sha256 if that exists (as the default's does), else it is computed.
+#           from FILE.sha256 if that exists (as the default's does), else the script computes it.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); WORK=$(cd "$HERE/../.." && pwd)   # installer/steps/legacy/ -> installer/
 IMG=$WORK/emmc/out/tsxboot-emmc.img; MIG=$WORK/emmc/migrate-to-emmc.sh; P1U=$WORK/emmc/tsx-update-boot
 SERLOG=${TSX_SERIAL_LOG:-$WORK/../tools/bench/boot-2200.log}
-# The serial log is optional (a UART logger); without one, the serial checks
-# below are skipped instead of failing the migration.
+# The serial log is optional (a UART logger writes it). Without a log, the
+# script skips the serial checks below, and the migration does not fail.
 ser_mark() { if [ -f "$SERLOG" ]; then wc -l < "$SERLOG"; else echo 0; fi; }
 ser_since() { [ -f "$SERLOG" ] || return 0; tail -n +$(($1 + 1)) "$SERLOG" | tr -d '\0'; }
 PANEL= FROM=1 TO=7 RESULTS= DRY=0 WAKE=0
@@ -40,10 +40,11 @@ SSH="sshpass -p tsx ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/n
 SCP="sshpass -p tsx scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 root_dev() { $SSH "awk '\$2==\"/\"{print \$1}' /proc/mounts" 2>/dev/null | tail -n 1; }
 wait_ssh() { local w=0; log "  waiting for ssh root@$PANEL"; sleep 20; until $SSH true >/dev/null 2>&1; do sleep 5; w=$((w + 5)); [ $((w % 30)) -eq 0 ] && log "  still waiting for ssh root@$PANEL: ${w}/${1:-240} s"; [ $w -lt "${1:-240}" ] || die "ssh did not come back in ${1:-240}s"; done; log "  ssh up after ~$((w + 20)) s"; }
-# stream a long-running remote command's output live (via log) instead of
-# capturing it silently until ssh returns; leaves the full text in $out for any
-# later grep and returns the remote command's exit status (set -o pipefail is
-# on, so the if-condition reflects $SSH's status, not tee/while's).
+# Stream the output of a long remote command live (through log). The
+# alternative is to capture it silently until ssh returns. The function leaves
+# the full text in $out for a later grep. It returns the exit status of the
+# remote command. set -o pipefail is on, so the if-condition reflects the
+# status of $SSH, not of tee or while.
 run_stream() {  # CMD
 	local cmd=$1 tmp rc
 	tmp=$(mktemp "$RESULTS.XXXXXX")
@@ -59,11 +60,11 @@ fi
 log "== tsx-card-to-emmc: PANEL=$PANEL image $(basename "$IMG") $SHA from=$FROM to=$TO dry=$DRY"
 [ "$(sha256sum < "$IMG" | cut -d' ' -f1)" = "$SHA" ] || die "$IMG does not match its .sha256"
 if [ "$DRY" = 1 ]; then
-	log "[dry-run] 2: scp image + migrate-to-emmc.sh + tsx-update-boot -> /data/tmp; sh tsx-update-boot IMG SHA"
-	log "[dry-run] 3: reboot; wait ssh; expect mmcblk1p8 in /proc/partitions, root mmcblk0p2"
+	log "[dry-run] 2: scp image + migrate-to-emmc.sh + tsx-update-boot -> /data/tmp. sh tsx-update-boot IMG SHA"
+	log "[dry-run] 3: reboot. Wait ssh. Expect mmcblk1p8 in /proc/partitions, root mmcblk0p2"
 	log "[dry-run] 4: sh migrate-to-emmc.sh /data/tmp/tsxboot-emmc.img SHA"
-	log "[dry-run] 5: touch p1:tsxboot.off; reboot; expect root /dev/mmcblk1p8"
-	log "[dry-run] 6: p1 keeps boot.img tsxenv.bak tsxlayout.done; reboot; verify binds/services/DSP/boot_retry/kiosk time"
+	log "[dry-run] 5: touch p1:tsxboot.off. Reboot. Expect root /dev/mmcblk1p8"
+	log "[dry-run] 6: p1 keeps boot.img tsxenv.bak tsxlayout.done. Reboot. Verify binds/services/DSP/boot_retry/kiosk time"
 	log "[dry-run] 7: --wake-local: WAKE=local in /etc/tsx/voice.conf, restart tsx-voice, log + 30 s top"; exit 0
 fi
 if step 2; then

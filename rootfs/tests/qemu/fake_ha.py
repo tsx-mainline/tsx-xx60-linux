@@ -186,7 +186,7 @@ async def main():
     collecting[0] = False
     p.wait()
     lvl, secs, trace = tone_profile(bytes(audio), 16000, 440)
-    log(f"mic stream: {len(audio)} bytes, 440 Hz max {lvl:.1f} dBFS, present {secs:.2f} s; per 0.25 s: {trace}")
+    log(f"mic stream: {len(audio)} bytes, 440 Hz max {lvl:.1f} dBFS, present {secs:.2f} s. Per 0.25 s: {trace}")
     check(f"mic audio streamed at 16 kHz ({len(audio)} bytes in 3 s)", len(audio) >= 16000 * 2 * 2)
     check(f"mic stream carries the -30 dBFS 440 Hz tone ({lvl:.1f} dBFS)", abs(lvl - (-30.0)) <= 2.0)
 
@@ -210,7 +210,7 @@ async def main():
     check("TTS reply played and acknowledged (VoiceAssistantAnnounceFinished)", finished.is_set())
     out, _ = await asyncio.to_thread(rec.communicate)
     lvl, secs, trace = tone_profile(out, 16000, 660)
-    log(f"loopback during TTS: 660 Hz max {lvl:.1f} dBFS, present {secs:.2f} s of 2.0; per 0.25 s: {trace}")
+    log(f"loopback during TTS: 660 Hz max {lvl:.1f} dBFS, present {secs:.2f} s of 2.0. Per 0.25 s: {trace}")
     check(f"TTS audio reached the speaker PCM (660 Hz at {lvl:.1f} dBFS, sent at -20)", abs(lvl - (-20.0)) <= 3.0)
     await asyncio.sleep(1.5)
     check(f"Media restored to 80 after the reply ({vol('Media')})", vol("Media") == 80)
@@ -229,7 +229,7 @@ async def main():
     check("announcement played and acknowledged", ok)
     out, _ = await asyncio.to_thread(rec.communicate)
     lvl, secs, trace = tone_profile(out, 16000, 550)
-    log(f"loopback during announcement: 550 Hz max {lvl:.1f} dBFS, present {secs:.2f} s of 1.5; per 0.25 s: {trace}")
+    log(f"loopback during announcement: 550 Hz max {lvl:.1f} dBFS, present {secs:.2f} s of 1.5. Per 0.25 s: {trace}")
     check(f"announcement audio reached the speaker PCM (550 Hz at {lvl:.1f} dBFS)", abs(lvl - (-20.0)) <= 3.0)
     await c.disconnect()
 

@@ -1,27 +1,27 @@
 #!/bin/sh
 # panel-provision.sh: put the Home Assistant credentials on the TSW-1060
-# and verify them. Run from this workstation, ONLY when the panel is free
-# (no other agent redeploying p5). Needs secrets from ./ha-provision.py mint.
+# and verify them. Run it from this workstation, only when the panel is free
+# (no other agent redeploys p5). It needs the secrets from ./ha-provision.py mint.
 #
 #   ./panel-provision.sh --panel <panel-ip> [--no-verify] [--light light.xyz] [--broker <host>]
 #
-# Does, over ssh (root/tsx), with every secret sent on stdin (never in argv):
+# Over ssh (root/tsx), with every secret sent on stdin (never in argv), it does:
 #   1. /etc/tsx/ha-token      <- secrets/ha-token (0600)            tsx-buttons
 #   2. /etc/tsx/buttons.conf  HA_URL=$HA, light.CHANGE_ME -> $LIGHT
 #   3. tsx-config set MQTT_HOST/MQTT_USER/MQTT_PASSWORD + apply (panel.conf,
-#      docs/rootfs.md "Panel configuration"; materialises /run/tsx/mqtt.conf,
-#      which tsx-mqtt reads after /etc/tsx/mqtt.conf's own defaults)
-#   4. rc-service tsx-buttons restart; rc-service tsx-mqtt restart
-#   5. tsx-config set KIOSK_URL $HA/tsw-1060/home + apply (same file; kiosk-session
-#      reads /run/tsx/kiosk.conf after /etc/kiosk.conf)
+#      docs/rootfs.md "Panel configuration"). This creates /run/tsx/mqtt.conf.
+#      tsx-mqtt reads it after its own defaults in /etc/tsx/mqtt.conf.
+#   4. rc-service tsx-buttons restart, rc-service tsx-mqtt restart
+#   5. tsx-config set KIOSK_URL $HA/tsw-1060/home + apply (the same file).
+#      kiosk-session reads /run/tsx/kiosk.conf after /etc/kiosk.conf.
 #   6. kiosk-set-token --file <secrets/kiosk-token>  (restarts the kiosk)
-# and verifies:
+# Then it verifies:
 #   a. tsx-keypad press lights toggles $LIGHT in HA (then toggles it back)
-#   b. the tsx_button event reaches HA (subscribed as the panel user; if a
-#      non-admin cannot subscribe: no curl error in /var/log/tsx-buttons.log)
+#   b. the tsx_button event reaches HA. The script subscribes as the panel user.
+#      If a non-admin cannot subscribe, /var/log/tsx-buttons.log has no curl error.
 #   c. MQTT discovery entities appear in HA (entity ids containing "tsx")
-#   d. the kiosk shows the dashboard logged in (CDP via ssh -L 9222)
-# Backups of the three edited files: /etc/tsx/*.pre-provision, /etc/kiosk.conf.pre-provision.
+#   d. the kiosk shows the dashboard, logged in (CDP via ssh -L 9222)
+# Backups of the edited files: /etc/tsx/*.pre-provision, /etc/kiosk.conf.pre-provision.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 S=$HERE/secrets
@@ -78,14 +78,14 @@ tsx-config show | grep '^MQTT_'" < "$S/tsw1060.password"
 say "4. restart tsx-buttons and tsx-mqtt"
 p 'rc-service tsx-buttons restart >/dev/null 2>&1; rc-service tsx-mqtt restart >/dev/null 2>&1; sleep 3; rc-service tsx-buttons status; rc-service tsx-mqtt status; tail -3 /var/log/tsx-buttons.log; tail -5 /var/log/tsx-mqtt.log'
 
-say "5. panel.conf: KIOSK_URL=$HA/$DASH (KIOSK_DEVTOOLS=1 for the checks stays a plain /etc/kiosk.conf edit: it is not a panel.conf key)"
+say "5. panel.conf: KIOSK_URL=$HA/$DASH (KIOSK_DEVTOOLS=1 for the checks stays a plain /etc/kiosk.conf edit, because it is not a panel.conf key)"
 p "set -e; f=/etc/kiosk.conf; [ -e \$f.pre-provision ] || cp -p \$f \$f.pre-provision
 tsx-config set KIOSK_URL '$HA/$DASH'
 tsx-config apply
 grep -q '^KIOSK_DEVTOOLS=1' \$f || sed -i 's#^KIOSK_DEVTOOLS=.*#KIOSK_DEVTOOLS=1#' \$f
 tsx-config get KIOSK_URL; grep -n '^KIOSK_DEVTOOLS=' \$f"
 
-say "6. kiosk-set-token --file (kiosk logs in as the panel user; restarts the kiosk)"
+say "6. kiosk-set-token --file (the kiosk logs in as the panel user, and restarts)"
 p 'umask 077; t=$(mktemp); cat > "$t"; kiosk-set-token --file "$t"; rc=$?; rm -f "$t"; kiosk-set-token --show; exit $rc' < "$S/kiosk-token"
 
 [ $VERIFY = 1 ] || { echo "done (no verification)"; exit 0; }
@@ -103,7 +103,7 @@ wait $WPID && ev=1 || ev=0
 cat /tmp/provision-event.$$
 if [ $ev = 0 ]; then
 	if grep -qi 'curl\|error\|no token' /tmp/provision-blog.$$; then bad "tsx-buttons logged an HA error"
-	else echo "event: not observable as non-admin; tsx-buttons logged no HA error (POST /api/events/tsx_button accepted)"; fi
+	else echo "event: a non-admin cannot observe it. tsx-buttons logged no HA error (POST /api/events/tsx_button accepted)"; fi
 fi
 rm -f /tmp/provision-event.$$ /tmp/provision-blog.$$
 if [ "$before" != "$after" ]; then
@@ -117,7 +117,7 @@ sleep 5
 "$HP" states-grep --pattern tsx || bad "no tsx entities in HA (tsx-mqtt log above)"
 
 say "d. kiosk dashboard logged in (CDP through ssh -L 9222)"
-sleep 30   # kiosk restart + dashboard load (~40 s after kiosk-set-token)
+sleep 30   # the kiosk restarts and loads the dashboard (about 40 s after kiosk-set-token)
 sshpass -p tsx ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
 	-o ExitOnForwardFailure=yes -N -L 19222:127.0.0.1:9222 root@$PANEL & TPID=$!
 sleep 3

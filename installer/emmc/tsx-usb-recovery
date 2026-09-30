@@ -1,44 +1,44 @@
 #!/bin/sh
 # tsx-usb-recovery enable|disable|status
 #
-# ON THE PANEL: from the Android root shell (stock, over Crestron's patched
-# sshd), the mainline rescue system, or the mainline kiosk -- wherever
-# fw_printenv/fw_setenv and a POSIX sh are available (busybox or Android
-# toolbox). No tsx-lib.sh dependency: this is copied onto the panel and run
-# standalone (scp/wget it, or paste it from a root console).
+# ON THE PANEL: run it from the Android root shell (stock, over the patched
+# Crestron sshd), the mainline rescue system, or the mainline kiosk. It works
+# wherever fw_printenv, fw_setenv and a POSIX sh are available (busybox or the
+# Android toolbox). It has no tsx-lib.sh dependency. Copy it onto the panel
+# and run it standalone (scp or wget it, or paste it from a root console).
 #
-# U-Boot's stock switch_bootmode runs "usb start 0" before checking for
-# jabil.txt, but on every logged boot (0/51) the external USB-A port has no
-# VBUS yet at that point, so U-Boot never sees a stick (docs/boot.md "U-Boot
+# The stock switch_bootmode of U-Boot runs "usb start 0" before it checks for
+# jabil.txt. But on every logged boot (0/51), the external USB-A port has no
+# VBUS yet at that point. So U-Boot never sees a stick (docs/boot.md "U-Boot
 # USB needs VBUS held before enumeration"). The fix, found at the U-Boot
 # prompt: "gset GPIOX_18 out high; msleep 500;" before "usb start 0".
 #
-# enable   prepends that to switch_bootmode (idempotent: does nothing if
+# enable   prepends that to switch_bootmode (idempotent: does nothing if it is
 #          already there)
 # disable  removes exactly that prefix (idempotent)
-# status   prints enabled/disabled/foreign (foreign = switch_bootmode does
-#          not start with "usb start 0;": not touched)
+# status   prints enabled/disabled/foreign. foreign means that switch_bootmode
+#          does not start with "usb start 0;". The script does not touch it.
 #
-# Edits the U-Boot env on the SD card at 1 MiB (64 KiB, CRC32), the same way
-# and with the same read-back-and-verify discipline as
-# /usr/local/sbin/tsx-boot-ok: one env write at most, read back and checked
-# before this script reports success.
+# It edits the U-Boot env on the SD card at 1 MiB (64 KiB, CRC32). It works the
+# same way as /usr/local/sbin/tsx-boot-ok and with the same discipline of
+# read-back and verify: one env write at most, read back and checked before
+# this script reports success.
 #
-# Env overrides (host tests only; never set these on a panel):
+# Env overrides (host tests only, never set these on a panel):
 #   TSX_SYSBLOCK   glob/dir of /sys/block entries to scan (default: real /sys/block)
 #   TSX_DEVDIR     dir of the block device nodes (default: autodetected, see below)
 #   TSX_RUN        scratch dir for the fw_env.config file (default /run)
-#   TSX_ENV_DEV    skip disk discovery and the block-device check entirely; use this
+#   TSX_ENV_DEV    skip disk discovery and the block-device check entirely. Use this
 #                  file/device directly (a bare 64 KiB env fixture, for host tests)
 #
-# Every fw_printenv/fw_setenv call is bounded by `timeout -s KILL` (default 10 s,
-# override with TSX_FWENV_TIMEOUT; skipped only if `timeout` is not on PATH).
-# u-boot-tools' fw_env.c has a read loop that spins at 100% CPU forever instead
-# of erroring out when the configured env size does not match the real size of
-# the backing device/file (a short read hits EOF, read() keeps returning 0, and
-# the loop never advances) -- confirmed in both uboot-tools 2026.07 and Alpine's
-# 2026.04. A real card should never be short, but this bounds the failure mode
-# instead of trusting that.
+# Every fw_printenv/fw_setenv call has a time limit of `timeout -s KILL` (default
+# 10 s, override with TSX_FWENV_TIMEOUT). The script skips it only if `timeout`
+# is not on PATH. The read loop in fw_env.c of u-boot-tools has a bug. It spins
+# at 100% CPU forever, instead of an error, when the configured env size differs
+# from the real size of the backing device or file. A short read hits EOF,
+# read() keeps returning 0, and the loop never advances. This is confirmed in
+# uboot-tools 2026.07 and in Alpine 2026.04. A real card should never be short.
+# The limit bounds the failure mode instead of trusting that.
 set -eu
 MODE=${1:-}
 case "$MODE" in
@@ -54,9 +54,10 @@ if [ -n "${TSX_ENV_DEV:-}" ]; then
 	DEV=$TSX_ENV_DEV
 	[ -e "$DEV" ] || die "TSX_ENV_DEV=$DEV: no such file"
 else
-	# ---- find the SD-class boot disk: p1 at sector 81920, p2 at 206849 (true of
-	# both the stock Crestron layout and the card-stage layout the installer
-	# converts every unit to; see installer/android/tsx-lib.sh TSX_LAYOUT_STOCK/CARD)
+	# ---- find the SD-class boot disk: p1 at sector 81920, p2 at 206849. This is
+	# true of both the stock Crestron layout and the card-stage layout that the
+	# installer converts every unit to (see TSX_LAYOUT_STOCK and TSX_LAYOUT_CARD
+	# in installer/android/tsx-lib.sh).
 	DISK=
 	for d in ${TSX_SYSBLOCK:-/sys/block/mmcblk[0-9]*}; do
 		[ -e "$d" ] || continue

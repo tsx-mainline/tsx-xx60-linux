@@ -1,9 +1,9 @@
 #!/bin/sh
-# xx60 kiosk installer. Runs ON THE PANEL, in the rootfs switch_root
-# initramfs rescue system (or the rescue initramfs), as root.
-# Normally driven from the host by deploy.sh; see REPORT.md "On-panel procedure".
+# The xx60 kiosk installer. It runs on the panel, as root, in the rescue
+# system (the rootfs switch_root initramfs or the rescue initramfs).
+# deploy.sh normally drives it from the host. See REPORT.md "On-panel procedure".
 #
-#   install.sh check                       verify disk layout, print what would happen
+#   install.sh check                       verify the disk layout, print what would happen
 #   install.sh backup-p5head               write the first MiB of p5 to stdout
 #   install.sh install [options]           format p5 and install the rootfs
 #      --rootfs FILE|-        rootfs.tar.gz (- = stdin)                    (required)
@@ -11,13 +11,14 @@
 #      --p5-backup-sha256 HEX sha256 of the first MiB of p5 as backed up   (required)
 #      --url URL              HA dashboard URL (default: rootfs kiosk.conf)
 #      --token-file FILE      HA long-lived token, seeded at first kiosk start
-#      --config-file FILE     panel.conf (installer/panel.conf.example): seeded
-#                             as /etc/tsx/panel.conf.seed; tsx-config apply
-#                             promotes it to /data/tsx/panel.conf on the first
-#                             boot that has /data mounted (this card stage has
-#                             no /data yet -- see docs/rootfs.md)
+#      --config-file FILE     panel.conf (installer/panel.conf.example). The
+#                             installer seeds it as /etc/tsx/panel.conf.seed.
+#                             tsx-config apply promotes it to
+#                             /data/tsx/panel.conf on the first boot that has
+#                             /data mounted. This card stage has no /data yet
+#                             (see docs/rootfs.md).
 #      --bootimg FILE         also copy the mainline boot image to FAT p1 as
-#                             tsxboot.img (golden boot.img is not touched)
+#                             tsxboot.img (the golden boot.img stays as it is)
 #      --bootimg-sha256 HEX   expected sha256 of --bootimg
 #      --force-fs             allow a p5 filesystem other than ext2 "sdcard"/ext4 "tsxroot"
 set -eu
@@ -27,7 +28,7 @@ die() { echo "install.sh: ERROR: $*" >&2; exit 1; }
 say() { echo "install.sh: $*" >&2; }
 
 [ "$(id -u)" = 0 ] || die "run as root"
-disk=$(tsx_find_disk) || die "no mmcblk device with the Crestron partition layout (see tsx-disk.sh); does the kernel DT enable the SD controller?"
+disk=$(tsx_find_disk) || die "no mmcblk device with the Crestron partition layout (see tsx-disk.sh). Does the kernel DT enable the SD controller?"
 P1=/dev/${disk}p1 P5=/dev/${disk}p5
 [ -b "$P5" ] || die "$P5 is not a block device"
 
@@ -41,7 +42,7 @@ check() {
 	ext4:tsxroot) say "p5 already holds a tsxroot fs (re-install)";;
 	*) [ "${FORCE_FS:-0}" = 1 ] || die "unexpected fs on p5: $(p5_fs) (use --force-fs)";;
 	esac
-	# is this the rescue system? (/ must be the initramfs, not p5)
+	# Check that this is the rescue system. / must be the initramfs, not p5.
 	[ "$(awk '$2=="/"{print $3}' /proc/mounts | tail -1)" = rootfs ] || say "WARNING: / is not the initramfs"
 }
 
@@ -71,12 +72,12 @@ done
 [ -n "$ROOTFS" ] && [ -n "$SHA" ] && [ -n "$P5SHA" ] || die "--rootfs, --sha256 and --p5-backup-sha256 are required"
 check
 
-# 1. the operator must hold a backup of p5's first MiB (deploy.sh pulls it)
+# 1. The operator must hold a backup of the first MiB of p5 (deploy.sh pulls it).
 now=$(dd if="$P5" bs=1M count=1 2>/dev/null | sha256sum | cut -d' ' -f1)
-[ "$now" = "$P5SHA" ] || die "first MiB of p5 ($now) does not match --p5-backup-sha256; pull a fresh backup first"
+[ "$now" = "$P5SHA" ] || die "first MiB of p5 ($now) does not match --p5-backup-sha256. Pull a fresh backup first"
 say "p5 head backup verified ($now)"
 
-# 2. boot image (optional) goes to FAT p1 first: small and verifiable
+# 2. The optional boot image goes to FAT p1 first. It is small and easy to verify.
 if [ -n "$BOOTIMG" ]; then
 	[ -n "$BOOTSHA" ] || die "--bootimg needs --bootimg-sha256"
 	[ "$(sha256sum < "$BOOTIMG" | cut -d' ' -f1)" = "$BOOTSHA" ] || die "boot image sha256 mismatch"
@@ -86,9 +87,9 @@ if [ -n "$BOOTIMG" ]; then
 	old=0; [ -f /mnt/p1/tsxboot.img ] && old=$(( $(stat -c %s /mnt/p1/tsxboot.img) / 1024 ))
 	[ $((free + old)) -gt $need ] || { umount /mnt/p1; die "not enough space on p1 (${free} KiB free)"; }
 	gsha=$(sha256sum < /mnt/p1/boot.img | cut -d' ' -f1)
-	# p1 (40 MiB) cannot hold two mainline images next to the golden one: on a
-	# re-install drop the old tsxboot.img first (found on the panel 2026-09-26).
-	# Without it the U-Boot hook falls through to Android, so this is safe.
+	# p1 (40 MiB) cannot hold two mainline images next to the golden one. On a
+	# re-install, drop the old tsxboot.img first (found on the panel 2026-09-26).
+	# Without that image, the U-Boot hook falls through to Android, so this is safe.
 	if [ "$free" -le "$need" ] && [ "$old" -gt 0 ]; then
 		say "not enough room for a side-by-side copy (${free} KiB free): removing the old p1:tsxboot.img first"
 		rm -f /mnt/p1/tsxboot.img; sync
@@ -101,9 +102,9 @@ if [ -n "$BOOTIMG" ]; then
 	say "boot image installed as p1:tsxboot.img (golden boot.img untouched, sha $gsha)"
 fi
 
-# 3. format p5 and extract, checking the tarball hash on the fly
+# 3. Format p5 and extract the tarball. Check the tarball hash on the fly.
 say "mkfs.ext4 -L tsxroot $P5"
-# no metadata_csum_seed / orphan_file (vendor 3.10 kernel rejects them)
+# Do not use metadata_csum_seed or orphan_file. The vendor 3.10 kernel rejects them.
 mkfs.ext4 -F -q -O ^metadata_csum_seed,^orphan_file -L tsxroot -m 1 "$P5"
 mkdir -p /mnt/tsxroot; mount -t ext4 "$P5" /mnt/tsxroot
 T=$(mktemp -d); mkfifo "$T/f"
@@ -118,10 +119,10 @@ if [ "$got" != "$SHA" ]; then
 fi
 say "rootfs extracted, sha256 OK"
 
-# 4. configure
+# 4. Configure the rootfs.
 R=/mnt/tsxroot
 kver=$(uname -r)
-[ -d "$R/lib/modules/$kver" ] || say "WARNING: rootfs has no modules for the running kernel $kver ($(ls $R/lib/modules 2>/dev/null | tr '\n' ' ')); touch/backlight/lima modules will not load"
+[ -d "$R/lib/modules/$kver" ] || say "WARNING: rootfs has no modules for the running kernel $kver ($(ls $R/lib/modules 2>/dev/null | tr '\n' ' ')). touch/backlight/lima modules will not load"
 [ -n "$URL" ] && sed -i "s|^KIOSK_URL=.*|KIOSK_URL=\"$URL\"|" $R/etc/kiosk.conf
 if [ -n "$TOKF" ]; then install -m 600 "$TOKF" $R/var/lib/kiosk/pending-token; chown 0:0 $R/var/lib/kiosk/pending-token; fi
 if [ -n "$CONFF" ]; then

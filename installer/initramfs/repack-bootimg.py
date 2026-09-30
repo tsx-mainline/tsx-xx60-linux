@@ -2,11 +2,12 @@
 """repack-bootimg.py BASE.img RAMDISK.cpio.gz OUT.img
 
 Replace only the ramdisk of an Android v0 boot image (xx60 format, see
-kernel/mkimage.sh): the kernel (legacy uImage) and the second payload (DTB)
-are copied byte for byte, the header keeps every field except ramdisk_size and
-the id (SHA1 over kernel, ramdisk, second + sizes, as mkimage.sh computes it).
-Checks afterwards that kernel and DTB are identical to BASE. Used to add installer
-stage 2 to the current p1 image without rebuilding the kernel."""
+kernel/mkimage.sh). The script copies the kernel (legacy uImage) and the second
+payload (DTB) byte for byte. The header keeps every field except ramdisk_size
+and the id (SHA1 over kernel, ramdisk, second and the sizes, as mkimage.sh
+computes it). Afterwards the script checks that kernel and DTB are identical to
+BASE. Use it to add installer stage 2 to the current p1 image without a kernel
+rebuild."""
 import hashlib, struct, sys
 
 base, rdf, out = sys.argv[1:4]

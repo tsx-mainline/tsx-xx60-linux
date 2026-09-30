@@ -1,31 +1,33 @@
 #!/bin/sh
-# tsx-kiosk-url CURRENT_URL: prints the URL kiosk-session should load.
+# tsx-kiosk-url CURRENT_URL: print the URL that kiosk-session must load.
 #
-# CURRENT_URL is whatever kiosk-session has already resolved from
-# /etc/kiosk.conf, panel.conf's KIOSK_URL override (tsx-config apply) and a
-# front-key choice (/run/tsx/kiosk-url) -- this script does not read any of
-# those itself. It prints CURRENT_URL back unchanged UNLESS:
+# CURRENT_URL is the URL that kiosk-session has already resolved from
+# /etc/kiosk.conf, the KIOSK_URL override of panel.conf (tsx-config apply)
+# and a front-key choice (/run/tsx/kiosk-url). This script reads none of
+# those itself. It prints CURRENT_URL back unchanged UNLESS one of these is
+# true:
 #
-#   - it is empty (nothing configured at all: /etc/kiosk.conf ships with an
-#     empty KIOSK_URL on purpose, docs/rootfs.md "Setup page"), or
-#   - /run/tsx/setup-open is fresh (`tsx-config setup` / the overlay "Setup"
-#     entry, for one ~15 min window, even on an already-configured panel)
+#   - CURRENT_URL is empty (nothing is configured at all: /etc/kiosk.conf
+#     ships with an empty KIOSK_URL on purpose, docs/rootfs.md "Setup page").
+#   - /run/tsx/setup-open is fresh (`tsx-config setup` or the overlay "Setup"
+#     entry, for one ~15 min window, even on an already-configured panel).
 #
-# in which case it prints the local setup page's own URL (tsx-setupd)
-# instead. Never touches panel.conf or any other state; a pure function of
-# its argument and /run/tsx/setup-open, so it is trivial to test standalone
-# (rootfs/tests/test-setup.sh) without dragging in the rest of kiosk-session
+# In those cases it prints the URL of the local setup page (tsx-setupd)
+# instead. It never touches panel.conf or any other state. It is a pure
+# function of its argument and /run/tsx/setup-open. So a test can run it
+# standalone (rootfs/tests/test-setup.sh) without the rest of kiosk-session
 # (compositor, GPU probing, Chromium flags...).
 #
-# Env overrides for tests: TSX_RUN_DIR, TSX_SETUP_CONF (both also used by
-# tsx-config/tsx-setupd, so a test fixture directory works for all three).
+# Env overrides for tests: TSX_RUN_DIR, TSX_SETUP_CONF. tsx-config and
+# tsx-setupd also use both, so one test fixture directory works for all
+# three.
 #
-# The flag's age is compared in monotonic time (seconds since boot,
-# /proc/uptime), never date +%s: the panel has no RTC, so it boots with a
-# stale clock that NTP steps by months once chrony syncs; a wall-clock
-# comparison spanning that step would read as instantly expired or good for
-# months. /run is tmpfs, so a reboot always starts both the flag and the
-# uptime clock fresh together.
+# The script compares the age of the flag in monotonic time (seconds since
+# boot, /proc/uptime), never with date +%s. The panel has no RTC, so it boots
+# with a stale clock, and NTP steps it by months once chrony syncs. A
+# wall-clock comparison across that step would read as expired at once, or as
+# good for months. /run is tmpfs, so a reboot always resets the flag and the
+# uptime clock together.
 set -u
 cur=${1:-}
 conf=${TSX_SETUP_CONF:-/etc/tsx/setup.conf}

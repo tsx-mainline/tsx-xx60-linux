@@ -1,10 +1,12 @@
 #!/bin/bash
 # Host test of the SD-card method (sdcard/mkcard.sh, sdcard/flash-card.sh, sdcard/tsx-env.py).
-# "The unit's card" = the verified full backup of TSW-1060 A (captures/tsw-1060/backup,
-# sha256 df33e741...). Also uses the env of TSW-1060 B (the bench unit, from
-# the rootfs bring-up's env capture) and the TSW-760 card xx60-FACTORY.img.
-# File targets run without root; the block-device path runs on a loop device in a
-# privileged Alpine container. ~6 GB in $TMPDIR (default /var/tmp), a few minutes.
+# "The card of the unit" is the verified full backup of TSW-1060 A
+# (captures/tsw-1060/backup, sha256 df33e741...). The test also uses the env
+# of TSW-1060 B (the bench unit, from the env capture of the rootfs bring-up)
+# and the TSW-760 card xx60-FACTORY.img.
+# File targets run without root. The block-device path runs on a loop device
+# in a privileged Alpine container. The test needs about 6 GB in $TMPDIR
+# (default /var/tmp) and a few minutes.
 set -uo pipefail
 INSTALLER_DIR=$(cd "$(dirname "$0")/.." && pwd); ROOT=$(cd "$INSTALLER_DIR/.." && pwd); CAPTURES=${CAPTURES_DIR:-}
 SD=$INSTALLER_DIR/sdcard; ENVPY="python3 $SD/tsx-env.py"
@@ -12,7 +14,7 @@ BASE=$CAPTURES/tsw-1060/backup/tsw1060-mmcblk0.img
 FACT=${FACT_IMG:-}   # optional: a real TSW-760 factory card image (xx60-FACTORY.img)
 BOOTIMG=$ROOT/rootfs/out/tsxboot.img   # = mkcard.sh default (the current p1 image)
 if [ -z "$CAPTURES" ] || [ ! -f "$BASE" ]; then
-	echo "SKIPPED: needs a real unit's card backup (set CAPTURES_DIR to the captures/ tree); not present here"
+	echo "SKIPPED: needs a real unit's card backup (set CAPTURES_DIR to the captures/ tree). Not present here"
 	exit 0
 fi
 W=${TMPDIR:-/var/tmp}/tsx-sdcard-test; rm -rf "$W"; mkdir -p "$W"; trap 'rm -rf "$W"' EXIT
@@ -125,7 +127,7 @@ t "p5 = the image's p5" test "$(rsum "$W/cardA.img" p5)" = "$(rsum "$I" p5)"
 
 echo "== 3. second flash (idempotent) and restore"
 "$SD/flash-card.sh" --image "$I" --device "$W/cardA.img" --backup-dir "$W/bk2" --yes > "$W/fl2.txt" 2>&1
-t "second flash: hook state 'fallback' recognised, env unchanged" bash -c "grep -q 'hook fallback' $W/fl2.txt && cmp -s <(dd if=$W/cardA.img bs=64K skip=16 count=1 status=none) <(dd if=$(ls $W/bk2/card-backup-*.img | head -1) bs=64K skip=16 count=1 status=none)"
+t "second flash: hook state 'fallback' recognized, env unchanged" bash -c "grep -q 'hook fallback' $W/fl2.txt && cmp -s <(dd if=$W/cardA.img bs=64K skip=16 count=1 status=none) <(dd if=$(ls $W/bk2/card-backup-*.img | head -1) bs=64K skip=16 count=1 status=none)"
 "$SD/flash-card.sh" --restore "$BK" --device "$W/cardA.img" --yes > "$W/rs.txt" 2>&1
 t "--restore: card byte-identical to the original" test "$(sha256sum < "$W/cardA.img" | cut -d' ' -f1)" = "$(sha256sum < "$BASE" | cut -d' ' -f1)"
 rm -rf "$W/bk2"
@@ -137,7 +139,7 @@ ENVB_SRC=${ENVB_CAPTURE:-}
 if [ -n "$ENVB_SRC" ] && [ -f "$ENVB_SRC" ]; then
 	dd if="$ENVB_SRC" bs=64K skip=16 count=1 of="$W/envB.bin" status=none
 else
-	echo "SKIP: unit-B env capture not found (set ENVB_CAPTURE=/path/to/mmcblk0-head2M.img); using the donor's own env instead" >&2
+	echo "SKIP: unit-B env capture not found (set ENVB_CAPTURE=/path/to/mmcblk0-head2M.img). Using the donor's own env instead" >&2
 	dd if="$BASE" bs=64K skip=16 count=1 of="$W/envB.bin" status=none
 fi
 "$SD/flash-card.sh" --image "$I" --device "$W/blank.img" --backup-dir "$W/bk3" --unit-env "$W/envB.bin" --yes > "$W/fl3.txt" 2>&1 || { cat "$W/fl3.txt"; bad "full flash"; }

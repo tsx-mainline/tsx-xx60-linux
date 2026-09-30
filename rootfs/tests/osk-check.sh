@@ -1,8 +1,9 @@
 #!/bin/bash
 # browser: does the on-screen keyboard still show and type under the current
-# Chromium config? Loads input.html (a text field at the top), taps the field
-# (real injected touch), types "kiosk" on squeekboard's keys (coordinates from
-# rootfs tests/osk-test.sh), reads the field back through CDP, taps outside.
+# Chromium config? The script loads input.html (a text field at the top) and
+# taps the field (a real injected touch). It types "kiosk" on the keys of
+# squeekboard (coordinates from rootfs tests/osk-test.sh), reads the field
+# back through CDP, and taps outside.
 # Usage: osk-check.sh CFG [IP]   -> results/perf-CFG-osk.txt, -osk-shown.png
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd); ROOTFS_DIR=$HERE/../../rootfs

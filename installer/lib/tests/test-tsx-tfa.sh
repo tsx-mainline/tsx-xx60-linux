@@ -1,10 +1,11 @@
 #!/bin/bash
-# Host test of installer/lib/tsx-tfa.sh: the TFA9890 DSP files taken from the
-# panel itself (tsx-rescue-install tfa). Synthetic files only: made-up NXP
-# containers ("PM" id, size, CRC32; random payload) and made-up Android boot
-# images; no vendor data. The pinned-sha256 path uses TSX_TFA_PINS with the
-# synthetic hashes. Runs every case twice: with the host's tools and with
-# busybox applets only (awk, cpio, gzip, od, ... as in the rescue).
+# Host test of installer/lib/tsx-tfa.sh: the TFA9890 DSP files that the script
+# takes from the panel itself (tsx-rescue-install tfa). The test uses synthetic
+# files only: made-up NXP containers (a "PM" id, a size, a CRC32 and a random
+# payload) and made-up Android boot images. It uses no vendor data. The
+# pinned-sha256 path uses TSX_TFA_PINS with the synthetic hashes. The test
+# runs every case twice: with the tools of the host, and with busybox applets
+# only (awk, cpio, gzip, od, ... as in the rescue).
 # Needs: python3, cpio, gzip, busybox.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)   # installer/lib
@@ -104,7 +105,7 @@ f=$W/stock/settings_yushan/stereo.cnt
 out=$(run $MODE "tsx_tfa_validate '$f' settings_yushan"); rc=$?
 [ $rc = 0 ] && echo "$out" | grep -q pinned && ok "pinned sha256: rc 0 ($out)" || bad "pinned: rc $rc ($out)"
 out=$(run $MODE "tsx_tfa_validate '$W/other/settings_yushan/stereo.cnt' settings_yushan"); rc=$?
-[ $rc = 1 ] && echo "$out" | grep -q "NOT the pinned one; valid NXP container, 12477 bytes, CRC ok" && ok "unknown sha256, valid container: rc 1 ($out)" || bad "unpinned: rc $rc ($out)"
+[ $rc = 1 ] && echo "$out" | grep -q "NOT the pinned one. Valid NXP container, 12477 bytes, CRC ok" && ok "unknown sha256, valid container: rc 1 ($out)" || bad "unpinned: rc $rc ($out)"
 cp "$f" "$W/badmagic"; printf 'QQ' | dd of="$W/badmagic" bs=1 conv=notrunc 2>/dev/null
 out=$(run $MODE "tsx_tfa_validate '$W/badmagic' settings_yushan"); rc=$?
 [ $rc = 2 ] && echo "$out" | grep -q "not an NXP container" && ok "bad id: rejected" || bad "bad id: rc $rc ($out)"

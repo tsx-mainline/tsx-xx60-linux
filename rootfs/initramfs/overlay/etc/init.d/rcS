@@ -1,17 +1,20 @@
 #!/bin/sh
-# Network: static if the kernel cmdline has tsx.ip=A.B.C.D/NN[,GW], else DHCP.
-# Runs for every rescue: the initramfs's own (/init falling back, force-rescue,
-# tsx.rescue) and the standalone rescue image (installer/rescue, same BASE).
-# Stable eth0 MAC, the same as rootfs/overlay/etc/init.d/tsx-setup: mainline
-# has no MAC source on this board, so stmmac picks a random one each boot and
-# DHCP hands out a new address every time. RAM only, so no /etc/tsx/eth0.mac
-# persistence: if there is no valid U-Boot ethaddr, keep the kernel's random MAC.
+# Network: use a static address if the kernel cmdline has
+# tsx.ip=A.B.C.D/NN[,GW]. Otherwise use DHCP.
+# This script runs for every rescue: the initramfs own rescue (/init fallback,
+# force-rescue, tsx.rescue) and the standalone rescue image (installer/rescue,
+# same BASE).
+# It also sets a stable eth0 MAC, as rootfs/overlay/etc/init.d/tsx-setup does.
+# Mainline has no MAC source on this board. Without this step, stmmac picks a
+# random MAC on each boot and DHCP hands out a new address every time.
+# The rescue runs from RAM only, so it does not keep /etc/tsx/eth0.mac.
+# If U-Boot has no valid ethaddr, the rescue keeps the random kernel MAC.
 hostname tsx-rescue
 ip link set lo up
 for c in $(cat /proc/cmdline); do case $c in tsx.ip=*) STATIC=${c#tsx.ip=};; esac; done
 ( n=0; while [ ! -e /sys/class/net/eth0 ] && [ $n -lt 30 ]; do sleep 1; n=$((n+1)); done
   macsrc=random; mac=
-  n=0; while [ ! -b /dev/mmcblk0 ] && [ $n -lt 10 ]; do sleep 1; n=$((n+1)); done   # the card may probe after eth0
+  n=0; while [ ! -b /dev/mmcblk0 ] && [ $n -lt 10 ]; do sleep 1; n=$((n+1)); done   # the card can probe after eth0
   if [ -b /dev/mmcblk0 ] && command -v dd >/dev/null 2>&1 && command -v sed >/dev/null 2>&1; then
     mac=$(dd if=/dev/mmcblk0 bs=64k skip=16 count=1 2>/dev/null | tr '\0' '\n' | sed -n 's/^ethaddr=//p' | head -1)
   fi

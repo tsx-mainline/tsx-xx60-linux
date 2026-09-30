@@ -1,60 +1,69 @@
 #!/bin/bash
-# Offload a kernel / rootfs build to another machine over ssh, instead of
-# building here. OPT-IN: needs BUILD_HOST and BUILD_DIR, both with NO
-# default. If BUILD_HOST is unset, this script just runs the equivalent
-# LOCAL build (kbuild.sh / build-rootfs.sh / mkbootimg.sh) and exits --
-# building locally needs neither this script nor BUILD_HOST at all; call
-# those directly if you prefer.
+# Offload a kernel or rootfs build to another machine over ssh, instead of
+# building here. OPT-IN: the script needs BUILD_HOST and BUILD_DIR, and
+# neither has a default. If BUILD_HOST is unset, the script runs the
+# equivalent LOCAL build (kbuild.sh, build-rootfs.sh or mkbootimg.sh) and
+# exits. A local build needs neither this script nor BUILD_HOST. You can
+# call those scripts directly.
 #
 #   BUILD_HOST=<ssh host> BUILD_DIR=<remote repo path> \
 #     tools/build/remote-build.sh [--dest DIR] [--with-modules] [--no-pull] [-j N] <command> [arg]
 #
 #   kernel [--flavor lts|stable | BRANCH]  push the worktree that has BRANCH checked
-#                    out (default: the branch for --flavor/$FLAVOR, default lts ->
-#                    tsx-xx60-6.18; stable -> tsx-xx60-7.2; a literal BRANCH argument
-#                    overrides both) in the kernel fork checkout LINUX_DIR (default
-#                    ../linux next to this repo, one git worktree per branch) + the
-#                    shared .git, run kbuild.sh there (zImage dtbs modules, -j20),
-#                    pull back zImage, board DTB, test.img, kernel.release,
-#                    kernel.commit to <worktree>/../out-<flavor> or --dest DIR.
-#   rootfs           push rootfs/ sources, run build-rootfs.sh rootfs, pull back
-#                    rootfs.{ext4,tar.gz,manifest,sizes,sha256} to rootfs/out or --dest.
-#                    --with-modules: first stage the modules of every flavor built on
-#                    the HOST (build-lts, build-stable next to the fork checkout; run
-#                    "kernel" for each flavor first), so the rootfs carries both
-#                    trees; default: no modules, like the local build.
-#                    Prebuilt inputs that exist only on the host (rootfs/src/sendspin/out/,
+#                    out. The default branch comes from --flavor or $FLAVOR:
+#                    lts (the default) gives tsx-xx60-6.18, stable gives
+#                    tsx-xx60-7.2. A literal BRANCH argument overrides both.
+#                    The worktree is in the kernel fork checkout LINUX_DIR
+#                    (default ../linux next to this repo, one git worktree per
+#                    branch). The script also pushes the shared .git. It runs
+#                    kbuild.sh on the host (zImage dtbs modules, -j20). It
+#                    pulls back zImage, the board DTB, test.img, kernel.release
+#                    and kernel.commit to <worktree>/../out-<flavor> or --dest DIR.
+#   rootfs           push the rootfs/ sources, run build-rootfs.sh rootfs, and
+#                    pull back rootfs.{ext4,tar.gz,manifest,sizes,sha256} to
+#                    rootfs/out or --dest.
+#                    --with-modules: first stage the modules of every flavor
+#                    built on the HOST (build-lts and build-stable next to the
+#                    fork checkout. Run "kernel" for each flavor first). The
+#                    rootfs then carries both trees. Default: no modules, as
+#                    in the local build.
+#                    Prebuilt inputs that exist only on the host
+#                    (rootfs/src/sendspin/out/,
 #                    rootfs/voice/tflite/libtensorflowlite_c.so) survive the push.
-#                    TSX_APK_LOCAL=<local tsx-aports published tree>: mirrored to
-#                    rootfs/aports-local/ on the host and installed from there
-#                    (build-rootfs.sh); TSX_APK_URL is passed through.
+#                    TSX_APK_LOCAL=<local tsx-aports published tree>: the script
+#                    mirrors it to rootfs/aports-local/ on the host, and
+#                    build-rootfs.sh installs from there. The script passes
+#                    TSX_APK_URL through.
 #   initramfs        build-rootfs.sh initramfs -> initramfs-switchroot.cpio.gz
-#   image [--flavor lts|stable | BRANCH]   rootfs/mkbootimg.sh with KDIR = the host's
-#                    out-<flavor>/ of the resolved branch's worktree (same default/
-#                    override rule as "kernel") -> tsxboot.img{,.sha256}. Needs
-#                    "kernel" and "initramfs" run on the host before.
-#   sync             full resync of the mirror (this repo + the linux fork checkout)
+#   image [--flavor lts|stable | BRANCH]   run rootfs/mkbootimg.sh with KDIR set to
+#                    the out-<flavor>/ of the worktree of the resolved branch
+#                    (the same default and override rule as "kernel").
+#                    Output: tsxboot.img{,.sha256}. Run "kernel" and
+#                    "initramfs" on the host first.
+#   sync             full resync of the mirror (this repo and the linux fork checkout)
 #   jobs             list the last jobs on the host (logs in tools/build/state/jobs/)
 #
-# Env: BUILD_HOST (ssh destination, required to actually go remote), BUILD_DIR
-# (remote path this repo is mirrored to, required with BUILD_HOST -- the
-# remote kernel fork checkout is assumed to be BUILD_DIR/../linux, the same
-# sibling layout as locally; override with REMOTE_LINUX_DIR). FLAVOR (or
-# --flavor) picks lts (default) or stable for "kernel"/"image" when no
-# explicit BRANCH is given.
+# Env: BUILD_HOST (ssh destination, required to go remote), BUILD_DIR
+# (the remote path where the script mirrors this repo, required with
+# BUILD_HOST). The script assumes the remote kernel fork checkout is
+# BUILD_DIR/../linux, the same sibling layout as locally. Override this with
+# REMOTE_LINUX_DIR. FLAVOR (or --flavor) picks lts (default) or stable for
+# "kernel" and "image" when you give no explicit BRANCH.
 #
-# --no-pull / REMOTE_PULL=0: skip copying the built artifacts back to this
-# machine (rootfs tarball, images -- around 1.1 GB for a rootfs build) and
-# just print where they sit on BUILD_HOST. Useful over a slow link when the
-# next steps (image/payload/install) also run on the build host, so nothing
-# needs the local copy. Default unchanged: artifacts are pulled back.
+# --no-pull / REMOTE_PULL=0: do not copy the built artifacts back to this
+# machine (the rootfs tarball and images, about 1.1 GB for a rootfs build).
+# The script only prints where they are on BUILD_HOST. This helps on a slow
+# link when the next steps (image, payload, install) also run on the build
+# host, so nothing needs the local copy. By default the script pulls the
+# artifacts back.
 #
-# Safety: never deletes local files (pull-back is rsync without --delete; it only
-# overwrites the named artifacts in the destination). --delete is used only for the
-# pushed SOURCE dirs on the host; build/out dirs on the host are excluded (protected).
-# The build runs detached on the host (setsid); if this script or the ssh link dies,
-# the job continues; see "jobs". Two builds of the same build dir are serialized
-# by flock on the host.
+# Safety: the script never deletes local files. The pull-back is rsync without
+# --delete and only overwrites the named artifacts in the destination.
+# --delete applies only to the pushed SOURCE dirs on the host. The script
+# excludes the build and out dirs on the host, so they stay protected.
+# The build runs detached on the host (setsid). If this script or the ssh link
+# dies, the job continues. See "jobs". A flock on the host serializes two
+# builds of the same build dir.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)               # .../tsx-xx60-linux
@@ -69,7 +78,7 @@ while [ $# -gt 0 ]; do case $1 in
 	-j) J=$2; shift;;
 	--flavor) FLAVOR=$2; shift;;
 	--flavor=*) FLAVOR=${1#--flavor=};;
-	-h|--help) sed -n '2,35p' "$0"; exit 0;;
+	-h|--help) sed -n '2,44p' "$0"; exit 0;;
 	*) ARGS+=("$1");; esac; shift; done
 set -- "${ARGS[@]}"
 CMD=${1:-}; ARG=${2:-}
@@ -80,7 +89,7 @@ flavor_branch() { case $1 in lts) echo tsx-xx60-6.18;; stable) echo tsx-xx60-7.2
 # --- no BUILD_HOST: build locally with the same scripts this wrapper would
 # otherwise run over ssh, and stop here. -----------------------------------
 if [ -z "${BUILD_HOST:-}" ]; then
-	say "BUILD_HOST not set: building locally (this wrapper is opt-in; you can also call the scripts below directly)"
+	say "BUILD_HOST not set: building locally (this wrapper is opt-in, and you can call the scripts below directly)"
 	case $CMD in
 	kernel) exec "$HERE/kbuild.sh" -f "$FLAVOR" ${J:+-j "$J"} ${DEST:+-d "$DEST"} kernel image;;
 	rootfs) [ $MODS = 1 ] && "$REPO/rootfs/build-rootfs.sh" modules
@@ -94,7 +103,7 @@ if [ -z "${BUILD_HOST:-}" ]; then
 		[ -z "$DEST" ] || { mkdir -p "$DEST"; cp "$REPO"/rootfs/out/tsxboot.img* "$DEST/"; }
 		exit 0;;
 	sync|jobs) say "$CMD is a no-op for a local build"; exit 0;;
-	*) sed -n '2,35p' "$0"; exit 1;; esac
+	*) sed -n '2,44p' "$0"; exit 1;; esac
 fi
 
 # --- BUILD_HOST set: go remote. --------------------------------------------
@@ -113,8 +122,8 @@ worktree_of() {  # branch -> local worktree path
 
 remote_worktree_path() {  # local worktree path -> its path on the remote
 	# Every worktree of the kernel fork (LINUX_DIR itself, or one added beside
-	# it with "git worktree add") shares LINUX_DIR's parent directory locally;
-	# mirror that same relationship under RHOST_LINUX's parent remotely.
+	# it with "git worktree add") shares LINUX_DIR's parent directory locally.
+	# Mirror that same relationship under RHOST_LINUX's parent remotely.
 	echo "$(dirname "$RHOST_LINUX")/$(basename "$1")"
 }
 
@@ -136,10 +145,11 @@ push_git() {  # shared object store + worktree metadata (refs, per-worktree inde
 push_tree() {  # $1 = local worktree dir, $2 = remote worktree dir; mirror the checkout
 	rsh "mkdir -p $2"
 	"${RS[@]}" --delete --exclude '*.o' --exclude '*.ko' --exclude '.*.cmd' "$1/" "$HOST:$2/"
-	# A linked worktree's .git file (and the fork's worktrees/<name>/gitdir)
-	# hold LOCAL absolute paths. Point both at the remote copy, or git on the
-	# host reads a different (or stale) repository at the local path and the
-	# build gets the wrong HEAD, a "-dirty" release and a KERNEL_REV warning.
+	# The .git file of a linked worktree and the gitdir file of the fork
+	# (worktrees/<name>/gitdir) hold LOCAL absolute paths. Point both at the
+	# remote copy. Otherwise git on the host reads a different or stale
+	# repository at the local path. The build then gets the wrong HEAD, a
+	# "-dirty" release and a KERNEL_REV warning.
 	if [ -f "$1/.git" ]; then
 		local name
 		name=$(basename "$(sed -n 's/^gitdir: //p' "$1/.git")")
@@ -167,7 +177,7 @@ rjob() {
 	id=$name-$(date +%Y%m%d-%H%M%S)-$$
 	# The .rc file holds the real exit status, or "killed:SIG" when the job got a
 	# signal (e.g. host reboot) -- a job that dies without any trap (SIGKILL, power
-	# loss) leaves no .rc file; the wrapper then sees the pid gone and reports 255.
+	# loss) leaves no .rc file. The wrapper then sees the pid gone and reports 255.
 	rsh "mkdir -p $jd && cat > $jd/$id.sh" <<<"set -uo pipefail
 st=$jd/$id.rc
 for sig in TERM INT HUP QUIT; do trap \"echo killed:SIG\$sig > \$st; exit 143\" \$sig; done
@@ -179,7 +189,7 @@ $script"
 	say "job $id on $HOST (log $jd/$id.log)"
 	local off=0 chunk rc='' n
 	chunk=$(mktemp)
-	trap 'say "interrupted; the job keeps running on $HOST: ssh $HOST tail -f $jd/$id.log"; rm -f "$chunk"; exit 130' INT TERM
+	trap 'say "interrupted. The job keeps running on $HOST: ssh $HOST tail -f $jd/$id.log"; rm -f "$chunk"; exit 130' INT TERM
 	while :; do
 		rc=$(rsh "cat $jd/$id.rc 2>/dev/null || kill -0 \$(cat $jd/$id.pid) 2>/dev/null || { sleep 2; cat $jd/$id.rc 2>/dev/null || echo 255; }") || rc=''
 		if rsh "tail -c +$((off+1)) $jd/$id.log" > "$chunk" 2>/dev/null; then
@@ -268,6 +278,6 @@ sync)
 	true;;
 jobs)
 	rsh "cd $BUILD_DIR/tools/build/state/jobs 2>/dev/null && for f in \$(ls -t *.log | head -15); do j=\${f%.log}; printf '%-45s rc=%s  %s\n' \$j \"\$(cat \$j.rc 2>/dev/null || echo running)\" \"\$(date -r \$f '+%F %T')\"; done";;
-*) sed -n '2,32p' "$0"; exit 1;;
+*) sed -n '2,44p' "$0"; exit 1;;
 esac
 say "total $(( $(date +%s) - t0 )) s"

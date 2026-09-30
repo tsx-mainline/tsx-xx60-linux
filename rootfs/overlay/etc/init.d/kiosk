@@ -1,5 +1,6 @@
 #!/sbin/openrc-run
-# Browser kiosk: cage (single-app Wayland compositor) + Chromium, restarted on crash.
+# Browser kiosk: cage (single-app Wayland compositor) + Chromium. The service
+# restarts it after a crash.
 description="TSX kiosk (cage + browser)"
 supervisor=supervise-daemon
 command=/usr/local/bin/kiosk-session
@@ -25,14 +26,16 @@ start_pre() {
 	. /etc/kiosk.conf
 	[ -r /run/tsx/kiosk.conf ] && . /run/tsx/kiosk.conf   # panel.conf overrides (tsx-config apply)
 	[ -n "${KIOSK_CACHE_DIR:-}" ] && checkpath -d -m 0700 -o kiosk:kiosk "$KIOSK_CACHE_DIR"
-	# boot splash status line (a no-op once sway has the screen, or when the
-	# text console has it); the address helps when the kiosk never comes up
+	# Boot splash status line. It does nothing once sway has the screen, or
+	# when the text console has it. The address helps if the kiosk never
+	# comes up.
 	ip=$(ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n 1)
 	/usr/local/bin/tsx-splash -s "starting the kiosk  ${ip:-(no network address yet)}" -p 70 status 2>/dev/null
-	# TLS needs a correct clock (the panel has no RTC). KIOSK_TIME_WAIT empty
-	# (default): no wait when tsx-kiosk-reveal watches the page (sway, DevTools
-	# on, KIOSK_SPLASH on) -- it loads the page again once NTP has synced if
-	# the first load failed on the clock -- else wait up to 20 s as before.
+	# TLS needs a correct clock (the panel has no RTC). If KIOSK_TIME_WAIT is
+	# empty (default), there is no wait when tsx-kiosk-reveal watches the page
+	# (sway, DevTools on, KIOSK_SPLASH on). It loads the page again after NTP
+	# has synced if the first load failed because of the clock. Otherwise
+	# wait up to 20 s as before.
 	tw=${KIOSK_TIME_WAIT:-}
 	if [ -z "$tw" ]; then
 		if [ "${KIOSK_OSK:-squeekboard}" != off ] && [ "${KIOSK_DEVTOOLS:-1}" = 1 ] && [ "${KIOSK_SPLASH:-on}" != off ]; then
@@ -44,7 +47,7 @@ start_pre() {
 	if [ "$tw" -gt 0 ]; then
 		/usr/local/sbin/tsx-wait-time "$tw" || ewarn "starting without NTP sync"
 	fi
-	# token handed over by install.sh --token-file: seed it once
+	# install.sh --token-file hands over a token. Seed it once.
 	if [ -s /var/lib/kiosk/pending-token ]; then
 		if NO_SERVICE=1 /usr/local/bin/kiosk-set-token --file /var/lib/kiosk/pending-token; then
 			rm -f /var/lib/kiosk/pending-token
@@ -58,9 +61,9 @@ start_pre() {
 		h=${KIOSK_RESTART_AT%%:*}; m=${KIOSK_RESTART_AT##*:}; h=${h#0}; m=${m#0}
 		echo "$m $h * * * /sbin/rc-service kiosk restart >/dev/null 2>&1 # tsx-kiosk-restart" >> /etc/crontabs/root
 	fi
-	# marker on the serial console (boot timing)
-	# (OpenRC's dmesg service sets the console loglevel to 1, so also write
-	# the serial port directly)
+	# Marker on the serial console (boot timing). The dmesg service of OpenRC
+	# sets the console loglevel to 1, so also write to the serial port
+	# directly.
 	m="tsx: starting kiosk (KIOSK_GPU=${KIOSK_GPU:-auto}) uptime $(cut -d' ' -f1 /proc/uptime)"
 	echo "$m" > /dev/kmsg 2>/dev/null; [ -c /dev/ttyAML0 ] && echo "$m" > /dev/ttyAML0 2>/dev/null
 	return 0

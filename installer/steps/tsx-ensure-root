@@ -1,28 +1,27 @@
 #!/usr/bin/env bash
 # Host: make sure PANEL_IP is stock Android, settled, and answers root over
-# Crestron's own patched sshd (steps/rootsh). This is the network/UART
-# bootstrap every install flow needs before it can do anything else; factored
-# out of steps/tsx-android-to-card (its old steps 2-4) so tsx-install-mainline
-# v2 (the rescue-first flow) can reuse it without depending on the old
-# card-stage driver. steps/tsx-android-to-card keeps its own copy (untouched,
-# installer/steps/legacy/ once v2 replaces the network path) -- this is a
-# straight extraction, not a behaviour change.
+# the patched Crestron sshd (steps/rootsh). Every install flow needs this
+# bootstrap over the network or the UART. It is extracted from
+# steps/tsx-android-to-card (its old steps 2-4), so tsx-install-mainline v2
+# (the rescue-first flow) can reuse it. steps/tsx-android-to-card keeps its
+# own copy (see installer/steps/legacy/). Behavior did not change. This is
+# a straight extraction.
 #
 #   steps/tsx-ensure-root PANEL_IP [--uart auto|yes|no] [--sshshell FILE]
 #                         [--port N] [--ws-ip IP] [--results FILE] [--dry-run]
 #
 # On success, `steps/rootsh PANEL_IP id` answers uid=0. Needs $TSX_ADMIN_PW
-# (Crestron console/web-UI admin password; user $TSX_ADMIN_USER, default admin).
-# --uart auto (default): UART only if serlog.py looks like it is running and
-# ../../tools/bench/uc.sh exists; --uart no is fully network-only, and needs
-# rootsh to already work OR --sshshell already installed by some other means
-# (this script cannot install the sshShell.sh patch itself without the UART).
+# (the Crestron console and web UI admin password, user $TSX_ADMIN_USER,
+# default admin). --uart auto (the default) uses the UART only if serlog.py
+# runs and ../../tools/bench/uc.sh exists. --uart no is network-only. It needs
+# rootsh to work already, or --sshshell installed by other means. The script
+# cannot install the sshShell.sh patch without the UART.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INSTALLER=$(cd "$HERE/.." && pwd)
 SERIALDIR=$(cd "$INSTALLER/../tools/bench" && pwd 2>/dev/null || echo "$INSTALLER/../tools/bench")
 UC="$SERIALDIR/uc.sh"
 ROOTSH="$INSTALLER/steps/rootsh"
-. "$INSTALLER/lib/tsx-rescue.sh"   # is_crestron_sshd: never try root/password logins on Crestron's sshd
+. "$INSTALLER/lib/tsx-rescue.sh"   # is_crestron_sshd: never try a root/password login on the Crestron sshd
 CRESTRONADMIN="$INSTALLER/steps/crestron-admin"
 usage() { sed -n '2,17p' "$0" >&2; }
 PANEL= UART_OPT=auto SSHSHELL= PORT=8079 WSIP= RESULTS= DRYRUN=0
@@ -76,12 +75,13 @@ wait_android_stable() { local timeout=$1 waited=0 poll=20 fw ls raw bc
 wait_android_stable_net() { local timeout=$1 waited=0 poll=20 fw ls bc mounted admin_tried=0
 	log "  waiting for stock Android to settle (network-only, tolerates one self-reboot, timeout ${timeout}s)"
 	while :; do
-		# network-only, every check below needs rootsh, and rootsh needs a Crestron
-		# account: a factory-fresh unit (e.g. right after tsx-restore-factory) has
-		# none, so create it first (once) instead of waiting for the timeout
+		# In network-only mode every check below needs rootsh, and rootsh needs a
+		# Crestron account. A factory-fresh unit (for example right after
+		# tsx-restore-factory) has none. So create it first (once) and do not
+		# wait for the timeout.
 		if [ "$admin_tried" = 0 ] && ! rootsh_ok && [ "$("$CRESTRONADMIN" --status "$PANEL" 2>/dev/null)" = none ]; then
 			admin_tried=1
-			log "  no Crestron account yet (factory-fresh /data): creating it now (steps/crestron-admin); root over ssh needs it"
+			log "  no Crestron account yet (factory-fresh /data): creating it now (steps/crestron-admin). Root over ssh needs it"
 			"$CRESTRONADMIN" "$PANEL" >>"$RESULTS" 2>&1 || log "  crestron-admin did not confirm console login yet (root is tried again on the next poll)"
 		fi
 		if rootsh_ok; then
@@ -103,13 +103,13 @@ if [ -z "$WSIP" ]; then WSIP=$(ip route get "$PANEL" 2>/dev/null | awk '{for(i=1
 BASEURL="http://$WSIP:$PORT"
 
 if [ "$DRYRUN" = 1 ]; then
-	log "[dry-run] would check is_mainline; if mainline and UART: p1:tsxboot.off + reboot + wait_serial prompt"
-	log "[dry-run] would then wait_android_stable(_net) up to 720s, then rootsh_ok; if not root: crestron-admin, then (UART only) install \$SSHSHELL via wget+ish.sh"
+	log "[dry-run] would check is_mainline. If mainline and UART: p1:tsxboot.off + reboot + wait_serial prompt"
+	log "[dry-run] would then wait_android_stable(_net) up to 720s, then rootsh_ok. If not root: crestron-admin, then (UART only) install \$SSHSHELL via wget+ish.sh"
 	exit 0
 fi
 
 if is_mainline && [ "$UART_MODE" = yes ]; then
-	log "  panel is on mainline; forcing p1:tsxboot.off and rebooting to stock Android"
+	log "  panel is on mainline. Forcing p1:tsxboot.off and rebooting to stock Android"
 	$MSSH 'mkdir -p /mnt/p1 && mount -t vfat /dev/mmcblk0p1 /mnt/p1 && touch /mnt/p1/tsxboot.off && sync && umount /mnt/p1 && reboot' >>"$RESULTS" 2>&1 || true
 	wait_serial "root@Crestron Touchpanel:/ #" 180
 elif is_mainline; then
@@ -122,11 +122,11 @@ if rootsh_ok; then
 	log "== done: rootsh already answers uid=0 on $PANEL"
 	exit 0
 fi
-log "  rootsh is not root yet; trying crestron-admin (factory-fresh unit may have no account)"
-"$CRESTRONADMIN" "$PANEL" >>"$RESULTS" 2>&1 || log "  crestron-admin did not confirm console login (continuing; an account may already exist)"
+log "  rootsh is not root yet. Trying crestron-admin (factory-fresh unit may have no account)"
+"$CRESTRONADMIN" "$PANEL" >>"$RESULTS" 2>&1 || log "  crestron-admin did not confirm console login (continuing. An account may already exist)"
 if rootsh_ok; then log "== done: rootsh now answers uid=0 (account was the only thing missing)"; exit 0; fi
 
-[ "$UART_MODE" = yes ] || die "root over ssh needs the patched sshShell.sh installed already (see docs/install.md); network-only mode cannot install it. Re-run with --uart yes, or install it by hand once."
+[ "$UART_MODE" = yes ] || die "root over ssh needs the patched sshShell.sh installed already (see docs/install.md). network-only mode cannot install it. Re-run with --uart yes, or install it by hand once."
 [ -n "$SSHSHELL" ] && [ -f "$SSHSHELL" ] || die "rootsh is not root and --sshshell FILE was not given: supply your patched sshShell.sh (docs/install.md 'TSX Android root over SSH')"
 log "  installing $SSHSHELL from the UART"
 OUTDIR=$(cd "$(dirname "$SSHSHELL")" && pwd)

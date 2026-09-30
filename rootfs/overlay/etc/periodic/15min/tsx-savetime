@@ -1,8 +1,9 @@
 #!/bin/sh
-# Save the time while NTP has it (the panel has no RTC): swclock sets the
-# clock from this file's mtime at the next boot, also after a power cut
-# (OpenRC saves it only at a clean shutdown). The image ships the file with
-# its build time, so the boot clock is never earlier than the image.
+# Save the time while NTP has it. The panel has no RTC.
+# At the next boot, swclock sets the clock from the mtime of this file.
+# This also works after a power cut. OpenRC saves the time only at a clean
+# shutdown. The image ships the file with its build time, so the boot clock
+# is never earlier than the image.
 f=/var/lib/misc/openrc-shutdowntime
 chronyc -n tracking 2>/dev/null | grep -q '^Leap status *: Normal' || exit 0
 mkdir -p "${f%/*}" && touch "$f"

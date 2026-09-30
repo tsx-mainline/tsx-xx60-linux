@@ -9,7 +9,7 @@ effects Light protocol. It only tracks state HA has told it about (a
 LightCommandRequest); it does not read hardware back on its own. This module
 closes that loop: on_changed pushes an HA change to the backend, and
 poll_and_broadcast() pulls the backend's own state (which can also change
-locally -- a front-key press, the boot colour, tsx-idled's screen-blank
+locally -- a front-key press, the boot color, tsx-idled's screen-blank
 dimming) back into the entity and broadcasts it when it moves.
 """
 
@@ -141,7 +141,7 @@ def build_entities(server, backend: PanelBackend, key_base: int = 0) -> PanelDev
         min_value=1, max_value=backend.get_backlight_max(), step=1, icon="mdi:brightness-6",
     )
     entities.append(backlight)
-    # seconds without input before the screen goes dark, 0 = never; persisted
+    # seconds without input before the screen goes dark, 0 = never. Persisted
     # in panel.conf (BLANK_TIMEOUT) and applied by tsx-idled at once
     blank_timeout = NumberEntity(
         server, next_key(), "Blank timeout", "blank_timeout",
@@ -224,7 +224,7 @@ def build_entities(server, backend: PanelBackend, key_base: int = 0) -> PanelDev
     )
     entities.append(touched_recently)
 
-    # ---- update (tsx-autoupdate status; PLAN.md section 21) -------------------
+    # ---- update (tsx-autoupdate status. PLAN.md section 21) -------------------
     update = UpdateEntity(
         server, next_key(), "Update", "update",
         get_state=backend.get_update_status, install=backend.install_update, icon="mdi:package-up",
@@ -260,9 +260,9 @@ def poll(device: PanelDevice, broadcast: Callable[[list], None]) -> None:
     msgs = []
 
     # LED bar: apply the "Pulse" software effect (cheap: just breathes the
-    # brightness the user set; no new hardware/firmware support needed),
+    # brightness the user set. No new hardware/firmware support needed),
     # else read back the hardware in case something else changed it (a
-    # front-key action, the boot colour, tsx-idled's blank dimming).
+    # front-key action, the boot color, tsx-idled's blank dimming).
     if device.ledbar.effect == "Pulse" and device.ledbar.is_on:
         phase = (time.time() % PULSE_PERIOD) / PULSE_PERIOD
         level = 0.2 + 0.8 * abs(1 - 2 * phase)  # 20%..100%..20% triangle wave

@@ -1,42 +1,42 @@
 #!/bin/bash
 # Build the mainline kernel for xx60 (Meson8m2) in the cross-toolchain
-# docker image (ci/Dockerfile.mainline). Local by default: no build host,
-# no network, other than the one-time image build and, if LINUX_DIR does not
-# exist yet, cloning the kernel fork.
+# docker image (ci/Dockerfile.mainline). The build is local by default. It
+# needs no build host and no network. Two exceptions: the one-time image
+# build, and the clone of the kernel fork if LINUX_DIR does not exist yet.
 #
 #   tools/build/kbuild.sh [-f lts|stable | --flavor lts|stable] [-w LINUX_DIR] [-o BUILD_DIR] [-d OUT_DIR] [-j N] <step>...
 #   steps: config   : multi_v7_defconfig + arch/arm/configs/tsx-xx60.config + olddefconfig
-#                      (also done automatically by "kernel" when BUILD_DIR/.config
+#                      ("kernel" also runs this step when BUILD_DIR/.config
 #                      is missing or the fragment is newer)
 #          kernel   : zImage dtbs modules
-#          image    : copy zImage + board DTBs (TSW-1060, and TSW-760 when the
-#                     kernel has it) to OUT_DIR, write kernel.release
-#                     + kernel.commit, and pack OUT_DIR/test.img with
-#                     kernel/mkimage.sh --board-dtbs (adds an initrd if
-#                     rootfs/out/initramfs-switchroot.cpio.gz has been built)
+#          image    : copy zImage and the board DTBs (TSW-1060, and TSW-760 when
+#                     the kernel has it) to OUT_DIR, write kernel.release
+#                     and kernel.commit, and pack OUT_DIR/test.img with
+#                     kernel/mkimage.sh --board-dtbs (this adds an initrd if
+#                     rootfs/out/initramfs-switchroot.cpio.gz exists)
 #          cmd "<make args>" : any make target in the build dir
 #          stats    : ccache statistics (only with CCACHE=1)
 #   (default steps: kernel image)
 #
-# Flavor: -f / --flavor / $FLAVOR selects which of the two kernel flavors to
-# build -- lts (default; tracks kernel/KERNEL_REV.lts, branch tsx-xx60-6.18)
-# or stable (kernel/KERNEL_REV.stable, branch tsx-xx60-7.2). Both branches use
-# the same config fragment name, arch/arm/configs/tsx-xx60.config.
+# Flavor: -f, --flavor or $FLAVOR selects one of the two kernel flavors.
+# lts is the default. It tracks kernel/KERNEL_REV.lts, branch tsx-xx60-6.18.
+# stable uses kernel/KERNEL_REV.stable, branch tsx-xx60-7.2. Both branches
+# use the same config fragment name, arch/arm/configs/tsx-xx60.config.
 #
 # Kernel source: LINUX_DIR (default: ../linux-<flavor>, a sibling checkout of
-# this repo, e.g. ../linux-lts). If it does not exist, it is cloned from
-# https://github.com/tsx-mainline/linux and checked out at the commit in
-# kernel/KERNEL_REV.<flavor>. An EXISTING LINUX_DIR is used as-is and never
-# modified (no fetch, no checkout) -- it is expected to already have the
-# right commit checked out; a mismatch is only a warning.
+# this repo, for example ../linux-lts). If it does not exist, the script clones
+# https://github.com/tsx-mainline/linux and checks out the commit in
+# kernel/KERNEL_REV.<flavor>. The script uses an EXISTING LINUX_DIR as it is
+# and never modifies it (no fetch, no checkout). That checkout must already
+# have the right commit. A mismatch only gives a warning.
 #
 # Env: LINUX_DIR, BUILD_DIR (default <LINUX_DIR>/../build-<flavor>), OUT_DIR
 # (default <LINUX_DIR>/../out-<flavor>), J (default: all cores). CCACHE=1
 # turns on ccache (ci/Dockerfile.ccache, cache dir CCACHE_DIR, default
-# ~/.cache/tsx-ccache) -- optional, off by default so a first-time build
-# needs nothing persistent.
+# ~/.cache/tsx-ccache). It is off by default, so a first build needs
+# nothing persistent.
 #
-# To build on another machine instead of here, see tools/build/remote-build.sh
+# To build on another machine, see tools/build/remote-build.sh
 # (opt-in, driven by BUILD_HOST).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)

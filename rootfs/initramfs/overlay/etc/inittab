@@ -1,6 +1,6 @@
 ::sysinit:/etc/init.d/rcS
 ttyAML0::respawn:/sbin/getty -n -l /bin/sh -L 115200 ttyAML0 vt100
-# the rescue screen on the LCD; Enter on a USB keyboard (tty1) opens a root shell
+# The LCD shows the rescue screen. Enter on a USB keyboard (tty1) opens a root shell.
 tty1::respawn:/usr/sbin/tsx-rescue-status loop
 ::ctrlaltdel:/sbin/reboot
 ::shutdown:/bin/umount -a -r

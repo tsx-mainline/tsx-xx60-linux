@@ -1,19 +1,21 @@
 #!/bin/sh
-# xx60 kiosk uninstaller. Runs ON THE PANEL in the rescue system (boot it
-# from the kiosk with: touch /etc/tsx/force-rescue; reboot), as root.
+# The xx60 kiosk uninstaller. It runs on the panel, as root, in the rescue
+# system. To boot the rescue system from the kiosk, run:
+# touch /etc/tsx/force-rescue; reboot
 #
 #   uninstall.sh [--p5-image FILE|-] [--p5-mkfs] [--keep-bootimg]
 #
-#   (default)        remove p1:tsxboot.img, so U-Boot's hook (if installed)
-#                    falls through to the stock Android boot. p5 is left as is.
+#   (default)        remove p1:tsxboot.img. The U-Boot hook (if installed)
+#                    then falls through to the stock Android boot. p5 stays as is.
 #   --p5-image F|-   restore p5 from a full partition image (exactly
-#                    3055616 sectors), e.g. the slice of the 2026-09-25 backup:
+#                    3055616 sectors), for example the slice of the 2026-09-25
+#                    backup:
 #                    host: dd if=tsw1060-mmcblk0.img bs=512 skip=1847297 count=3055616
-#   --p5-mkfs        recreate an empty ext2 "sdcard" fs with the original UUID
-#                    (Android recreates its folders; the two raw images that
-#                    lived there, update boot.img + golden copy, are gone)
-#   --keep-bootimg   leave tsxboot.img, just disable it (p1:tsxboot.off)
-# Afterwards revert the U-Boot env (REPORT.md "Revert"), then power-cycle.
+#   --p5-mkfs        recreate an empty ext2 "sdcard" fs with the original UUID.
+#                    Android recreates its folders. The two raw images that
+#                    lived there (update boot.img and the golden copy) are gone.
+#   --keep-bootimg   keep tsxboot.img and only disable it (p1:tsxboot.off)
+# Afterwards, revert the U-Boot env (REPORT.md "Revert"), then power-cycle.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/tsx-disk.sh"

@@ -1,28 +1,28 @@
 #!/bin/sh
-# PID 1 of the xx60 switch_root initramfs .
-# Mounts the kiosk rootfs (default LABEL=tsxroot) and switch_roots into it.
-# Falls back to the rescue system (busybox init, DHCP, dropbear, root/tsx)
-# when the rootfs is missing, broken, or rescue is requested.
+# PID 1 of the xx60 switch_root initramfs.
+# It mounts the kiosk rootfs (default LABEL=tsxroot) and switch_roots into it.
+# It falls back to the rescue system (busybox init, DHCP, dropbear, root/tsx)
+# when the rootfs is missing or broken, or when the user asks for rescue.
 #
-# Kernel cmdline:  tsx.root=LABEL=x|UUID=x|PARTUUID=x|/dev/x  (default: try
-#                  LABEL=tsxroot-emmc first, then LABEL=tsxroot; a candidate is
-#                  used only if it mounts AND has an init, so a stale label left
-#                  behind on the eMMC by an earlier install falls through to the
-#                  card instead of dropping to rescue)
+# Kernel cmdline:  tsx.root=LABEL=x|UUID=x|PARTUUID=x|/dev/x
+#                  Default: try LABEL=tsxroot-emmc first, then LABEL=tsxroot.
+#                  A candidate must mount and have an init. A stale label left
+#                  on the eMMC by an earlier install then falls through to the
+#                  card and does not drop to rescue.
 #                  tsx.rootwait=SECONDS (default 10)   tsx.rescue   tsx.init=/sbin/init
 #                  tsx.verbose (boot text on the LCD instead of the splash)
-# Rootfs file:     /etc/tsx/force-rescue on the rootfs -> boot the rescue system once
-#                  (the file is removed so the next boot is normal again).
+# Rootfs files:    /etc/tsx/force-rescue on the rootfs boots the rescue system
+#                  once. The init removes the file, so the next boot is normal.
 #                  /etc/tsx/boot-verbose (panel.conf BOOT_VERBOSE=1, tsx-config
-#                  apply) -> like tsx.verbose, from the root mount on.
-#                  /etc/tsx/orientation (panel.conf ORIENTATION) -> the splash
-#                  and the text console turn with it from the root mount on
-#                  (before it: landscape; the rescue: always landscape).
+#                  apply) acts like tsx.verbose from the root mount on.
+#                  /etc/tsx/orientation (panel.conf ORIENTATION) turns the splash
+#                  and the text console from the root mount on. Before that
+#                  they are landscape. The rescue is always landscape.
 # Screen: the kernel keeps the text console off the LCD (fbcon=map:1 on the
-# command line) and tsx-splash draws the boot splash on /dev/fb0. Every way
-# into the rescue system, and BOOT_VERBOSE, first gives the screen back to the
-# text console (tsx-splash console, then tsx-confont loads a console font that
-# suits the LCD size): a failure never hides behind the splash.
+# command line). tsx-splash draws the boot splash on /dev/fb0. Every way into
+# the rescue system, and BOOT_VERBOSE, first gives the screen back to the text
+# console. tsx-splash console does this, then tsx-confont loads a console font
+# that suits the LCD size. A failure never hides behind the splash.
 mount -t proc proc /proc
 mount -t sysfs sys /sys
 mount -t devtmpfs dev /dev 2>/dev/null
@@ -30,34 +30,36 @@ mkdir -p /dev/pts /run /tmp /newroot; mount -t devpts devpts /dev/pts
 
 msg() { echo "tsx-initramfs: $*" > /dev/kmsg 2>/dev/null; echo "tsx-initramfs: $*" > /dev/tty0 2>/dev/null; }
 verbose=
-# screen orientation: unknown (landscape) until the root file system is
-# mounted (the file lives there; tsx-orientation holds the table)
+# Screen orientation. It stays landscape until the root file system is
+# mounted, because the orientation file lives there. tsx-orientation holds the table.
 orient=landscape fbrot=0
-# The splash needs the real display driver: fb0 is simpledrm on U-Boot's
-# framebuffer until the meson DRM driver has probed, which can be a moment
-# after /init starts, and that driver switches U-Boot's plane off when it
-# takes over (and the console bound to simpledrm's fb0 does not follow). Wait
-# for it, at most 2 s (the U-Boot logo stays up meanwhile).
+# The splash needs the real display driver. Until the meson DRM driver
+# probes, fb0 is simpledrm on the U-Boot framebuffer. The probe can happen
+# a moment after /init starts. When it does, the driver switches the U-Boot
+# plane off, and the console bound to the simpledrm fb0 does not follow.
+# Wait for the driver for 2 s at most. The U-Boot logo stays up meanwhile.
 wait_drm_fb() {
 	i=0
 	while [ $i -lt 40 ]; do
 		case $(cat /sys/class/graphics/fb0/name 2>/dev/null) in ''|*simple*) usleep 50000; i=$((i + 1));; *) return 0;; esac
 	done
 }
-# the text console binds to fb0 too: to the DRM driver's, not simpledrm's;
-# turned to the orientation (fbcon rotate_all; needs the console bound), then
-# a Terminus font sized for the LCD (80x25 or more; tsx-confont)
+# The text console also binds to fb0. It binds to the DRM driver fb0, not the
+# simpledrm one. This function turns the console to the orientation (fbcon
+# rotate_all needs a bound console). Then tsx-confont sets a Terminus font
+# sized for the LCD (80x25 or more).
 text_console() {
 	verbose=1; wait_drm_fb; /usr/sbin/tsx-splash console 2>/dev/null
 	echo "$fbrot" > /sys/class/graphics/fbcon/rotate_all 2>/dev/null
 	/usr/sbin/tsx-confont 2>/dev/null
 }
-# splash TEXT PERCENT [show]: status line + progress bar (no-op when verbose)
+# splash TEXT PERCENT [show]: draw a status line and a progress bar. It does
+# nothing in verbose mode.
 splash() { [ -n "$verbose" ] || /usr/sbin/tsx-splash -o "$orient" -s "$1" -p "$2" "${3:-status}" 2>/dev/null; }
-# The rescue system is busybox init (etc/inittab): rcS (network, dropbear) and the
-# rescue screen /usr/sbin/tsx-rescue-status on the LCD, with "Press Enter for a
-# rescue shell" for a USB keyboard. The same screen for every way in, the
-# standalone rescue image included.
+# The rescue system is busybox init (etc/inittab). rcS starts the network and
+# dropbear. The LCD shows the rescue screen /usr/sbin/tsx-rescue-status, with
+# "Press Enter for a rescue shell" for a USB keyboard. Every way into the
+# rescue shows the same screen, also the standalone rescue image.
 rescue() {
 	fbrot=0   # the rescue screen is always landscape
 	text_console
@@ -78,27 +80,29 @@ for c in $(cat /proc/cmdline); do
 	esac
 done
 [ -n "$want_rescue" ] && rescue "requested on the kernel command line"
-# This flag is baked into the rescue image itself (installer/rescue/overlay),
-# so it is carried by BOTH p1:boot.img (the golden/factory-recovery slot,
-# reached after boot_retry overflows) and p1:tsxboot.img (the one-shot
-# installer hook target, reached on a normal, expected installer boot) --
-# from here, nothing on this side of U-Boot can tell which of the two
-# actually happened, so the reason stays generic rather than presuming
-# "golden-slot" (which was wrong on a plain installer-armed boot; see the
-# 2026-09-27 hardware run notes). It never switch_roots, never runs
-# tsx-autoinstall and never formats anything; see /usr/sbin/tsx-rescue.
-# TODO: installer/steps/tsx-rescue-arm.sh is gaining a one-shot tsx_once env
-# flag (separate change, in flight); once it exists, read/clear it here (or
-# in the rescue's own rcS) to report "installer arm" vs "golden fallback" vs
-# "manual" precisely instead of this generic message.
+# The rescue image itself carries this flag (installer/rescue/overlay). Both
+# p1:boot.img and p1:tsxboot.img therefore have it. p1:boot.img is the
+# golden/factory-recovery slot, which U-Boot boots after boot_retry
+# overflows. p1:tsxboot.img is the one-shot installer hook target, which
+# U-Boot boots on a normal, expected installer boot. From here, nothing on
+# this side of U-Boot can tell which of the two happened. The reason stays
+# generic and does not claim "golden-slot". That claim was wrong on a plain
+# installer-armed boot (see the 2026-09-27 hardware run notes). This path
+# never switch_roots, never runs tsx-autoinstall and never formats anything.
+# See /usr/sbin/tsx-rescue.
+# TODO: installer/steps/tsx-rescue-arm.sh will get a one-shot tsx_once env
+# flag (separate change, in flight). When it exists, read and clear it here
+# (or in the rescue rcS). Then the message can say "installer arm", "golden
+# fallback" or "manual" instead of this generic text.
 [ -e /etc/tsx/rescue-image ] && rescue "$(head -n 1 /etc/tsx/rescue-image)"
 if [ -n "$verbose" ]; then text_console; else wait_drm_fb; splash "starting" 5 show; fi
 
-# installer: UART-free install (p1:tsxinst.cfg from stock Android, a stick with
-# tsx-install/GO, or a U-Boot jabil boot from a stick). Exit 0 = nothing to do.
+# Installer: an install without a UART. The trigger is p1:tsxinst.cfg from
+# stock Android, a stick with tsx-install/GO, or a U-Boot jabil boot from a
+# stick. Exit code 0 means there is nothing to do.
 if [ -x /usr/sbin/tsx-autoinstall ]; then
 	/usr/sbin/tsx-autoinstall || {
-		# the rescue screen shows this as the operation that went wrong
+		# The rescue screen shows this as the operation that went wrong.
 		echo "- autoinstall" > /run/tsx-op; echo "failed, see /run/tsx-autoinstall.log" > /run/tsx-install-state
 		rescue "tsx-autoinstall: install failed or waits for deploy.sh, see /run/tsx-autoinstall.log"
 	}
@@ -107,8 +111,8 @@ fi
 up() { cut -d. -f1 /proc/uptime; }
 
 # find_dev SPEC TIMEOUT: print the backing device for SPEC (LABEL=x, UUID=x,
-# PARTUUID=x or /dev/x) once it appears, waiting up to TIMEOUT seconds;
-# return 1 if it never shows up.
+# PARTUUID=x or /dev/x) when it appears. Wait up to TIMEOUT seconds.
+# Return 1 if the device never appears.
 find_dev() {
 	spec=$1; to=$2
 	end=$(( $(up) + to ))
@@ -122,21 +126,22 @@ find_dev() {
 	done
 }
 
-# eMMC-root fallback (2026-09-26): without tsx.root= try the eMMC root (LABEL=tsxroot-emmc)
-# first, then the card (LABEL=tsxroot). Root-selection fix (2026-09-27): each candidate
-# is tried in turn and is used only if it mounts AND has an init; a stale
-# tsxroot-emmc superblock left behind by an earlier install (fs since
-# overwritten) must fall through to the card instead of dropping to rescue.
-# tsx.root= on the cmdline is a single explicit candidate, no fallback.
+# eMMC-root fallback (2026-09-26): without tsx.root=, try the eMMC root
+# (LABEL=tsxroot-emmc) first, then the card (LABEL=tsxroot).
+# Root-selection fix (2026-09-27): the init tries each candidate in turn and
+# uses it only if it mounts and has an init. An earlier install can leave a
+# stale tsxroot-emmc superblock behind (the file system is since overwritten).
+# That case must fall through to the card and must not drop to rescue.
+# A tsx.root= on the cmdline is a single explicit candidate with no fallback.
 if [ -n "$root" ]; then candidates=$root; else candidates="LABEL=tsxroot-emmc LABEL=tsxroot"; fi
 
 set -- $candidates; nleft=$#
 dev=; used=
 for cand in $candidates; do
 	nleft=$((nleft - 1))
-	# Every candidate but the last gets the old 3 s grace wait (enough to tell
-	# a present-but-slow label from an absent one); the last candidate gets
-	# the full tsx.rootwait= timeout, same as before this fix.
+	# Every candidate but the last gets the old 3 s grace wait. That is enough
+	# to tell a slow label from an absent one. The last candidate gets the
+	# full tsx.rootwait= timeout, as before this fix.
 	if [ "$nleft" -gt 0 ]; then t=3; else t=$wait; fi
 	d=$(find_dev "$cand" "$t") || { msg "$cand unusable (not found within ${t}s), trying next"; continue; }
 
@@ -156,8 +161,8 @@ for cand in $candidates; do
 		msg "$cand on $d unusable (mount failed), trying next"
 		continue
 	fi
-	# ORIENTATION: from here on the splash (its next status redraws the whole
-	# frame turned) and the text console (turned now if it has the screen)
+	# ORIENTATION: from here on, the splash turns (its next status redraws the
+	# whole frame turned). The text console turns now if it has the screen.
 	if [ -x /usr/sbin/tsx-orientation ]; then
 		eval "$(/usr/sbin/tsx-orientation -f /newroot/etc/tsx/orientation info 2>/dev/null)"
 		if [ "${ORIENTATION:-landscape}" != "$orient" ]; then

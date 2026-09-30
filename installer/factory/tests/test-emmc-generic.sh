@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Host test for the NO-BACKUP path: mkbundle.sh without --emmc-raw/--boot0
-# (boot0_sha256=any, recovery/misc/data/gaps zero, cache = empty ext4, logo head:)
-# + tsx-emmc-restore on a SYNTHETIC eMMC image in the post-eMMC-migration state
-# (mainline boot image in "boot", ext4 LABEL=tsxroot-emmc from 796 MiB to the end,
-# random bytes in bootloader/secure-store/reserved areas that must survive).
-# Workstation only: no panel, no container, no backup of any unit.
+# Host test for the NO-BACKUP path. It runs mkbundle.sh without
+# --emmc-raw and --boot0 (boot0_sha256=any, recovery, misc, data and gaps
+# zero, cache = an empty ext4, logo head). Then it runs tsx-emmc-restore on a
+# SYNTHETIC eMMC image in the post-eMMC-migration state: the mainline boot
+# image in "boot", and ext4 LABEL=tsxroot-emmc from 796 MiB to the end.
+# The bootloader, secure-store and reserved areas hold random bytes that must
+# survive. The test runs on the workstation only: no panel, no container,
+# and no backup of any unit.
 #
 #   tests/test-emmc-generic.sh [BUNDLE_DIR]   (default: build one in $T from dl/*.puf
 #                                              and out/env-live-20260926-2153.bin)
@@ -26,7 +28,7 @@ if [ -z "$B" ]; then
 	PUF=${PUF_FILE:-$FACTORY_DIR/dl/tsw-xx60_3.002.1061.001.puf}
 	ENVFILE=${ENV_LIVE_FILE:-$FACTORY_DIR/out/env-live-20260926-2153.bin}
 	if [ ! -f "$PUF" ] || [ ! -f "$ENVFILE" ]; then
-		echo "SKIPPED: needs the Crestron .puf (PUF_FILE) and a live env capture (ENV_LIVE_FILE); not present here"
+		echo "SKIPPED: needs the Crestron .puf (PUF_FILE) and a live env capture (ENV_LIVE_FILE). Not present here"
 		exit 0
 	fi
 	"$FACTORY_DIR/mkbundle.sh" --puf "$PUF" --env "$ENVFILE" --out "$B" > "$T/mkbundle.log" 2>&1 \

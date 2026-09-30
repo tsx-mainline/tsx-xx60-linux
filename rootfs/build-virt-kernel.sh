@@ -1,6 +1,6 @@
 #!/bin/bash
-# Builds a qemu "virt" test kernel (NOT for the panel) from the kernel fork worktree.
-# Output: build-virt/arch/arm/boot/zImage. About 10-20 min with -j4.
+# Build a qemu "virt" test kernel (not for the panel) from the kernel fork worktree.
+# Output: build-virt/arch/arm/boot/zImage. The build takes about 10-20 min with -j4.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 TOP=$(cd "$HERE/../../.." && pwd)

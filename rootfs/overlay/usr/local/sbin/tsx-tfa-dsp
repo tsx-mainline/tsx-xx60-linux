@@ -1,7 +1,7 @@
 #!/bin/sh
-# tsx-tfa-dsp: bring the TFA9890 CoolFlux DSPs up on the TSW-1060 (mainline).
-# Needs the kernel with snd_soc_tfa989x.dsp=1 (else the driver bypasses the
-# DSP on every power-up anyway) and /usr/local/lib/tsx/tfa_dsp.py.
+# tsx-tfa-dsp: start the TFA9890 CoolFlux DSPs on the TSW-1060 (mainline).
+# It needs a kernel with snd_soc_tfa989x.dsp=1 (otherwise the driver bypasses
+# the DSP on every power-up) and /usr/local/lib/tsx/tfa_dsp.py.
 #   tsx-tfa-dsp start [VARIANT] [VSTEP]   VARIANT: yushan | yushan_2nd | yushan_3rd
 #   tsx-tfa-dsp status | stop | bypass
 # Config: /etc/tsx/tfa-dsp.conf (TFA_VARIANT=, TFA_VSTEP=, TFA_PROFILE=)
@@ -21,7 +21,7 @@ start)
 	cnt=$DIR/settings_$v/stereo.cnt
 	[ -r "$cnt" ] || { log "missing $cnt"; exit 2; }
 	[ "$(cat $param 2>/dev/null)" = Y ] || { log "kernel not in dsp mode (snd_soc_tfa989x.dsp=1)"; exit 2; }
-	# the DSP needs the I2S clocks: keep a silent stream running while loading
+	# The DSP needs the I2S clocks. Keep a silent stream running during the load.
 	tsx-audio speaker hold >/dev/null 2>&1 || true
 	aplay -q -D default -t raw -f S16_LE -r 48000 -c 2 /dev/zero 2>/dev/null &
 	ap=$!

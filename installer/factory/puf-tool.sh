@@ -8,34 +8,37 @@
 #                tsx-xx60_<ver>.zip, OOTB project load), ~.package.dat, release notes,
 #                tsx-xx60_<ver>.ini, tsx-xx60_<ver>.zip, schedulingproject_*.zip/.ini
 #   tsx zip    = ZIP: ~info.ini ([Firmware] Version, Targets, Filename, Signature),
-#                image_<ver>_r<svn>.zip + .zip.sig (256-byte signature; no public key)
+#                image_<ver>_r<svn>.zip + .zip.sig (256-byte signature. No public key)
 #   image zip  = what the panel unzips to /mnt/sdcard/ROMDISK/romdisk/user/system/image:
 #                u-boot.bin      -> card sectors 0..441 bytes + sector 1.., eMMC boot0/1/bootloader
 #                boot.img        -> eMMC "boot" (normal Android kernel)       logo.img -> eMMC "logo"
-#                system.img      -> eMMC "system"; the SAME file is the golden /system on card p2
+#                system.img      -> eMMC "system". The SAME file is the golden /system on card p2
 #                boot-golden.img -> card p1 FAT: boot.img (golden = factory recovery)
 #                *.hash          POSIX `cksum` CRC of each file (backupAndRecover.sh VALIDATEHASH)
-#                new_manifest    NUMBER_OF_FILES=5, VERSION=...; crestronUbootVersion.txt
+#                new_manifest    NUMBER_OF_FILES=5, VERSION=.... crestronUbootVersion.txt
 #
 #   puf-tool.sh extract PUF DIR           unzip all layers to DIR/, check every cksum and
 #                                         NUMBER_OF_FILES, write DIR/puf.info
 #   puf-tool.sh bundle PUF|DIR --env SRC --out BUNDLE [--other-unit]
 #       the input of tsx-factory-restore (rescue system) and of `card`: env.bin
-#       (SRC's env with our hook removed: tsx-env.py unhook; SRC = a 64 KiB env block,
-#       p1:tsxenv.bak, an installer backup env-0x100000.bin, or a card image), boot-golden.img,
-#       system.img, crestron-mbr.sfdisk, crestron-fs.sh, factory.manifest (sha256s)
+#       (the env of SRC with our hook removed by tsx-env.py unhook. SRC is a 64 KiB
+#       env block, p1:tsxenv.bak, an installer backup env-0x100000.bin, or a card
+#       image), boot-golden.img, system.img, crestron-mbr.sfdisk, crestron-fs.sh,
+#       factory.manifest (sha256s)
 #   puf-tool.sh card BUNDLE --out IMG [--uboot-copy]
 #       a full 3,980,394,496-byte card image in the factory layout (host tests, or
-#       flash-card.sh --mode full on a card in a PC). --uboot-copy also puts the U-Boot
-#       copy from u-boot.bin into the first MiB (a blank card); default: MBR only.
+#       flash-card.sh --mode full on a card in a PC). --uboot-copy also puts the
+#       U-Boot copy from u-boot.bin into the first MiB (a blank card). Default: MBR only.
 #
-# Restorable from the .puf alone: MBR/partition table, p1 FAT + golden boot.img, p2
-# (golden /system = system.img), p5..p8 as EMPTY factory file systems (same
-# parameters as the factory cards), the U-Boot copy. NOT in the .puf: the env's
-# identity (ethaddr, tsid, product_name, lan_hostname, updater_*; lcdsize/aml_dt are
-# re-detected by U-Boot on 2 GB units) -> --env from the unit's own backup; Crestron's
-# /data (p6: settings, passwords, ssh keys, licences), the ROMDISK project/user files
-# on p5, logs (p8) -> only from a backup of that unit (unit B: captures/tsw-1060-unitB).
+# The .puf alone can restore: the MBR/partition table, the p1 FAT + golden
+# boot.img, p2 (golden /system = system.img), p5..p8 as EMPTY factory file
+# systems (the same parameters as the factory cards) and the U-Boot copy. The
+# .puf does NOT hold the identity in the env (ethaddr, tsid, product_name,
+# lan_hostname, updater_*, and lcdsize/aml_dt, which U-Boot detects again on 2 GB
+# units). Use --env from the own backup of the unit for that. The /data of
+# Crestron (p6: settings, passwords, ssh keys, licenses), the ROMDISK project
+# and user files on p5, and the logs (p8) come only from a backup of that unit
+# (unit B: captures/tsw-1060-unitB).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INSTALLER_DIR=$(cd "$HERE/.." && pwd); ROOTFS_DIR=$(cd "$INSTALLER_DIR/../rootfs" && pwd)
 ENVPY="python3 $INSTALLER_DIR/sdcard/tsx-env.py"

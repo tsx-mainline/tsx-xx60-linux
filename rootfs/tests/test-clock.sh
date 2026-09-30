@@ -1,9 +1,12 @@
 #!/bin/sh
-# Host test for the network clock (no RTC on the panel): chrony.conf (DHCP
-# sources first, makestep, no initstepslew), the udhcpc option request, the
-# udhcpc hook tsx-dhcp-ntp (NTP servers of the lease -> chrony sources, only
-# addresses, reload only on a change), the boot-clock floor in the image
-# build, and the clock line of `tsx-config show`. busybox/dash sh, no compiler.
+# Host test for the network clock (the panel has no RTC). The test checks:
+#  - chrony.conf: DHCP sources first, makestep, no initstepslew
+#  - the udhcpc option request
+#  - the udhcpc hook tsx-dhcp-ntp: it turns the NTP servers of the lease into
+#    chrony sources, accepts only addresses, and reloads only on a change
+#  - the boot-clock floor in the image build
+#  - the clock line of `tsx-config show`
+# The test runs under busybox or dash sh and needs no compiler.
 set -eu
 HERE=$(cd "$(dirname "$0")/.." && pwd); O=$HERE/overlay
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT

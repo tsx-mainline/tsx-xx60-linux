@@ -2,37 +2,40 @@
 """tsx-setupd: the on-panel first-boot setup page (PLAN.md section 16 item 3,
 docs/rootfs.md "Setup page").
 
-Runs as the UNPRIVILEGED "tsx-setup" system user, always, in the default
-runlevel -- not root: unlike tsx-mqtt/tsx-esphome, this daemon parses HTTP
-from the LAN before any pairing has happened, so it is given no privilege at
-all. Serves a small dark, touch-friendly page:
+It always runs in the default runlevel, as the UNPRIVILEGED "tsx-setup"
+system user, not as root. tsx-mqtt and tsx-esphome differ: this daemon
+parses HTTP from the LAN before any pairing has happened, so it gets no
+privilege at all. It serves a small, dark, touch-friendly page:
 
-  * on the panel itself, over loopback (http://127.0.0.1:PORT/setup) --
-    kiosk-session loads this instead of Home Assistant whenever no KIOSK_URL
-    is configured, or for one ~15 minute window after `tsx-config setup` /
-    the overlay "Setup" entry. Loopback never needs a pairing code.
-  * from a laptop/phone on the LAN (http://<panel-ip>:PORT/setup) -- only
-    while unconfigured or during that same ~15 minute window (lan_allowed()
-    below), and only after typing the pairing code shown on the panel's own
-    screen (never sent to a LAN client any other way). A correct code pairs
-    that browser (a session cookie) for the rest of the window. Outside
-    that window the process does not even listen on a LAN-reachable address
-    (ServerManager below rebinds to loopback-only), not just refuse at the
-    HTTP layer.
+  * On the panel itself, over loopback (http://127.0.0.1:PORT/setup).
+    kiosk-session loads this page instead of Home Assistant when no
+    KIOSK_URL is configured, or for one ~15 minute window after
+    `tsx-config setup` or the overlay "Setup" entry. Loopback never needs a
+    pairing code.
+  * From a laptop or phone on the LAN (http://<panel-ip>:PORT/setup). This
+    works only while the panel is unconfigured or during that same ~15
+    minute window (lan_allowed() below). It also needs the pairing code that
+    the screen of the panel shows. The daemon sends the code to no LAN
+    client any other way. A correct code pairs that browser (a session
+    cookie) for the rest of the window. Outside that window, the process
+    does not even listen on a LAN-reachable address (ServerManager below
+    rebinds to loopback only). It does not just refuse at the HTTP layer.
 
-Every privileged action -- reading or writing panel.conf (mode 600,
-root-owned), applying it, restarting the kiosk, changing the root password
--- goes through tsx-setup-helper, a small root daemon with a fixed,
-line-based command set (rootfs/overlay/usr/local/sbin/tsx-setup-helper);
-this process never runs a shell built from form input, and the one
-privilege-free check (`tsx-config validate KEY VALUE`, the exact same regex
-table `tsx-config set` itself uses) runs directly, since it touches no file.
+Every privileged action goes through tsx-setup-helper. These actions are:
+read or write panel.conf (mode 600, owned by root), apply it, restart the
+kiosk, and change the root password. tsx-setup-helper is a small root daemon
+with a fixed, line-based command set
+(rootfs/overlay/usr/local/sbin/tsx-setup-helper). This process never runs a
+shell that is built from form input. The one check that needs no privilege
+(`tsx-config validate KEY VALUE`, with the exact same regex table as
+`tsx-config set`) runs directly, because it touches no file.
 
-Secrets (HA_TOKEN, MQTT_PASSWORD, SSH_AUTHORIZED_KEY, the root password) are
-never echoed back to a client or written to this process's own log: the
-state API reports only whether such a key is already set, never its value
-(the same masking `tsx-config show` does, reused here rather than
-reimplemented), and nothing about a POST body is ever logged.
+The daemon never echoes secrets (HA_TOKEN, MQTT_PASSWORD,
+SSH_AUTHORIZED_KEY, the root password) back to a client, and never writes
+them to its own log. The state API reports only whether such a key is
+already set, never its value. It reuses the masking of `tsx-config show`
+and does not reimplement it. The daemon never logs anything about a POST
+body.
 
 Env overrides for host tests (rootfs/tests/test-setup.sh): TSX_SETUP_PORT,
 TSX_SETUP_CONF, TSX_RUN_DIR, TSX_CONFIG_BIN, TSX_SETUP_HELPER_REQ,
@@ -92,9 +95,9 @@ except ValueError:
     WINDOW = 900
 
 
-# ---- tsx-config validate (needs no privilege: key_known/val_ok touch no
-# file, so this runs directly, unprivileged -- no need to bother root for a
-# pure yes/no check) --------------------------------------------------------
+# ---- tsx-config validate (needs no privilege: key_known and val_ok touch no
+# file, so this runs directly and unprivileged. A pure yes/no check does not
+# need root) ----------------------------------------------------------------
 
 def _run(argv, **kw):
     kw.setdefault("capture_output", True)
@@ -115,11 +118,11 @@ def tcfg_validate(key, val):
     return _run([TSX_CONFIG_BIN, "validate", key, val]).returncode == 0
 
 
-# ---- tsx-setup-helper: the ONLY way this (unprivileged) process ever reads
-# or writes panel.conf, applies it, restarts the kiosk, or changes the root
+# ---- tsx-setup-helper: the ONLY way this (unprivileged) process reads or
+# writes panel.conf, applies it, restarts the kiosk, or changes the root
 # password. rootfs/overlay/usr/local/sbin/tsx-setup-helper, its own root
-# daemon, is the one process with that privilege; every request here is one
-# line, argv-shaped ("CMD KEY VALUE"), never a shell string. ----------------
+# daemon, is the one process with that privilege. Every request here is one
+# line, shaped like argv ("CMD KEY VALUE"), never a shell string. -----------
 
 HELPER_REQ = os.environ.get("TSX_SETUP_HELPER_REQ", os.path.join(RUN_DIR, "setup-helper"))
 HELPER_RESP = os.environ.get("TSX_SETUP_HELPER_RESP", os.path.join(RUN_DIR, "setup-helper.resp"))
@@ -219,13 +222,13 @@ def tcfg_apply():
     return helper_call("apply")
 
 
-# is_configured() is polled forever (ServerManager.watch_forever, every
-# POLL_S) as well as once per request (lan_allowed()); a short cache keeps
-# an idle, already-configured panel from forking tsx-config/reading
-# panel.conf over the helper every single second for the rest of its life.
-# A save (handle_submit) calls restart_kiosk()/clear_setup_open() directly
-# anyway, so the only effect of this cache is a few extra seconds before a
-# freshly-configured panel's LAN listener closes, not before HA loads.
+# ServerManager.watch_forever polls is_configured() forever (every POLL_S),
+# and lan_allowed() calls it once per request. A short cache keeps an idle,
+# already-configured panel from forking tsx-config and reading panel.conf
+# over the helper every single second for the rest of its life. A save
+# (handle_submit) calls restart_kiosk() and clear_setup_open() directly
+# anyway. So the cache only delays the close of the LAN listener of a
+# freshly-configured panel by a few seconds. It does not delay the load of HA.
 _CONFIGURED_CACHE_S = 4.0
 _configured_cache = {"at": float("-inf"), "val": False}
 _configured_cache_lock = threading.Lock()
@@ -237,9 +240,10 @@ def is_configured():
         if now - _configured_cache["at"] > _CONFIGURED_CACHE_S:
             v = tcfg_show().get("KIOSK_URL")
             if not (v and v.strip()):
-                # the image default the kiosk falls back to (kiosk-session:
-                # /etc/kiosk.conf, then the panel.conf override): an install
-                # with --kiosk-url and no panel.conf sets it only there
+                # Use the image default that the kiosk falls back to
+                # (kiosk-session: /etc/kiosk.conf, then the panel.conf
+                # override). An install with --kiosk-url and no panel.conf
+                # sets the URL only there.
                 v = load_conf(KIOSK_CONF_PATH).get("KIOSK_URL")
             _configured_cache["val"] = bool(v and v.strip())
             _configured_cache["at"] = now
@@ -247,9 +251,9 @@ def is_configured():
 
 
 def _invalidate_configured_cache():
-    """Called right after a successful save: is_configured() otherwise
-    might not notice for up to _CONFIGURED_CACHE_S, which would make the
-    state API's own response to that same save look stale."""
+    """Call this right after a successful save. Otherwise is_configured()
+    might not notice for up to _CONFIGURED_CACHE_S, and the response of the
+    state API to that same save would look stale."""
     with _configured_cache_lock:
         _configured_cache["at"] = float("-inf")
 
@@ -426,9 +430,9 @@ def check_ha_url(url):
     req = urllib.request.Request(target, headers={"User-Agent": "tsx-setupd"})
     try:
         with _HA_CHECK_OPENER.open(req, timeout=5) as resp:
-            # a small cap regardless of what Content-Length claims: read()
-            # on an HTTPResponse stops at n bytes even if the server keeps
-            # sending, so this can never be tricked into buffering more
+            # Use a small cap, whatever Content-Length claims. read() on an
+            # HTTPResponse stops at n bytes even if the server keeps sending.
+            # So a server cannot trick this code into buffering more.
             body = resp.read(4096)
             looks_like_ha = b"Home Assistant" in body
             msg = "Reachable" if looks_like_ha else \
@@ -511,17 +515,19 @@ class Pairing:
 
 PAIRING = Pairing()
 
-# fields tsx-config itself owns; blank means "leave as it is" unless the key
-# is in CLEARABLE_BLANK, where tsx-config's own validation already treats an
-# empty value as meaningful ("off" / "allow any"). KIOSK_URL and
-# HA_LOGIN_METHOD/HA_TOKEN are handled separately below (required / a client
-# side choice, "form", that is not a real panel.conf value).
+# Fields that tsx-config itself owns. Blank means "leave as it is", unless
+# the key is in CLEARABLE_BLANK. There, the own validation of tsx-config
+# already treats an empty value as meaningful ("off" or "allow any").
+# KIOSK_URL and HA_LOGIN_METHOD/HA_TOKEN are handled separately below
+# (required, and a client-side choice "form" that is not a real panel.conf
+# value).
 SIMPLE_KEYS = ["PANEL_NAME", "TZ_NAME", "VOICE", "WAKE_WORD", "MQTT_HOST",
                "MQTT_PORT", "MQTT_USER", "MQTT_PASSWORD", "SSH_AUTHORIZED_KEY",
                "KERNEL_FLAVOR", "BLANK_TIMEOUT", "ORIENTATION"]
-# empty = cleared (the page pre-fills these, so an empty one was cleared on
-# purpose): the key is removed. MQTT_PASSWORD is not one: the page never
-# pre-fills it ("already set; leave blank to keep"), so empty = no change.
+# Empty = cleared. The page pre-fills these keys, so an empty one was cleared
+# on purpose, and the script removes the key. MQTT_PASSWORD is not one of
+# them. The page never pre-fills it ("already set; leave blank to keep"), so
+# empty = no change.
 CLEARABLE_BLANK = {"MQTT_HOST", "MQTT_PORT", "MQTT_USER"}
 
 
@@ -562,9 +568,9 @@ def handle_submit(fields):
             continue
         if val == "":
             if key in CLEARABLE_BLANK:
-                # validated like any value, before anything is written: a
+                # Validate it like any value, before anything is written. A
                 # set that fails half-way leaves KIOSK_URL written (so the
-                # LAN listener closes) with nothing applied
+                # LAN listener closes) with nothing applied.
                 if tcfg_validate(key, val):
                     to_unset.append(key)    # cleared: remove the key, never KEY=""
                 else:
@@ -656,8 +662,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, fmt, *args):
-        # never the request body (POST payloads, which may carry secrets) --
-        # only the request line itself, like the default logger.
+        # Never log the request body (POST payloads can carry secrets).
+        # Log only the request line itself, like the default logger.
         sys.stderr.write("tsx-setupd: %s %s\n" % (self.address_string(), fmt % args))
 
     def _read_json_body(self):
@@ -786,7 +792,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(code, obj)
 
 
-# ---- the page itself (static; all state comes from the JSON API) -------
+# ---- the page itself (static. All state comes from the JSON API) -------
 
 PAGE_UNAVAILABLE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -1183,24 +1189,23 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
 # ---- listening address: loopback-only unless a LAN window is open --------
 #
 # The HTTP handler already refuses a non-loopback request once !lan_allowed()
-# (a defensive second layer), but the process should not even ACCEPT a LAN
-# connection outside that window: no listening socket on a LAN-reachable
-# address at all means nothing to probe, fingerprint or attempt an exploit
-# against from the network while the panel is configured and no one has
-# opened Setup on the glass. ServerManager rebinds between "0.0.0.0" (LAN
-# allowed -- this also serves loopback) and "127.0.0.1" (LAN not allowed) as
-# lan_allowed() changes, polling POLL_S seconds apart; a submit or an
-# externally-triggered setup-open change take effect on the next poll, at
-# most POLL_S seconds later.
+# (a defensive second layer). But the process should not even ACCEPT a LAN
+# connection outside that window. With no listening socket on a
+# LAN-reachable address, the network has nothing to probe, fingerprint or
+# exploit while the panel is configured and no one has opened Setup on the
+# glass. ServerManager rebinds between "0.0.0.0" (LAN allowed, this also
+# serves loopback) and "127.0.0.1" (LAN not allowed) as lan_allowed()
+# changes. It polls POLL_S seconds apart. A submit or an external change of
+# setup-open takes effect on the next poll, at most POLL_S seconds later.
 #
-# A rebind briefly closes the old socket before the new one is listening
-# (the two addresses overlap -- "0.0.0.0" includes "127.0.0.1" -- so both
-# cannot be bound at once on the same port): a request that lands in that
-# gap, including from the kiosk itself over loopback, gets a connection
-# reset/refused rather than an answer. This is the same class of transient
+# A rebind briefly closes the old socket before the new one is listening.
+# The two addresses overlap ("0.0.0.0" includes "127.0.0.1"), so the process
+# cannot bind both on the same port at once. A request that lands in that
+# gap, including one from the kiosk itself over loopback, gets a connection
+# reset or refusal instead of an answer. This is the same class of transient
 # failure as tsx-setupd not having started yet (kiosk-session already waits
-# and retries for that, docs/rootfs.md "Setup page"), not a new one; a
-# client is expected to retry rather than treat one reset as final.
+# and retries for that, docs/rootfs.md "Setup page"). It is not a new one. A
+# client must retry and not treat one reset as final.
 POLL_S = 1.0
 
 
@@ -1219,12 +1224,12 @@ class ServerManager:
             if want == self.host and self.server is not None:
                 return
             if self.server is not None:
-                # release the old socket FIRST: binding "0.0.0.0:PORT" while
-                # "127.0.0.1:PORT" is still held (or vice versa) is the same
-                # address as far as the kernel is concerned and fails with
-                # EADDRINUSE. shutdown() (from here, not from inside its own
-                # serve_forever thread -- BaseServer's own requirement) stops
-                # the accept loop; server_close() then frees the port.
+                # Release the old socket FIRST. Binding "0.0.0.0:PORT" while
+                # "127.0.0.1:PORT" is still held (or the reverse) is the same
+                # address for the kernel, and it fails with EADDRINUSE.
+                # shutdown() stops the accept loop. Call it from here, not
+                # from inside its own serve_forever thread (BaseServer
+                # requires this). server_close() then frees the port.
                 self.server.shutdown()
                 self.server.server_close()
                 self.server = None
@@ -1241,10 +1246,10 @@ class ServerManager:
                 self.ensure()
             except OSError as e:
                 sys.stderr.write("tsx-setupd: bind failed: %s (retrying)\n" % e)
-            # a reopened window (tsx-config setup / overlay "Setup") that
-            # simply runs out on a configured panel: take the kiosk back to
-            # Home Assistant -- kiosk-session only picks the URL at start,
-            # so without this the page stayed up until the next restart
+            # A reopened window (tsx-config setup or overlay "Setup") can
+            # simply run out on a configured panel. Then take the kiosk back
+            # to Home Assistant. kiosk-session picks the URL only at start,
+            # so without this the page stayed up until the next restart.
             now_open = setup_open_fresh()
             if was_open and not now_open and is_configured():
                 sys.stderr.write("tsx-setupd: setup window expired: back to Home Assistant\n")

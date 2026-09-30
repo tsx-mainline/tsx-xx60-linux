@@ -1,10 +1,10 @@
 #!/bin/sh
-# Re-syncs the installer stage-2 tool set (tsx-autoinstall incl. the card-stage
-# p4 order, the factory restore tsx-factory-restore + crestron-fs.sh, and the
-# shared tsx-lib.sh) from their canonical source
-# locations (this dir, installer/android, installer/factory)
-# into the rootfs switch_root initramfs overlay, in case any of them was
-# edited without re-copying. Idempotent: safe to run again.
+# Sync the tool set of installer stage 2 again: tsx-autoinstall (including the
+# card-stage p4 order), tsx-factory-restore with crestron-fs.sh, and the shared
+# tsx-lib.sh. It copies them from their canonical locations (this dir,
+# installer/android, installer/factory) into the overlay of the rootfs
+# switch_root initramfs, in case someone edited any of them without copying
+# again. It is idempotent, so it is safe to run again.
 # Then rebuild: tools/build/remote-build.sh initramfs (or
 # rootfs/tests/qemu/mkinitramfs.sh here) and the boot image (rootfs/mkbootimg.sh,
 # or installer/initramfs/repack-bootimg.py here to keep a given kernel + DTB
@@ -23,4 +23,4 @@ install -D -m 755 "$HERE/tsx-autoinstall" "$ROOTFS_DIR/initramfs/overlay/usr/sbi
 install -D -m 644 "$HERE/../android/tsx-lib.sh" "$ROOTFS_DIR/initramfs/overlay/usr/share/tsx/tsx-lib.sh"
 install -D -m 755 "$HERE/../factory/tsx-factory-restore" "$ROOTFS_DIR/initramfs/overlay/usr/sbin/tsx-factory-restore"   # factory restore from the .puf
 install -D -m 644 "$HERE/../factory/crestron-fs.sh" "$ROOTFS_DIR/initramfs/overlay/usr/share/tsx/crestron-fs.sh"
-echo "synced; rebuild the initramfs and the boot image"
+echo "synced. Rebuild the initramfs and the boot image"

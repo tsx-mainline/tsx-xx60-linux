@@ -1,7 +1,7 @@
 #!/bin/bash
 # Host test of installer/lib/tsx-rescue.sh's writers (tsx_env_apply,
 # tsx_mbr_fold, tsx_mkfs_tsxdata) against plain-file fixtures -- same style as
-# installer/emmc/tests/test-usb-recovery.sh (no loop device, no docker; env
+# installer/emmc/tests/test-usb-recovery.sh (no loop device, no docker. Env
 # fixtures are bare 64 KiB blocks fw_printenv/fw_setenv accept as a file).
 # Needs fw_printenv/fw_setenv (u-boot-tools), mke2fs/e2fsck/blkid (e2fsprogs).
 set -uo pipefail
@@ -116,7 +116,7 @@ OUT=$(TSX_RUN="$W" tsx_env_apply "$W/cfg4" "tsx_once 0" 2>&1) && ok "tsx_once cl
 
 echo "== 11. TSX_SWITCH_ONCE (installer/android/tsx-lib.sh) matches tsx-env.py GUARDS['once'] byte-for-byte"
 # Two independent copies of the hook text exist (the Android-side arm script
-# sources tsx-lib.sh; tsx-env.py builds card images and does the factory
+# sources tsx-lib.sh. tsx-env.py builds card images and does the factory
 # unhook) -- this is the drift check for both.
 LIBDIR=$(cd "$HERE/../android" && pwd)
 . "$LIBDIR/tsx-lib.sh"
@@ -130,17 +130,17 @@ print(m.GUARDS['once'])
 	|| bad "hook text mismatch: bash='$TSX_SWITCH_ONCE' python='$PYONCE'"
 case "$TSX_SWITCH_ONCE" in
 *'if itest ${tsx_once} -eq 1; then setenv tsx_once 0; saveenv; run tsx_boot; fi')
-	ok "tsx_once is cleared (setenv 0; saveenv) BEFORE run tsx_boot, in that order";;
+	ok "tsx_once is cleared (setenv 0, then saveenv) BEFORE run tsx_boot, in that order";;
 *) bad "TSX_SWITCH_ONCE does not clear tsx_once before running tsx_boot: $TSX_SWITCH_ONCE";;
 esac
 [ "$TSX_BOOT_CMD" = 'mmcinfo; if fatexist mmc 0 tsxboot.off; then echo tsx: mainline disabled; else if fatexist mmc 0 tsxboot.img; then echo tsx: booting tsxboot.img; fatload mmc 0 ${loadaddr} tsxboot.img; bootm; fi; fi' ] \
 	&& ok "TSX_BOOT_CMD (the fatload/bootm hook target) is unchanged by the once guard"
 
 echo "== 12. once-guard semantics: armed / not armed / after fallback"
-# No U-Boot hush interpreter is available on this host, so this models the
-# exact, documented semantics of TSX_SWITCH_ONCE + TSX_BOOT_CMD (checked
-# byte-for-byte above) as a small state machine, rather than parsing/running
-# the hush text. Three scenarios named in the brief:
+# This host has no U-Boot hush interpreter. So the test does not parse or run
+# the hush text. It models the documented semantics of TSX_SWITCH_ONCE and
+# TSX_BOOT_CMD (checked byte for byte above) as a small state machine.
+# Three scenarios:
 sim_once() {   # sim_once TSX_ONCE_IN TSXBOOT_OFF_PRESENT TSXBOOT_IMG_PRESENT -> "BOOTS_RESCUE|no_rescue TSX_ONCE_OUT"
 	local once_in=${1:-} off=${2:-} img=${3:-}
 	local once_out=$once_in result=no_rescue
@@ -156,9 +156,9 @@ sim_once() {   # sim_once TSX_ONCE_IN TSXBOOT_OFF_PRESENT TSXBOOT_IMG_PRESENT ->
 R=$(sim_once 1 0 1); [ "$R" = "boots_rescue 0" ] && ok "armed (tsx_once=1, tsxboot.img present): boots the rescue once, and clears tsx_once" || bad "armed case: got '$R'"
 R=$(sim_once 0 0 1); [ "$R" = "no_rescue 0" ] && ok "not armed (tsx_once=0, tsxboot.img still present): hook does nothing, stock bootcmd runs" || bad "not-armed case: got '$R'"
 R=$(sim_once "" 0 1); [ "$R" = "no_rescue " ] && ok "not armed (tsx_once unset): hook does nothing" || bad "unset case: got '$R'"
-# after fallback: the rescue never checked in on its one shot, tsx_once is
-# already 0 from that boot, and the unit is power-cycled again with
-# tsxboot.img (and the golden slot) still holding the rescue image.
+# After a fallback, the rescue never checked in on its one shot and tsx_once is
+# already 0 from that boot. The unit is power-cycled again. tsxboot.img and
+# the golden slot still hold the rescue image.
 R=$(sim_once 0 0 1); [ "$R" = "no_rescue 0" ] && ok "after fallback (tsx_once already spent): stays on stock Android even though tsxboot.img is still there" || bad "after-fallback case: got '$R'"
 
 echo "== $N ok, $F failed"

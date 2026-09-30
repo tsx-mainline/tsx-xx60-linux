@@ -8,10 +8,11 @@ output_log=/var/log/tsx-esphome.log
 error_log=/var/log/tsx-esphome.log
 depend() { need net; after tsx-idled tsx-buttons tsx-ledbar tsx-als tsx-config avahi-daemon; }
 start() {
-	# Not wanted right now: HA_TRANSPORT=mqtt (the panel config opted out of
-	# ESPHome entirely), or VOICE=on (the voice satellite serves the same
-	# entities itself -- two ESPHome devices would confuse Home Assistant).
-	# Like tsx-mqtt when unconfigured: exit quietly, do not fail the runlevel.
+	# Do not run in two cases. HA_TRANSPORT=mqtt means the panel config opted
+	# out of ESPHome entirely. VOICE=on means the voice satellite serves the
+	# same entities itself, and two ESPHome devices would confuse Home
+	# Assistant. Like tsx-mqtt when unconfigured: exit quietly and do not
+	# fail the runlevel.
 	transport=$(tsx-config get HA_TRANSPORT 2>/dev/null) || transport=esphome
 	voice=$(tsx-config get VOICE 2>/dev/null) || voice=
 	if [ "$transport" = mqtt ]; then

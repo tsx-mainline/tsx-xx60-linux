@@ -1,28 +1,28 @@
 #!/bin/bash
-# Build a complete xx60 SD card image (the whole mmcblk0: 3,980,394,496 bytes,
-# Crestron MBR) with the mainline kiosk pre-installed. Runs on the dev host, no
-# root, no docker. Write it with flash-card.sh (recommended: keeps the unit's
-# own env/MAC and data) or, for a blank card, with any dd/Etcher-style tool.
+# Build a complete xx60 SD card image (the whole mmcblk0: 3,980,394,496 bytes, Crestron MBR)
+# with the mainline kiosk pre-installed. It runs on the dev host, with no root and no docker.
+# Write it with flash-card.sh (recommended, it keeps the own env, MAC and data of the unit)
+# or, for a blank card, with any dd or Etcher-style tool.
 #
 #   sdcard/mkcard.sh --out DIR [options]
-#     --base IMG        donor card image (default: captures/tsw-1060/backup/tsw1060-mmcblk0.img;
-#                       xx60-FACTORY.img is a TSW-760 card). Gives MBR, U-Boot copy,
-#                       p1 golden boot.img, p2 golden system. Must have the Crestron layout.
+#     --base IMG        donor card image (default: captures/tsw-1060/backup/tsw1060-mmcblk0.img.
+#                       xx60-FACTORY.img is a TSW-760 card). It gives the MBR, the U-Boot copy,
+#                       the p1 golden boot.img and the p2 golden system. It must have the Crestron layout.
 #     --model tsw1060|tsw760   (default tsw1060)
 #     --bootimg IMG     mainline boot image for p1:tsxboot.img (default: rootfs/out/tsxboot.img,
-#                       the current p1 image; a recent build (see the audio bring-up notes) f36b275e... on
-#                       2026-09-26; tsw1060 only, tsw760 has no default yet)
+#                       the current p1 image. A recent build (see the audio bring-up notes) f36b275e... on
+#                       2026-09-26. tsw1060 only, tsw760 has no default yet)
 #     --rootfs-ext4 IMG p5 image (default rootfs/out/rootfs.ext4, exactly the p5 size)
 #     --unit-env FILE   build a PER-UNIT image: the env of this unit (64 KiB block, e.g. a
 #                       backup env-0x100000.bin or p1:tsxenv.bak) + the hook. Default: GENERIC
-#                       env = donor env without its identity (MAC, tsid, names) + the hook
-#     --guard fallback|nogolden, --no-defuse-golden  as the other installers (default:
+#                       env = the donor env without its identity (MAC, tsid, names) + the hook
+#     --guard fallback|nogolden, --no-defuse-golden  as in the other installers (default:
 #                       fallback hook + DataRecoveryDone=1)
 #     --url URL, --token-file F                      kiosk URL / HA token in the rootfs
-#     --keep-base-data  keep the donor's p6 (/data), p7, p8. Default: fresh empty file
-#                       systems (same type/label/block size as Crestron's), no donor data
-#     --golden IMG      replace p1:boot.img (Crestron's factory-recovery Android) with IMG
-#                       (a mainline rescue image; the original is saved to DIR)
+#     --keep-base-data  keep p6 (/data), p7 and p8 of the donor. Default: fresh empty file
+#                       systems (same type, label and block size as Crestron's), no donor data
+#     --golden IMG      replace p1:boot.img (the factory-recovery Android of Crestron) with IMG
+#                       (a mainline rescue image). The script saves the original to DIR
 #     --compress gz|xz|zst|none   compressed copy next to the raw image (default gz)
 #     --name NAME       output base name (default card-<model>[-<unit>])
 # Outputs in DIR: NAME.img (sparse raw), NAME.img.gz, NAME.manifest (sha256 per region
@@ -33,7 +33,7 @@ ROOT=$(cd "$HERE/../.." && pwd)
 CAPTURES=${CAPTURES_DIR:-}
 ENVPY="python3 $HERE/tsx-env.py"
 CARD_BYTES=3980394496
-# name:start:size (sectors), the Crestron MBR (the Crestron MBR layout notes)
+# name:start:size (sectors), the Crestron MBR (see the Crestron MBR layout notes)
 LAYOUT="1:81920:81920 2:206849:1638400 3:2048:2048 5:1847297:3055616 6:4904961:1024000 7:5931009:204800 8:6137857:614400"
 BASE=$CAPTURES/tsw-1060/backup/tsw1060-mmcblk0.img MODEL=tsw1060 BOOTIMG= EXT4=$ROOT/rootfs/out/rootfs.ext4
 UNITENV= GUARD=fallback DEFUSE=--defuse-golden URL= TOKEN= KEEPDATA=0 GOLDEN= COMP=gz NAME= OUT=
@@ -91,7 +91,7 @@ if [ -n "$GOLDEN" ]; then
 	mcopy -i "$W/p1.fat" ::boot.img "$OUT/$NAME.crestron-golden-boot.img"
 	mdel -i "$W/p1.fat" ::boot.img
 	mcopy -i "$W/p1.fat" "$GOLDEN" ::boot.img
-	say "p1:boot.img replaced by $(basename "$GOLDEN"); Crestron's golden image saved as $NAME.crestron-golden-boot.img"
+	say "p1:boot.img replaced by $(basename "$GOLDEN"). Crestron's golden image saved as $NAME.crestron-golden-boot.img"
 fi
 mcopy -i "$W/p1.fat" "$BOOTIMG" ::tsxboot.img || die "p1 full? $(minfo -i "$W/p1.fat" :: 2>/dev/null | grep -i free)"
 mcopy -n -i "$W/p1.fat" ::tsxboot.img "$W/chk.img"; cmp -s "$W/chk.img" "$BOOTIMG" || die "p1 copy check failed"
@@ -100,14 +100,14 @@ say "p1: $(mdir -b -i "$W/p1.fat" :: | tr '\n' ' ')"
 
 # ---- 3. p5: the rootfs, made mountable by the stock Android kernel 3.10
 cp --sparse=always "$EXT4" "$W/p5.ext4"
-# 3.10 rejects INCOMPAT_CSUM_SEED (0x2000) at mount; orphan_file is unknown to e2fsck 1.42.9.
-# rootfs/mkrootfs.sh builds rootfs.ext4 without both (mkrootfs.sh -O ^metadata_csum_seed,^orphan_file);
-# these two calls are then no-ops and only matter for an older rootfs.ext4. The check below
-# (after all edits) is what guarantees the result.
+# 3.10 rejects INCOMPAT_CSUM_SEED (0x2000) at mount. orphan_file is unknown to e2fsck 1.42.9.
+# rootfs/mkrootfs.sh builds rootfs.ext4 without both (mkrootfs.sh -O ^metadata_csum_seed,^orphan_file).
+# So these two calls are no-ops, and they matter only for an older rootfs.ext4. The check below
+# (after all edits) guarantees the result.
 tune2fs -O ^metadata_csum_seed "$W/p5.ext4" >> "$LOG" 2>&1 || true
 tune2fs -O ^orphan_file "$W/p5.ext4" >> "$LOG" 2>&1 || true
-# hardware pass B3 (2026-09-26): 3.10 also fails on metadata_csum ("error loading journal",
-# e2fsck 1.42.9 "unsupported feature metadata_csum"): off, and a fresh journal without csum v3
+# Hardware pass B3 (2026-09-26): 3.10 also fails on metadata_csum ("error loading journal",
+# e2fsck 1.42.9 "unsupported feature metadata_csum"). So turn it off, and make a fresh journal without csum v3.
 tune2fs -O ^metadata_csum "$W/p5.ext4" >> "$LOG" 2>&1
 tune2fs -O ^has_journal "$W/p5.ext4" >> "$LOG" 2>&1 && tune2fs -j "$W/p5.ext4" >> "$LOG" 2>&1
 dbg() { debugfs -w -R "$1" "$W/p5.ext4" >> "$LOG" 2>&1; }
@@ -153,7 +153,7 @@ if [ $KEEPDATA = 0 ]; then
 	mkpart 6 ext2 data 1024 "$OLD_FEAT"
 	mkpart 7 ext2 cache 1024 "$OLD_FEAT"
 	mkpart 8 ext4 logs 1024 "$OLD_FEAT,^extent"
-	say "p6/p7/p8: fresh ext2 data, ext2 cache, ext4 logs (Crestron types; Android sets them up at first boot)"
+	say "p6/p7/p8: fresh ext2 data, ext2 cache, ext4 logs (Crestron types. Android sets them up at first boot)"
 else
 	say "p6/p7/p8: donor data KEPT (--keep-base-data): this image carries another unit's Crestron config"
 fi

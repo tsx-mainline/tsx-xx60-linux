@@ -73,7 +73,7 @@ class PanelAPIServer(APIServer):
     esphome_version = get_esphome_version()
 
     def __init__(self) -> None:
-        # asyncio.create_server's protocol_factory takes no arguments; the
+        # asyncio.create_server's protocol_factory takes no arguments. The
         # device name is fixed (class attribute, set once in main() before
         # the TCP server starts) for every connection.
         super().__init__(PanelAPIServer.name)

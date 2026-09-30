@@ -2,48 +2,54 @@
  * tsx-splash: the xx60 boot splash on the Linux framebuffer (/dev/fb0).
  *
  * The kernel command line maps the framebuffer console to a framebuffer
- * that never exists (fbcon=map:1), so no kernel text reaches the LCD and
- * nothing else draws on fb0: this tool owns the screen from the initramfs
- * until the kiosk's compositor takes the display (docs/boot.md "Boot
+ * that never exists (fbcon=map:1). So no kernel text reaches the LCD, and
+ * nothing else draws on fb0. This tool owns the screen from the initramfs
+ * until the compositor of the kiosk takes the display (docs/boot.md "Boot
  * splash").
  *
- *   tsx-splash [-s TEXT] [-p PCT] show      image + status line + progress bar
+ *   tsx-splash [-s TEXT] [-p PCT] show      image, status line and progress bar
  *   tsx-splash [-s TEXT] [-p PCT] status    redraw only the status band
  *   tsx-splash [-s TEXT] [-p PCT] png FILE  the same frame as an (uncompressed)
  *                                           PNG at the framebuffer size, for
- *                                           the compositor's background
+ *                                           the compositor background
  *   tsx-splash console                      give the screen to the text console
- *                                           (bind fbcon to fb0: boot failures,
- *                                           the rescue, BOOT_VERBOSE)
- *   tsx-splash size                         print WIDTHxHEIGHT (of the frame: the
+ *                                           (bind fbcon to fb0, for boot
+ *                                           failures, the rescue, BOOT_VERBOSE)
+ *   tsx-splash size                         print WIDTHxHEIGHT of the frame (the
  *                                           framebuffer turned to the orientation)
  *   tsx-splash [-s TEXT] [-p PCT] fbpng FILE  the frame as it lands on the
  *                                           framebuffer (native landscape LCD
- *                                           orientation), as a PNG: tests
+ *                                           orientation), as a PNG, for tests
  *
- * Options: -d DIR (default /usr/share/tsx/splash): splash-WxH.ppm (binary
- * PPM, one per panel size; another size is centred on black) and
- * font-16.psf / font-24.psf (PSF1 or PSF2 console fonts, 24 on screens at
- * least 720 lines high); -f FB (default /dev/fb0); -p -1 = no bar;
- * -g WxH: framebuffer size for "png", "fbpng" and "size" without opening the
- * framebuffer; -o ORIENTATION: landscape | portrait | landscape-flipped |
- * portrait-flipped (default: the name in /etc/tsx/orientation, env
- * TSX_ORIENTATION_FILE, else landscape; docs/rootfs.md "Orientation"). The
- * frame is composed upright for the viewer (800x1280 on the 1280x800 LCD in
- * portrait, from splash-800x1280.ppm) and turned onto the framebuffer: ROTATE
- * quarter turns clockwise (portrait 3, portrait-flipped 1, landscape-flipped
- * 2; the table is tsx-orientation's). "png" writes the upright frame (the
- * compositor turns its output itself).
- * The background of the artwork is black; the status band is redrawn on
+ * Options:
+ * -d DIR (default /usr/share/tsx/splash) holds splash-WxH.ppm (binary PPM,
+ * one per panel size, and the tool centers another size on black) and
+ * font-16.psf and font-24.psf (PSF1 or PSF2 console fonts, 24 on screens at
+ * least 720 lines high).
+ * -f FB (default /dev/fb0).
+ * -p -1 means no bar.
+ * -g WxH sets the framebuffer size for "png", "fbpng" and "size" without
+ * opening the framebuffer.
+ * -o ORIENTATION is landscape, portrait, landscape-flipped or
+ * portrait-flipped. The default is the name in /etc/tsx/orientation (env
+ * TSX_ORIENTATION_FILE), else landscape (docs/rootfs.md "Orientation").
+ *
+ * The tool composes the frame upright for the viewer (800x1280 on the 1280x800
+ * LCD in portrait, from splash-800x1280.ppm). It turns the frame onto the
+ * framebuffer by ROTATE quarter turns clockwise (portrait 3, portrait-flipped
+ * 1, landscape-flipped 2, the table of tsx-orientation). "png" writes the
+ * upright frame, because the compositor turns its output itself.
+ * The background of the artwork is black. The tool redraws the status band on
  * black, so "status" needs no image. "show" and "status" do nothing while the
  * text console owns the screen (fbcon bound: the rescue, BOOT_VERBOSE, an
- * older kernel without fbcon=map:1), so they never draw over boot text.
- * "show" records the framebuffer driver (fix.id) in /run/tsx-splash.fb; when
- * "status" finds another driver on fb0 (the DRM driver replaced simpledrm on
- * U-Boot's framebuffer after "show", and switched that plane off), or another
- * orientation (the initramfs knows it only once the root file system is
- * mounted), it does a full "show" instead, so the splash comes back rather
- * than a lone status band.
+ * older kernel without fbcon=map:1). So they never draw over boot text.
+ * "show" records the framebuffer driver (fix.id) in /run/tsx-splash.fb.
+ * "status" does a full "show" instead in two cases. In the first case, fb0
+ * has another driver: the DRM driver replaced simpledrm on the U-Boot
+ * framebuffer after "show" and switched that plane off. In the second case,
+ * the orientation changed: the initramfs knows it only once the root file
+ * system is mounted. The full "show" brings the splash back and not just a
+ * lone status band.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -64,9 +70,9 @@ static int PW, PH;          /* framebuffer size (native LCD orientation) */
 static int rot;             /* quarter turns clockwise of the frame on the framebuffer */
 static uint8_t *rgb;        /* frame, 3 bytes per pixel */
 
-/* orientation name -> quarter turns clockwise on the LCD (tsx-orientation's
- * table: the panel turned clockwise shows the picture turned counter-
- * clockwise); -1 = not a name */
+/* Map an orientation name to quarter turns clockwise on the LCD (the table of
+ * tsx-orientation: a panel turned clockwise shows the picture turned
+ * counter-clockwise). Return -1 if the string is not a name. */
 static int orient_rot(const char *o)
 {
 	if (!strcmp(o, "landscape")) return 0;
@@ -76,8 +82,8 @@ static int orient_rot(const char *o)
 	return -1;
 }
 
-/* the configured orientation (first line of the file; missing/invalid =
- * landscape) */
+/* The configured orientation, from the first line of the file. A missing
+ * or invalid file gives landscape. */
 static int orient_file_rot(void)
 {
 	const char *path = getenv("TSX_ORIENTATION_FILE") ? getenv("TSX_ORIENTATION_FILE") : "/etc/tsx/orientation";
@@ -91,7 +97,7 @@ static int orient_file_rot(void)
 	return (r = orient_rot(b)) < 0 ? 0 : r;
 }
 
-/* the framebuffer size is known: the frame is the same turned by rot */
+/* The framebuffer size is known. The frame has the same size, turned by rot. */
 static void set_size(int pw, int ph)
 {
 	PW = pw; PH = ph;
@@ -99,7 +105,7 @@ static void set_size(int pw, int ph)
 	H = rot & 1 ? pw : ph;
 }
 
-/* frame pixel shown at framebuffer pixel (px, py) */
+/* The frame pixel that appears at framebuffer pixel (px, py). */
 static const uint8_t *frame_at(int px, int py)
 {
 	int lx, ly;
@@ -112,7 +118,7 @@ static const uint8_t *frame_at(int px, int py)
 	return rgb + ((size_t)ly * W + lx) * 3;
 }
 
-/* framebuffer position of frame pixel (lx, ly) */
+/* The framebuffer position of frame pixel (lx, ly). */
 static void to_fb(int lx, int ly, int *px, int *py)
 {
 	switch (rot) {
@@ -182,7 +188,8 @@ static void fill(int x, int y, int w, int h, uint32_t c)
 			put(i, j, c);
 }
 
-/* text centred on (cx, y top); ASCII only (Terminus' ISO 8859-1 fonts map it 1:1) */
+/* Draw text centered on cx, with its top at y. ASCII only. The Terminus
+ * ISO 8859-1 fonts map ASCII 1:1. */
 static void text(const struct font *ft, const char *s, int cx, int y, uint32_t c)
 {
 	int n = strlen(s), x = cx - n * ft->w / 2;
@@ -197,7 +204,7 @@ static void text(const struct font *ft, const char *s, int cx, int y, uint32_t c
 	}
 }
 
-/* binary PPM (P6, maxval 255) centred into the frame */
+/* Copy a binary PPM (P6, maxval 255) into the frame, centered. */
 static int ppm_blit(const char *path)
 {
 	size_t len, o = 2;
@@ -225,7 +232,7 @@ static int ppm_blit(const char *path)
 	return 0;
 }
 
-/* the status band: one text line and the progress bar below it */
+/* The status band has one text line and the progress bar below it. */
 static int band_y, band_h;
 static void draw_status(const char *s, int pct)
 {
@@ -249,7 +256,8 @@ static void draw_status(const char *s, int pct)
 	free(ft.mem);
 }
 
-/* is the framebuffer console bound (a vtconsole "frame buffer device" with bind = 1)? */
+/* Return 1 if the framebuffer console is bound (a vtconsole "frame buffer
+ * device" with bind = 1). */
 static int fbcon_bound(void)
 {
 	DIR *d = opendir("/sys/class/vtconsole");
@@ -284,8 +292,8 @@ static uint32_t chan(unsigned v, const struct fb_bitfield *b)
 	return b->length ? ((uint32_t)v >> (8 - (b->length > 8 ? 8 : b->length))) << b->offset : 0;
 }
 
-/* write the framebuffer rectangle [x0, x1) x [y0, y1) from the (turned) frame
- * in the framebuffer's pixel format */
+/* Write the framebuffer rectangle [x0, x1) x [y0, y1) from the (turned) frame,
+ * in the pixel format of the framebuffer. */
 static void fb_write(int fd, const struct fb_var_screeninfo *var, const struct fb_fix_screeninfo *fix,
 		     int x0, int y0, int x1, int y1)
 {
@@ -311,7 +319,7 @@ static void fb_write(int fd, const struct fb_var_screeninfo *var, const struct f
 	free(row);
 }
 
-/* PNG, 8-bit RGB, stored (uncompressed) deflate blocks: no zlib needed */
+/* PNG, 8-bit RGB, with stored (uncompressed) deflate blocks. It needs no zlib. */
 static uint32_t crc_tab[256];
 static uint32_t crc(uint32_t c, const uint8_t *b, size_t n)
 {
@@ -377,7 +385,7 @@ static void compose(const char *status, int pct)
 	if (!rgb) die("calloc");
 	snprintf(path, sizeof path, "%s/splash-%dx%d.ppm", dir, W, H);
 	if (ppm_blit(path)) {
-		/* another panel size: the largest image that fits, centred */
+		/* Another panel size: use the largest image that fits, centered. */
 		static const int sz[][2] = { { 1280, 800 }, { 800, 1280 }, { 1024, 600 }, { 600, 1024 } };
 		for (unsigned i = 0; i < sizeof sz / sizeof sz[0]; i++) {
 			if (sz[i][0] > W || sz[i][1] > H) continue;
@@ -418,7 +426,7 @@ int main(int argc, char **argv)
 	if (rot < 0) rot = orient_file_rot();
 
 	if (!strcmp(cmd, "console")) {
-		/* FBIOPUT_CON2FBMAP: the first call takes over all consoles */
+		/* FBIOPUT_CON2FBMAP: the first call takes over all consoles. */
 		int fd = open(fbdev, O_RDWR | O_CLOEXEC), ok = 0;
 		if (fd < 0) die(fbdev);
 		for (unsigned con = 1; con <= 12; con++) {
@@ -463,8 +471,8 @@ int main(int argc, char **argv)
 	memcpy(id, fix.id, sizeof fix.id); id[sizeof fix.id] = 0;
 	snprintf(id + strlen(id), 8, " r%d", rot);
 	if (!strcmp(cmd, "status")) {
-		/* another driver or orientation than at "show" (or no "show" yet):
-		 * full redraw */
+		/* The driver or the orientation differs from "show", or there was
+		 * no "show" yet. Redraw the full frame. */
 		char was[sizeof id] = "";
 		FILE *f = fopen(fbid_file, "r");
 		if (f) { if (!fgets(was, sizeof was, f)) was[0] = 0; fclose(f); }
@@ -474,8 +482,8 @@ int main(int argc, char **argv)
 		FILE *f = fopen(fbid_file, "w");
 		if (f) { fputs(id, f); fclose(f); }
 		compose(status, pct);
-		/* the fbdev emulation programs the display on set_par: force it
-		 * (nothing else did, fbcon is not bound), then unblank */
+		/* The fbdev emulation programs the display on set_par. Force it,
+		 * because nothing else did (fbcon is not bound). Then unblank. */
 		var.activate = FB_ACTIVATE_NOW | FB_ACTIVATE_FORCE;
 		var.xoffset = var.yoffset = 0;
 		ioctl(fd, FBIOPUT_VSCREENINFO, &var);
@@ -488,8 +496,8 @@ int main(int argc, char **argv)
 		rgb = calloc((size_t)W * H, 3);
 		if (!rgb) die("calloc");
 		draw_status(status, pct);
-		/* the band (full frame width) on the framebuffer: a column strip
-		 * when the frame is turned a quarter */
+		/* Find the band (full frame width) on the framebuffer. It is a
+		 * column strip when the frame is turned a quarter. */
 		int ax, ay, bx, by;
 		to_fb(0, band_y, &ax, &ay);
 		to_fb(W - 1, band_y + band_h - 1, &bx, &by);

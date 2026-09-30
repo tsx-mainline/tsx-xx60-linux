@@ -1,39 +1,42 @@
 #!/bin/sh
 # vendor-fetch.sh [--check|--force]
 #
-# Fetches the TFA9890 CoolFlux DSP tuning containers (.cnt) from Crestron's
-# own PUBLIC firmware package, instead of the (proprietary, not published)
-# Android vendor tree. Crestron ships these inside the panel firmware .puf,
-# which anyone can download from their update CDN:
+# Fetch the TFA9890 CoolFlux DSP tuning containers (.cnt) from the public
+# Crestron firmware package. The Android vendor tree is proprietary and not
+# published, so this script does not use it. Crestron ships the containers
+# inside the panel firmware .puf. Anyone can download the .puf from the
+# Crestron update CDN:
 #
 #   index    https://crestrondevicefiles.blob.core.windows.net/tsx-firmware/touchscreen.txt
 #            (JSON; deviceModel "TSW-1060*" etc -> fileUrl of the .puf)
 #   version  https://crestrondevicefiles.blob.core.windows.net/tsx-firmware/tss-version.txt
 #   .puf     https://devicefiles.crestron.io/firmware/tsw-xx60_3.002.1061.001.puf (357 MB)
 #
-# .puf layout (see installer/factory/puf-tool.sh for the full reverse-engineering
-# notes): outer ZIP -> tsx-xx60_<ver>.zip -> image_<ver>_r<svn>.zip -> boot.img
-# (an Android v0 boot image, page size 2048, see installer/initramfs/repack-bootimg.py
-# for the header layout). boot.img's ramdisk is gzip cpio and contains
-# jabil/tfa9890/settings_yushan{,_2nd,_3rd}/stereo.cnt among other files.
+# .puf layout (installer/factory/puf-tool.sh has the full reverse-engineering
+# notes): outer ZIP -> tsx-xx60_<ver>.zip -> image_<ver>_r<svn>.zip -> boot.img.
+# boot.img is an Android v0 boot image with page size 2048
+# (installer/initramfs/repack-bootimg.py describes the header layout).
+# Its ramdisk is a gzip cpio. Among other files, the ramdisk holds
+# jabil/tfa9890/settings_yushan{,_2nd,_3rd}/stereo.cnt.
 #
-# This script downloads the .puf (cached, sha256-pinned), unzips only the two
-# intermediate zip layers it must materialize to random-access them (tsx.zip,
-# image.zip; ~370 MB each) and pulls ONLY the small boot.img entry out of
-# image.zip -- the 650 MB system.img entry in the same zip is never written.
-# It then parses the Android boot header by hand (no python assumed) to cut
-# the gzip ramdisk out of boot.img, extracts it with busybox cpio, and copies
-# the DSP containers into vendor-local/tfa9890/, verifying the three
-# stereo.cnt files against sha256s pinned below.
+# This script downloads the .puf (cached, sha256-pinned). It unzips only the
+# two intermediate zip layers (tsx.zip and image.zip, about 370 MB each),
+# because it must write them out to read them at random. From image.zip it
+# pulls only the small boot.img entry. It never writes the 650 MB system.img
+# entry of the same zip.
+# It then parses the Android boot header by hand (it does not need python) and
+# cuts the gzip ramdisk out of boot.img. It extracts the ramdisk with busybox
+# cpio and copies the DSP containers into vendor-local/tfa9890/. It checks
+# the three stereo.cnt files against the sha256 values pinned below.
 #
-# --check    verify vendor-local/tfa9890/*/stereo.cnt against the pinned
-#            hashes only; no network, no extraction. Exit 0 = all present and
-#            correct, 1 = something missing or wrong.
-# --force    redo the download/extract even if vendor-local already has
-#            correct files (default: skip straight to "ok" in that case).
+# --check    only verify vendor-local/tfa9890/*/stereo.cnt against the pinned
+#            hashes. No network, no extraction. Exit 0 means all files are
+#            present and correct. Exit 1 means a file is missing or wrong.
+# --force    redo the download and extraction even if vendor-local already has
+#            correct files. By default the script then skips straight to "ok".
 #
 # Env overrides: TFA_PUF_URL, TFA_PUF_SHA256, TFA_PUF_CACHE (download cache
-# dir), TFA_VENDOR_LOCAL (output dir, same variable mkrootfs.sh reads).
+# dir), TFA_VENDOR_LOCAL (output dir, the same variable mkrootfs.sh reads).
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 log() { echo "vendor-fetch: $*" >&2; }
@@ -44,10 +47,10 @@ TFA_PUF_SHA256=${TFA_PUF_SHA256:-96438108e3175b66c09f1df284ded5fe155593ba06e069e
 TFA_PUF_CACHE=${TFA_PUF_CACHE:-"$HERE/vendor-cache"}
 TFA_VENDOR_LOCAL=${TFA_VENDOR_LOCAL:-"$HERE/vendor-local/tfa9890"}
 
-# Pinned sha256 of each variant's stereo.cnt, computed from the .puf above on
-# 2026-09-26. These match the existing vendor-local/README.md table byte for
-# byte -- the public firmware package and the Android vendor tree drop carry
-# the identical containers.
+# Pinned sha256 of the stereo.cnt of each variant. The values come from the
+# .puf above (2026-09-26). They match the table in vendor-local/README.md
+# byte for byte. The public firmware package and the Android vendor tree drop
+# carry identical containers.
 sha_for() {
 	case $1 in
 	settings_yushan) echo b479300ed44a7663afe04fd271b8e059ea4d6e1778939a18e87d004613288de8 ;;
@@ -76,7 +79,7 @@ ensure_tool() { # ensure_tool BINARY [APK_PACKAGE]
 	command -v "$1" > /dev/null 2>&1 || die "missing required tool: $1 (install it, or run inside the Alpine build container)"
 }
 
-do_check() { # do_check: verify vendor-local against pinned hashes, no network
+do_check() { # do_check: verify vendor-local against the pinned hashes, with no network
 	ok=1
 	for v in $VARIANTS; do
 		f="$TFA_VENDOR_LOCAL/$v/stereo.cnt"
@@ -111,7 +114,7 @@ if [ "$MODE" = check ]; then
 fi
 
 if [ "$MODE" != force ] && do_check > /dev/null 2>&1; then
-	log "vendor-local/tfa9890 already present and verified; nothing to do (use --force to redo)"
+	log "vendor-local/tfa9890 already present and verified. There is nothing to do (use --force to redo)"
 	exit 0
 fi
 
@@ -141,7 +144,7 @@ else
 	mv "$PUF_PATH.part" "$PUF_PATH"
 fi
 got=$(sha256_of "$PUF_PATH")
-[ "$got" = "$TFA_PUF_SHA256" ] || die "$PUF_PATH: sha256 $got != pinned $TFA_PUF_SHA256 (Crestron changed the package, or a corrupt download -- delete $TFA_PUF_CACHE and retry)"
+[ "$got" = "$TFA_PUF_SHA256" ] || die "$PUF_PATH: sha256 $got != pinned $TFA_PUF_SHA256 (Crestron changed the package, or the download is corrupt. Delete $TFA_PUF_CACHE and retry)"
 log "puf sha256 ok: $got"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/vendor-fetch.XXXXXX")
@@ -166,7 +169,7 @@ unzip -p "$WORK/image.zip" boot.img > "$WORK/boot.img"
 rm -f "$WORK/image.zip"
 [ "$(head -c 8 "$WORK/boot.img")" = "ANDROID!" ] || die "boot.img is not an Android boot image (bad magic)"
 
-# Android v0 boot header (see installer/initramfs/repack-bootimg.py): magic(8),
+# Android v0 boot header (installer/initramfs/repack-bootimg.py has details): magic(8),
 # kernel_size(4) @8, kernel_addr(4), ramdisk_size(4) @16, ramdisk_addr(4),
 # second_size(4), second_addr(4), tags_addr(4), page_size(4) @36.
 read_u32le() { # read_u32le OFFSET FILE
@@ -181,8 +184,8 @@ ROUNDUP_KERNEL=$((((KERNEL_SIZE + PAGE_SIZE - 1) / PAGE_SIZE) * PAGE_SIZE))
 RAMDISK_OFFSET=$((PAGE_SIZE + ROUNDUP_KERNEL))
 log "boot.img: kernel_size=$KERNEL_SIZE ramdisk_size=$RAMDISK_SIZE page_size=$PAGE_SIZE ramdisk_offset=$RAMDISK_OFFSET"
 
-# ramdisk_offset is always a multiple of page_size, so we can dd in
-# page-sized blocks (fast) and trim to the exact byte count with head -c.
+# ramdisk_offset is always a multiple of page_size. So dd can read page-sized
+# blocks (fast), and head -c trims the result to the exact byte count.
 dd if="$WORK/boot.img" bs="$PAGE_SIZE" skip=$((RAMDISK_OFFSET / PAGE_SIZE)) 2> /dev/null \
 	| head -c "$RAMDISK_SIZE" > "$WORK/ramdisk.cpio.gz"
 [ "$(od -An -tx1 -N2 "$WORK/ramdisk.cpio.gz" | tr -d ' \n')" = "1f8b" ] || die "cut ramdisk is not gzip (header math is wrong)"
@@ -200,7 +203,7 @@ for v in $VARIANTS; do
 	got=$(sha256_of "$src/stereo.cnt")
 	want=$(sha_for "$v")
 	if [ "$got" != "$want" ]; then
-		echo "vendor-fetch: ERROR: $v/stereo.cnt sha256 $got != pinned $want (Crestron shipped a different container -- update sha_for() in this script and vendor-local/README.md deliberately, don't just ignore this)"
+		echo "vendor-fetch: ERROR: $v/stereo.cnt sha256 $got != pinned $want (Crestron shipped a different container. Update sha_for() in this script and vendor-local/README.md on purpose, and do not ignore this)"
 		fail=1
 		continue
 	fi

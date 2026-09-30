@@ -4,7 +4,7 @@
 Reads a kernel bitmap font straight from the kernel source (lib/fonts/font_*.c),
 or a PSF console font file (PSF1 or PSF2, optionally gzipped, e.g. Alpine's
 font-terminus /usr/share/consolefonts/ter-132b.psf.gz, what tsx-confont loads
-with setfont), and draws the text grey-on-black, one glyph per character cell,
+with setfont), and draws the text gray-on-black, one glyph per character cell,
 into a PNG. A PSF font's Unicode table is used to map characters to glyphs,
 like the console does after setfont.
 
@@ -87,7 +87,7 @@ def main():
         img = Image.new("RGB", screen, (0, 0, 0))
         ox = oy = 0
         ccols, crows = screen[0] // w, screen[1] // h
-        print(f"console {ccols}x{crows} cells on {screen[0]}x{screen[1]}; text {cols}x{len(lines)}")
+        print(f"console {ccols}x{crows} cells on {screen[0]}x{screen[1]}. Text {cols}x{len(lines)}")
         if cols > ccols:
             print(f"WARNING: lines longer than {ccols} columns wrap (as on the console)")
             lines = [l[i:i + ccols] for l in lines for i in range(0, max(len(l), 1), ccols)]

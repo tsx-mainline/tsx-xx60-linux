@@ -1,10 +1,11 @@
 #!/bin/sh
-# End-to-end host test of tsx-autoupdate: a fake apk (canned "update" /
-# "upgrade --simulate" / "list -a chromium" / "info -v" output, every call logged)
-# and a fake date (fixed "now", real day-math via -d passthrough) drive the
-# real check/install/status/healthcheck code against temp dirs. Nothing on
-# the host is touched: /etc/apk/world, the chromium binary, rc-service,
-# curl and reboot are all stubs under $T/bin.
+# End-to-end host test of tsx-autoupdate. Two fakes drive the real check,
+# install, status and healthcheck code against temp dirs:
+#  - a fake apk with canned output for "update", "upgrade --simulate",
+#    "list -a chromium" and "info -v". It logs every call.
+#  - a fake date with a fixed "now" and real day-math (-d passthrough)
+# The test touches nothing on the host. /etc/apk/world, the chromium binary,
+# rc-service, curl and reboot are all stubs under $T/bin.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd); BIN=$HERE/../../rootfs/overlay/usr/local/sbin/tsx-autoupdate
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT

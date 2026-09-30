@@ -1,10 +1,11 @@
 #!/bin/bash
 # Host test: builds three THROWAWAY git repos (never the real tsx-mainline
-# ones) in a tmp dir, plants one issue of each kind prepare-publish.sh must
-# catch (a leak, an AI-attribution trailer, a private key + a bare .rsa, a
-# proprietary filename, a big blob, a local-only tag), and a clean control,
-# then runs the real script against them with --repo overrides. No ssh, no
-# network, no remotes added anywhere real.
+# ones) in a tmp dir. It plants one issue of each kind that prepare-publish.sh
+# must catch: a leak, an AI-attribution trailer, a private key and a bare
+# .rsa, a proprietary filename, a big blob, and a local-only tag. It also
+# builds a clean control. Then it runs the real script against the repos
+# with --repo overrides. The test needs no ssh and no network, and it adds no
+# remote to any real repo.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 SCRIPT="$HERE/prepare-publish.sh"
@@ -18,9 +19,9 @@ bad() { echo "  FAIL: $*"; F=$((F+1)); }
 
 mkrepo() { mkdir -p "$W/$1"; git -C "$W/$1" init -q; git -C "$W/$1" config user.name t; git -C "$W/$1" config user.email t@example.com; }
 
-# --- xx60-linux fixture: dirty "import" history (a leak that gets removed
-# again later -- the squash must still produce a leak-free single commit
-# since it only takes import's CURRENT tree, not its history) ------------
+# --- xx60-linux fixture: a dirty "import" history. A leak is added and later
+# removed. The squash must still produce a single commit without the leak,
+# because it takes only the CURRENT tree of import and not its history. ------
 mkrepo xxl; cd "$W/xxl"
 git checkout -q -b import
 echo ok > README; git add README; git commit -q -m init
@@ -89,8 +90,8 @@ echo "$out" | grep -q 'local/pre-scrub-\* tags present\|local-only tags present'
 	&& ok "local/pre-scrub-* tags reported" || bad "bad tags not reported"
 
 # --- an empty (--allow-empty) commit must not be silently skipped by the --
-# history walk (a pathspec on git log/rev-list prunes TREESAME commits;
-# this is what the AI-attribution assertion above already exercises, but
+# history walk (a pathspec on git log/rev-list prunes TREESAME commits.
+# This is what the AI-attribution assertion above already exercises, but
 # assert directly that the commit is not just accidentally absent upstream) -
 git -C "$W/linux" log --oneline tsx-xx60-6.18 | grep -q '^[0-9a-f]* oops$' && ok "fixture's empty commit exists on the branch" || bad "test fixture itself is wrong"
 
@@ -100,9 +101,9 @@ echo "$out" | grep -q '^git push ' && ok "prints push commands" || bad "no push 
 [ "$(git -C "$W/aports" remote)" = "" ] && ok "aports fixture: no remote added" || bad "a remote was added to aports fixture"
 [ "$(git -C "$W/linux" remote)" = "torvalds" ] && ok "linux fixture: still just its one fixture remote" || bad "linux fixture remotes changed"
 
-# --- a linked worktree's .git is a FILE, not a directory (several worktrees
-# share one .git in the real repos this script runs against) -- must not be
-# treated as "no repo here" ------------------------------------------------
+# --- the .git of a linked worktree is a FILE, not a directory. Several
+# worktrees share one .git in the real repos that this script scans. The
+# script must not treat such a worktree as "no repo here". ------------------
 git -C "$W/xxl" worktree add -q -b wt-check "$W/xxl-wt" import
 out=$(run --repo xx60-linux="$W/xxl-wt" --skip-squash --squash-branch import 2>&1)
 echo "$out" | grep -q 'no repo at' && bad "a linked worktree was reported as \"no repo\"" || ok "a linked worktree scans normally (not skipped)"

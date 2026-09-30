@@ -1,12 +1,12 @@
 #!/bin/sh
 # Host test: tsx-voice-run (tsx-voice, VOICE=on) and tsx-esphome-run
-# (tsx-esphome, VOICE=off) must both pick up panel.conf's PANEL_NAME through
-# /run/tsx/voice.conf (written by `tsx-config apply`, unconditionally, so it
-# is there for either front end) for the ESPHome device name (--name) --
-# same /etc default then /run/tsx override precedence as kiosk-session's
-# /etc/kiosk.conf + /run/tsx/kiosk.conf (docs/rootfs.md "Panel
-# configuration"). --print only builds and prints the command, so this needs
-# neither linux-voice-assistant nor python3.
+# (tsx-esphome, VOICE=off) must both read PANEL_NAME from panel.conf for the
+# ESPHome device name (--name). They get it through /run/tsx/voice.conf, which
+# `tsx-config apply` always writes, so both front ends have it. The precedence
+# is the same as for /etc/kiosk.conf and /run/tsx/kiosk.conf in kiosk-session:
+# the /etc default first, then the /run/tsx override (docs/rootfs.md "Panel
+# configuration"). --print only builds and prints the command, so this test
+# needs neither linux-voice-assistant nor python3.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 O=$HERE/../overlay
@@ -40,7 +40,7 @@ out=$(TSX_ESPHOME_CONF="$T/esphome.conf" TSX_ESPHOME_RUN_CONF="$T/run/voice.conf
 chk "esphome, panel.conf override" "$out" "panel-override"
 
 # ---- a NAME set directly in /etc/tsx/voice.conf still wins over hostname --
-# when there is no panel.conf override (existing behaviour, must not regress)
+# when there is no panel.conf override (existing behavior, must not regress)
 rm -f "$T/run/voice.conf"
 printf 'NAME=local-name\nPORT=6053\n' > "$T/voice.conf"
 out=$(TSX_VOICE_CONF="$T/voice.conf" TSX_VOICE_RUN_CONF="$T/run/voice.conf" \

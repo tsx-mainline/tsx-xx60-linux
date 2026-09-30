@@ -1,10 +1,11 @@
 auto lo
 iface lo inet loopback
 
-# ifupdown-ng's dhcp executor defaults to use_hostname_for_dhcp=1 (queries the
-# live hostname itself; no "hostname" property needed here), so udhcpc sends
-# whatever /etc/init.d/tsx-hostname set (it runs before this) as the DHCP
-# hostname option. udhcpc-opts: also ask for the NTP servers (option 42);
+# The dhcp executor of ifupdown-ng defaults to use_hostname_for_dhcp=1. It
+# reads the live hostname itself, so this file needs no "hostname" property.
+# udhcpc sends the name that /etc/init.d/tsx-hostname set (it runs before
+# this) as the DHCP hostname option.
+# udhcpc-opts: also ask for the NTP servers (option 42).
 # /etc/udhcpc/post-bound/tsx-ntp hands them to chrony.
 auto eth0
 iface eth0 inet dhcp

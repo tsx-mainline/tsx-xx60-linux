@@ -1,6 +1,6 @@
 #!/bin/bash
 # Top-level build entry point. Every build is local by default (docker on
-# this machine); see tools/build/README.md for the opt-in remote build.
+# this machine). See tools/build/README.md for the opt-in remote build.
 #
 #   ./build.sh kernel [args]        tools/build/kbuild.sh: zImage + dtbs + boot image
 #                                    (--flavor lts|stable, default lts)

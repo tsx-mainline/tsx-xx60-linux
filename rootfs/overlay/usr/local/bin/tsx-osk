@@ -1,10 +1,12 @@
 #!/bin/sh
 # tsx-osk show|hide|toggle|status: control the on-screen keyboard of the kiosk
 # (KIOSK_OSK in /etc/kiosk.conf). Run as root or as the kiosk user.
-#   squeekboard: shows itself when a text field gets focus and hides when it
-#                loses it; this forces it through its D-Bus API (sm.puri.OSK0).
-#   wvkbd:       has no automatic mode; signals (SIGUSR2 show, SIGUSR1 hide,
-#                SIGRTMIN toggle) to the running wvkbd-* process.
+#   squeekboard: shows itself when a text field gets focus and hides when the
+#                field loses it. This script forces it through the D-Bus API
+#                (sm.puri.OSK0).
+#   wvkbd:       has no automatic mode. This script sends signals (SIGUSR2
+#                show, SIGUSR1 hide, SIGRTMIN toggle) to the running wvkbd-*
+#                process.
 # tsx-idled runs "tsx-osk toggle" on a three-finger tap (OSK_GESTURE).
 . /etc/kiosk.conf
 cmd=${1:-status}

@@ -7,7 +7,7 @@
 #
 # Needs KIOSK_DEVTOOLS=1 on the panel. Opens the tunnel ssh -L PORT:127.0.0.1:9222
 # itself if nothing listens on PORT. Steps:
-#   1. chrome://gpu (cdp.py gpu; the kiosk page goes there and back)
+#   1. chrome://gpu (cdp.py gpu: the kiosk page goes there and back)
 #   2. page load of LOAD_URL (default: the page the kiosk shows, i.e. KIOSK_URL):
 #      navigation timing (TTFB, DCL, load, FCP)
 #   3. page load of the synthetic dashboard cards.html (file:// on the panel,
@@ -21,7 +21,7 @@
 #   7. back to the original page
 # Env: PORT (9222), LOAD_URL, SCROLL_PX (6000), SCROLL_SPEED (1500), REPEAT (2),
 #      IDLE_S (30), LOCAL=1 (validate against a local Chromium on PORT: no ssh,
-#      local /proc; cards page from this directory)
+#      local /proc. cards page from this directory)
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd); ROOTFS_DIR=$(dirname "$HERE")
 CFG=${1:?usage: perf-bench.sh CFG [IP]}; IP=${2:-${PANEL_IP:?set PANEL_IP or pass IP as arg 2}}

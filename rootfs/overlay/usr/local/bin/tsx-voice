@@ -1,7 +1,7 @@
 #!/bin/sh
 # tsx-voice: Assist voice satellite helper (linux-voice-assistant)
 #   tsx-voice ptt       push-to-talk: start a conversation, or stop the running
-#                       one (reply, timer); for tsx-buttons:
+#                       one (reply, timer). For tsx-buttons:
 #                       "on lights long exec tsx-voice ptt"
 #   tsx-voice stop|mute|unmute|volume_up|volume_down   same as the HA controls
 #   tsx-voice cmd NAME  any peripheral API command (start_listening, ...)
@@ -10,7 +10,7 @@ FIFO=${TSX_VOICE_PTT:-/run/tsx/voice/ptt}
 RUN=${TSX_VOICE_RUN:-/run/tsx/voice}
 send() {
 	[ -p "$FIFO" ] || { echo "tsx-voice: satellite not running (no $FIFO)" >&2; exit 2; }
-	# a FIFO write blocks without a reader: give up after 2 s
+	# A FIFO write blocks when no process reads it. Give up after 2 s.
 	timeout 2 sh -c "echo '$1' > '$FIFO'" || { echo "tsx-voice: command not taken (satellite not running?)" >&2; exit 2; }
 }
 case ${1:-} in

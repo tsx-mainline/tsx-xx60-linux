@@ -94,11 +94,11 @@ run set MQTT_USER "$V" >/dev/null 2>&1 && bad "embedded newline accepted" || ok 
 
 echo "== show masks secrets =="
 run set HA_TOKEN "abcdefghijklmnopqrstuvwxyz0123456789ABCDEF" || bad "set HA_TOKEN"
-# captured into a variable first, not `run show | grep -q ...` directly: under
-# pipefail, grep -q's early exit on the first match can SIGPIPE the still-writing
-# upstream process, which would make the PIPELINE's exit status that SIGPIPE
-# (nonzero) instead of grep's own result (the same class of bug documented in
-# installer/emmc/mk-tsxroot-emmc.sh).
+# The test captures the output in a variable first and does not pipe
+# `run show | grep -q ...` directly. Under pipefail, grep -q exits at the first
+# match and can SIGPIPE the upstream process that is still writing. The exit
+# status of the pipeline is then that SIGPIPE (nonzero) and not the result of
+# grep. The same class of bug is documented in installer/emmc/mk-tsxroot-emmc.sh.
 SHOWN=$(run show); RC=$?
 [ $RC = 0 ] && ok "show itself exits 0 (even though the last known key, SSH_AUTHORIZED_KEY, is unset)" || bad "show exited non-zero ($RC)"
 printf '%s\n' "$SHOWN" | grep -q '^HA_TOKEN=abcdefgh' && bad "show printed the raw token" || ok "show masks HA_TOKEN"

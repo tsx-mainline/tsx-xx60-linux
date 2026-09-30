@@ -1,20 +1,20 @@
 #!/system/bin/sh
-# tsx-install-usb: ONE command from a USB stick built by `mkpayload --usb`,
-# run from a root shell -- Crestron's patched sshd (rootsh), the UART
-# console, or an existing mainline/rescue shell. busybox and Android
-# toolbox sh compatible (no bash-only syntax).
+# tsx-install-usb: ONE command from a USB stick built by `mkpayload --usb`.
+# Run it from a root shell: the patched Crestron sshd (rootsh), the UART
+# console, or an existing mainline or rescue shell. It works in busybox and in
+# the Android toolbox sh (no bash-only syntax).
 #
 #   sh /mnt/media_rw/<stick>/tsx-install-usb [--dry-run]
 #
-# What it does: verifies the stick's sha256sums, arms the USB recovery boot
-# path (installer/emmc/tsx-usb-recovery enable, copied onto the stick), sets
-# DataRecoveryDone=1, and reboots. It does NOT install anything itself: the
-# install runs on the NEXT power cycle, when U-Boot's stock jabil_factory
-# hook (now able to see the stick: docs/boot.md "U-Boot USB needs VBUS held
-# before enumeration") boots the stage-2 image from this stick and
-# tsx-autoinstall does the rest, with progress on the panel screen. Leave
-# the stick in until that finishes; tsx-autoinstall renames jabil.txt when
-# it is done, so a stick left in afterwards does not reinstall again.
+# What it does: it verifies the sha256sums of the stick and arms the USB
+# recovery boot path (installer/emmc/tsx-usb-recovery enable, copied onto the
+# stick). It sets DataRecoveryDone=1 and reboots. It does NOT install anything
+# itself. The install runs on the NEXT power cycle. Then the stock jabil_factory
+# hook of U-Boot can see the stick (docs/boot.md "U-Boot USB needs VBUS held
+# before enumeration"). The hook boots the stage-2 image from this stick, and
+# tsx-autoinstall does the rest, with progress on the panel screen. Leave the
+# stick in until that finishes. tsx-autoinstall renames jabil.txt when it is
+# done, so a stick left in afterwards does not reinstall again.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 DRY=0
@@ -26,13 +26,14 @@ case "${1:-}" in
 esac
 die() { echo "tsx-install-usb: ERROR: $*" >&2; exit 1; }
 say() { echo "tsx-install-usb: $*"; }
-# tsx_fw_bound CMD ARGS...: bound a fw_printenv/fw_setenv call (TSX_FWENV_TIMEOUT
-# seconds, default 10). u-boot-tools' fw_env.c read loop spins at 100% CPU
-# forever on a config/file size mismatch instead of erroring out (confirmed on
-# both uboot-tools 2026.07 and Alpine's 2026.04; see docs/boot.md
-# "fw_printenv can hang"). No `timeout` binary dependency: this runs on
-# whatever shell it was invoked from (Android root shell or a mainline/rescue
-# shell), so it is a background job polled once a second instead.
+# tsx_fw_bound CMD ARGS...: run a fw_printenv or fw_setenv call with a time
+# limit of TSX_FWENV_TIMEOUT seconds (default 10). On a config or file size
+# mismatch, the read loop in fw_env.c of u-boot-tools spins at 100% CPU forever
+# instead of an error. This is confirmed on uboot-tools 2026.07 and Alpine
+# 2026.04 (see docs/boot.md "fw_printenv can hang"). The function does not depend on a
+# `timeout` binary, because this script runs on whatever shell started it
+# (Android root shell or a mainline or rescue shell). It uses a background job
+# that it polls once a second.
 tsx_fw_bound() {
 	"$@" &
 	fwb_pid=$!
@@ -50,18 +51,18 @@ tsx_fw_bound() {
 
 [ "$(id -u 2>/dev/null)" = 0 ] || die "not root (ssh -tt admin@<panel> then rootsh, or a UART root console)"
 SUMS=$HERE/tsx-install/SHA256SUMS
-[ -f "$SUMS" ] || die "$HERE is not a tsx-install stick (no tsx-install/SHA256SUMS); run mkpayload --usb to build one"
+[ -f "$SUMS" ] || die "$HERE is not a tsx-install stick (no tsx-install/SHA256SUMS). Run mkpayload --usb to build one"
 
-say "verifying the stick payload (sha256; this can take a minute)"
+say "verifying the stick payload (sha256. This can take a minute)"
 if ! ( cd "$HERE" && sha256sum -c tsx-install/SHA256SUMS >/tmp/tsx-install-usb.sums 2>&1 ); then
 	grep -v ': OK$' /tmp/tsx-install-usb.sums | head -n 5
-	die "stick payload corrupt (sha256 mismatch above); do not proceed"
+	die "stick payload corrupt (sha256 mismatch above). Do not proceed"
 fi
 say "stick payload OK"
 
 RECOVERY=$HERE/tsx-usb-recovery
 [ -x "$RECOVERY" ] || RECOVERY=$HERE/tsx-install/tsx-usb-recovery
-[ -x "$RECOVERY" ] || die "tsx-usb-recovery not found on the stick (expected next to tsx-install-usb; rebuild the stick with mkpayload --usb)"
+[ -x "$RECOVERY" ] || die "tsx-usb-recovery not found on the stick (expected next to tsx-install-usb. Rebuild the stick with mkpayload --usb)"
 
 if [ "$DRY" = 1 ]; then
 	say "[dry-run] would run: sh $RECOVERY enable"
@@ -70,7 +71,7 @@ if [ "$DRY" = 1 ]; then
 fi
 
 say "arming the USB recovery boot path"
-sh "$RECOVERY" enable || die "tsx-usb-recovery enable failed; the stick will not be seen by jabil_factory yet. See the message above."
+sh "$RECOVERY" enable || die "tsx-usb-recovery enable failed. The stick will not be seen by jabil_factory yet. See the message above."
 
 FWP=$(command -v fw_printenv 2>/dev/null || echo /system/bin/fw_printenv)
 FWS=$(command -v fw_setenv 2>/dev/null || echo /system/bin/fw_setenv)
@@ -82,7 +83,7 @@ else
 	say "DataRecoveryDone already 1"
 fi
 
-say "armed. Leave the stick in. Rebooting now; the next power cycle installs from this stick (progress on the panel screen)."
+say "armed. Leave the stick in. Rebooting now. The next power cycle installs from this stick (progress on the panel screen)."
 sync
 sleep 2
 if command -v busybox >/dev/null 2>&1; then busybox reboot -f

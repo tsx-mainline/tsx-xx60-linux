@@ -1,41 +1,44 @@
 # tsx-tfa.sh: find the TFA9890 speaker DSP files (.cnt containers) on the
-# panel itself, so an install does not have to download Crestron's 357 MB
+# panel itself. Then an install does not have to download the 357 MB Crestron
 # firmware package (docs/install.md "TFA9890 speaker DSP tuning").
-# Sourced by:
+# These files source it:
 #   - installer/steps/tsx-rescue-install (the `tfa` command, in the rescue:
-#     busybox ash, RAM root; runs BEFORE anything on the eMMC is written)
+#     busybox ash, RAM root). It runs BEFORE anything is written to the eMMC.
 #   - installer/tsx-install-mainline (host: tsx_tfa_plan only)
 #   - installer/lib/tests/test-tsx-tfa.sh (host tests, synthetic files only)
-# POSIX sh + `local`. Reads block devices, never writes them: the old root is
-# mounted read-only with `noload` (no journal replay).
+# Use POSIX sh + `local`. The code reads block devices and never writes them.
+# It mounts the old root read-only with `noload` (no journal replay).
 #
-# Sources, in order; the first one with all three variants valid wins:
+# The sources, in order. The first source with all three variants valid wins.
 #   root          the current mainline root (a reinstall):
 #                 usr/local/share/tsx/tfa9890/<variant>/stereo.cnt on eMMC p8
-#   android-boot  stock Android: the Android boot image on the eMMC `boot`
-#                 region (p7). Android v0 header, gzip cpio ramdisk with
-#                 jabil/tfa9890/<variant>/stereo.cnt (the same files
-#                 rootfs/vendor-fetch.sh takes out of the .puf's boot.img)
-#   earlier       files an earlier attempt in this same rescue session already
-#                 collected (a re-run after a failed install, when p7/p8 may be
-#                 written already)
-# If none is complete, the source with the most valid variants is kept, and
-# the host decides (tsx_tfa_plan) whether to try the .puf download first.
+#   android-boot  stock Android: the Android boot image in the eMMC `boot`
+#                 region (p7). It has an Android v0 header and a gzip cpio
+#                 ramdisk with jabil/tfa9890/<variant>/stereo.cnt. These are
+#                 the same files that rootfs/vendor-fetch.sh takes out of the
+#                 boot.img of the .puf.
+#   earlier       files that an earlier attempt in this same rescue session
+#                 already collected (a re-run after a failed install, when p7
+#                 or p8 may already have new data)
+# If no source is complete, the code keeps the source with the most valid
+# variants. The host then decides (tsx_tfa_plan) whether to try the .puf
+# download first.
 #
-# Validation of each stereo.cnt (tsx_tfa_validate):
+# How tsx_tfa_validate checks each stereo.cnt:
 #   sha256 = the pinned one (the same list as rootfs/vendor-fetch.sh)  -> ok
 #   another sha256, but a sane NXP container ("PM" id, size field = file
 #   size, 1 KiB..1 MiB, CRC32 correct when awk can compute it)
 #                                   -> accepted with a warning (hash + firmware)
-#   anything else                   -> rejected (the next source is tried)
-# Test hooks: TSX_TFA_PINS (file of "variant sha256" lines, replaces the
-# pinned list), a directory given as the root device (used as the mounted root).
+#   anything else                   -> rejected (the code tries the next source)
+# Test hooks: TSX_TFA_PINS (a file of "variant sha256" lines, replaces the
+# pinned list) and a directory as the root device (used as the mounted root).
 
 TSX_TFA_VARIANTS="settings_yushan settings_yushan_2nd settings_yushan_3rd"
 TSX_TFA_REL=usr/local/share/tsx/tfa9890
 
-# tsx_tfa_pinned VARIANT: the known-good sha256 (from Crestron's public
-# tsw-xx60_3.002.1061.001 package, identical to the Android vendor tree)
+# tsx_tfa_pinned VARIANT: print the known-good sha256. It comes from the public
+# Crestron tsw-xx60_3.002.1061.001 package and is identical to the Android
+# vendor tree.
 tsx_tfa_pinned() {
 	if [ -n "${TSX_TFA_PINS:-}" ]; then
 		awk -v v="$1" '$1 == v { print $2; exit }' "$TSX_TFA_PINS"
@@ -51,16 +54,17 @@ tsx_tfa_pinned() {
 
 tsx_tfa_sha256() { sha256sum < "$1" | cut -d' ' -f1; }
 
-# tsx_tfa_u32le FILE OFFSET: little-endian u32 as a decimal number
+# tsx_tfa_u32le FILE OFFSET: print a little-endian u32 as a decimal number
 tsx_tfa_u32le() {
 	set -- $(od -An -v -tu1 -j "$2" -N4 "$1" 2>/dev/null)
 	[ $# = 4 ] || return 1
 	echo $(($1 + $2 * 256 + $3 * 65536 + $4 * 16777216))
 }
 
-# tsx_tfa_crc32 FILE SKIP: zlib CRC32 of FILE from byte SKIP on, as a decimal
-# number. Returns 2 (prints nothing) if this awk cannot do it: no and/xor/
-# rshift functions, or a result that fails the "123456789" self-test.
+# tsx_tfa_crc32 FILE SKIP: print the zlib CRC32 of FILE from byte SKIP on, as
+# a decimal number. If this awk cannot compute it, return 2 and print nothing.
+# This happens when awk has no and, xor and rshift functions, or when the
+# result fails the "123456789" self-test.
 tsx_tfa_crc32() {
 	{ printf '123456789' | od -An -v -tu1; echo X; od -An -v -tu1 -j "$2" "$1"; } 2>/dev/null | awk '
 	BEGIN {
@@ -77,11 +81,11 @@ tsx_tfa_crc32() {
 	}
 	{ for (i = 1; i <= NF; i++) crc = xor(rshift(crc, 8), T[and(xor(crc, $i), 255)]) }
 	END { if (part == 1) printf "%.0f\n", xor(crc, 4294967295) }' 2>/dev/null
-	# an awk without the functions fails to parse: no output at all
+	# An awk without these functions fails to parse and prints nothing.
 }
 
-# tsx_tfa_validate FILE VARIANT: prints one line; returns 0 (pinned sha256),
-# 1 (unknown sha256, sane container) or 2 (reject)
+# tsx_tfa_validate FILE VARIANT: print one line. Return 0 (pinned sha256),
+# 1 (unknown sha256, sane container) or 2 (reject).
 tsx_tfa_validate() {
 	local f=$1 v=$2 size sha want id hsize hcrc crc
 	[ -f "$f" ] || { echo "missing"; return 2; }
@@ -97,27 +101,27 @@ tsx_tfa_validate() {
 	hcrc=$(tsx_tfa_u32le "$f" 10)
 	crc=$(tsx_tfa_crc32 "$f" 14) || crc=
 	if [ -z "$crc" ]; then
-		echo "sha256 $sha is NOT the pinned one; NXP container, $size bytes (CRC not checked: awk cannot)"; return 1
+		echo "sha256 $sha is NOT the pinned one. NXP container, $size bytes (CRC not checked: awk cannot)"; return 1
 	fi
-	[ "$crc" = "$hcrc" ] || { echo "container CRC mismatch (header $hcrc, data $crc; sha256 $sha)"; return 2; }
-	echo "sha256 $sha is NOT the pinned one; valid NXP container, $size bytes, CRC ok"
+	[ "$crc" = "$hcrc" ] || { echo "container CRC mismatch (header $hcrc, data $crc. sha256 $sha)"; return 2; }
+	echo "sha256 $sha is NOT the pinned one. Valid NXP container, $size bytes, CRC ok"
 	return 1
 }
 
-# tsx_tfa_take SRCDIR OKDIR LABEL FWINFO: validate SRCDIR/<variant>/stereo.cnt,
-# copy the accepted ones to OKDIR/<variant>/stereo.cnt. Sets TSX_TFA_N (accepted
-# count) and TSX_TFA_SUMS (lines "variant=sha256 pinned|unpinned").
+# tsx_tfa_take SRCDIR OKDIR LABEL FWINFO: validate SRCDIR/<variant>/stereo.cnt
+# and copy the accepted files to OKDIR/<variant>/stereo.cnt. Set TSX_TFA_N (the
+# count of accepted files) and TSX_TFA_SUMS (lines "variant=sha256 pinned|unpinned").
 tsx_tfa_take() {
 	local src=$1 ok=$2 label=$3 fw=$4 v why rc
 	TSX_TFA_N=0 TSX_TFA_SUMS=
 	rm -rf "$ok"; mkdir -p "$ok"
-	ls "$src"/*/stereo.cnt >/dev/null 2>&1 || return 0   # the source said why
+	ls "$src"/*/stereo.cnt >/dev/null 2>&1 || return 0   # the source already printed why
 	for v in $TSX_TFA_VARIANTS; do
 		[ -f "$src/$v/stereo.cnt" ] || { echo "  $label: $v/stereo.cnt not there"; continue; }
 		rc=0; why=$(tsx_tfa_validate "$src/$v/stereo.cnt" "$v") || rc=$?
 		case $rc in
 		0) echo "  $label: $v/stereo.cnt ok: $why";;
-		1) echo "  $label: WARNING: $v/stereo.cnt: $why; accepted (from firmware: ${fw:-unknown})";;
+		1) echo "  $label: WARNING: $v/stereo.cnt: $why. Accepted (from firmware: ${fw:-unknown})";;
 		*) echo "  $label: $v/stereo.cnt REJECTED: $why"; continue;;
 		esac
 		mkdir -p "$ok/$v"
@@ -129,11 +133,12 @@ tsx_tfa_take() {
 	done
 }
 
-# tsx_tfa_from_root DEV OUTDIR: copy the old root's DSP files (if any) to
-# OUTDIR/<variant>/stereo.cnt. DEV is mounted ro,noload; a directory is used
-# as the mounted root as it is (host tests). Also sets TSX_TFA_ROOT_FW (the
-# firmware line of the old root's SOURCE file) and TSX_TFA_ANDROID (stock
-# Android's build id, if DEV is Android's system partition instead).
+# tsx_tfa_from_root DEV OUTDIR: copy the DSP files of the old root (if any) to
+# OUTDIR/<variant>/stereo.cnt. The function mounts DEV ro,noload. A directory
+# works as the mounted root as it is (host tests). The function also sets
+# TSX_TFA_ROOT_FW (the firmware line in the SOURCE file of the old root). If
+# DEV is the system partition of Android instead, it sets TSX_TFA_ANDROID (the
+# build id of stock Android).
 tsx_tfa_from_root() {
 	local dev=$1 out=$2 m v rc=1
 	TSX_TFA_ROOT_FW= TSX_TFA_ANDROID=
@@ -160,9 +165,9 @@ tsx_tfa_from_root() {
 	return $rc
 }
 
-# tsx_tfa_from_bootimg DEV OUTDIR: DEV holds an Android v0 boot image; copy
+# tsx_tfa_from_bootimg DEV OUTDIR: DEV holds an Android v0 boot image. Copy
 # jabil/tfa9890/<variant>/stereo.cnt from its gzip cpio ramdisk to
-# OUTDIR/<variant>/stereo.cnt. Sets TSX_TFA_BOOT_FW from jabil/yushan_version.txt.
+# OUTDIR/<variant>/stereo.cnt. Set TSX_TFA_BOOT_FW from jabil/yushan_version.txt.
 tsx_tfa_from_bootimg() {
 	local dev=$1 out=$2 w ks rs ps off v rc=1
 	TSX_TFA_BOOT_FW=
@@ -195,10 +200,11 @@ tsx_tfa_from_bootimg() {
 }
 
 # tsx_tfa_collect OUTDIR BOOTDEV ROOTDEV [EARLIERDIR]: try the sources in
-# order (see the top of this file); OUTDIR gets the winner's files and a
-# SOURCE file (source=, firmware=, one "variant=sha256 pinned|unpinned" line
-# each). Last line printed: "TFA-RESULT source=<name> count=<n>" (count 0 and
-# source=none if nothing valid was found). Always returns 0.
+# order (see the top of this file). OUTDIR gets the files of the winner and a
+# SOURCE file (source=, firmware=, and one "variant=sha256 pinned|unpinned"
+# line for each variant). The last line printed is
+# "TFA-RESULT source=<name> count=<n>". If nothing valid is found, it says
+# count 0 and source=none. The function always returns 0.
 tsx_tfa_collect() {
 	local out=$1 boot=$2 root=$3 earlier=${4:-} w src fw best=none bestn=0 bestfw= bestsums=
 	w=$out.tmp; rm -rf "$w" "$out"; mkdir -p "$w"
@@ -239,11 +245,12 @@ tsx_tfa_collect() {
 	return 0
 }
 
-# tsx_tfa_plan MODE PANEL_COUNT: what the host does next (--tfa-source MODE,
-# PANEL_COUNT = valid variants the rescue found, "-" if it was not asked):
-#   use-panel      take the panel's files, no download
+# tsx_tfa_plan MODE PANEL_COUNT: print what the host does next (--tfa-source
+# MODE). PANEL_COUNT is the number of valid variants that the rescue found, or
+# "-" if nobody asked the rescue.
+#   use-panel      take the files of the panel, no download
 #   puf            run rootfs/vendor-fetch.sh (the .puf download) and push its files
-#   puf-or-panel   try the .puf; if that fails, take the panel's partial set
+#   puf-or-panel   try the .puf. If that fails, take the partial set of the panel
 #   none           no DSP files
 tsx_tfa_plan() {
 	case "$1:$2" in

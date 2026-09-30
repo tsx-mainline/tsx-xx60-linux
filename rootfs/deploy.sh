@@ -1,14 +1,15 @@
 #!/bin/bash
-# Host side of the installation: drives install.sh on a panel that runs the
-# rescue system (rootfs switch_root initramfs or rescue initramfs), over ssh.
+# Host side of the installation. It drives install.sh over ssh on a panel that
+# runs the rescue system (rootfs switch_root initramfs or rescue initramfs).
 #
 #   ./deploy.sh IP [--url URL] [--token-file F] [--bootimg boot.img] [--check-only]
 #
-# 1. copies install.sh + tsx-disk.sh to /tmp/tsx on the panel, runs "check"
-# 2. pulls the first MiB of p5 to backups/p5-first1M-<time>.img (host)
-# 3. optional: copies the boot image to panel RAM for --bootimg
-# 4. streams out/rootfs.tar.gz over ssh into "install.sh install"
-# Nothing is written to the panel before step 4. Password "tsx" (sshpass) or keys.
+# 1. Copy install.sh and tsx-disk.sh to /tmp/tsx on the panel, and run "check".
+# 2. Pull the first MiB of p5 to backups/p5-first1M-<time>.img (host).
+# 3. Optional, for --bootimg: copy the boot image to panel RAM.
+# 4. Stream out/rootfs.tar.gz over ssh into "install.sh install".
+# The script writes nothing to the panel before step 4.
+# Use the password "tsx" (sshpass) or ssh keys.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 IP=${1:?usage: deploy.sh IP [--url URL] [--token-file F] [--bootimg IMG] [--check-only]}; shift

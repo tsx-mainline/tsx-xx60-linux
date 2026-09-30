@@ -1,26 +1,30 @@
 #!/bin/bash
 # Host test for the on-panel setup page (PLAN.md section 16 item 3,
-# docs/rootfs.md "Setup page"): tsx-kiosk-url (which URL the kiosk should
-# load), tsx-config's `validate`/`setup` subcommands, tsx-setup-helper (the
-# one root process privileged writes go through), and tsx-setupd itself --
-# all real scripts, run as real processes against fixture files and fake
-# helper binaries (never the panel, never docker, never root: tsx-setupd and
-# tsx-setup-helper both run as this test's own uid, with
-# TSX_APPLY_ALLOW_NONROOT standing in for the root check tsx-config apply/
-# setup would otherwise require).
+# docs/rootfs.md "Setup page"). The test covers these parts:
+#  - tsx-kiosk-url (which URL the kiosk loads)
+#  - the `validate` and `setup` subcommands of tsx-config
+#  - tsx-setup-helper (the one root process that privileged writes go through)
+#  - tsx-setupd itself
+# All scripts are real. They run as real processes against fixture files and
+# fake helper binaries. The test never uses the panel, docker or root.
+# tsx-setupd and tsx-setup-helper run as the uid of this test.
+# TSX_APPLY_ALLOW_NONROOT replaces the root check that tsx-config apply and
+# setup would otherwise require.
 #
-# Covers: the trigger (unconfigured -> setup page), form validation (through
-# the exact same tsx-config regex table, including a shell-metacharacter
-# payload that must round-trip literally and never execute), the LAN pairing
-# code (not needed on localhost, required and rate-limited from a simulated
-# LAN client), tsx-setupd listening on loopback ONLY once configured (not
-# just refusing at the HTTP layer -- a simulated LAN connection must fail to
-# even connect), tsx-setup-helper rejecting anything outside its fixed
-# command set (never running the fake tsx-config/chpasswd for a bad line),
-# the setup-open window being monotonic (immune to a broken/wrong `date`,
-# since none of this ever calls it), a save landing in a temp panel.conf,
-# and that no secret ever appears in a JSON response or in either daemon's
-# own log.
+# The test covers:
+#  - the trigger (unconfigured -> setup page)
+#  - form validation through the same tsx-config regex table. This includes a
+#    shell-metacharacter payload that must round-trip literally and never run.
+#  - the LAN pairing code: not needed on localhost, required and rate-limited
+#    from a simulated LAN client
+#  - tsx-setupd listens on loopback ONLY once configured. It must not just
+#    refuse at the HTTP layer: a simulated LAN connection must fail to connect.
+#  - tsx-setup-helper rejects anything outside its fixed command set. It never
+#    runs the fake tsx-config or chpasswd for a bad line.
+#  - the setup-open window is monotonic. A broken or wrong `date` does not
+#    affect it, because none of this code calls date.
+#  - a save lands in a temp panel.conf
+#  - no secret ever appears in a JSON response or in the log of either daemon
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 SBIN="$HERE/overlay/usr/local/sbin"
@@ -87,10 +91,10 @@ EOF
 chmod +x "$T/bin/tsx-config"
 cat > "$T/bin/chpasswd" <<'EOF'
 #!/bin/sh
-# stands in for the real chpasswd: logs what it was given on stdin (so the
-# test can check the password travels there, never as a shell argument),
-# then rewrites the fixture shadow file the same way the real tool would --
-# so tsx-setup-helper's own follow-up read of it is realistic.
+# stands in for the real chpasswd. It logs what it gets on stdin, so the
+# test can check that the password arrives there and never as a shell
+# argument. Then it rewrites the fixture shadow file as the real tool does,
+# so the follow-up read of tsx-setup-helper is realistic.
 echo "chpasswd $*" >> "$FAKE_CMD_LOG"
 cat > "$FAKE_CHPASSWD_LOG"
 printf 'root:$6$faketestfixturesalt$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN.:19000:0:99999:7:::\n' > "$TSX_SHADOW_FILE"
@@ -103,13 +107,13 @@ echo "rc-service \$*" >> "$T/rc-service.log"
 case "\$2" in status) exit 1;; *) exit 0;; esac
 EOF
 chmod +x "$T/bin/rc-service"
-# a deliberately broken/wrong `date`, early on PATH: tsx-config setup and
-# tsx-kiosk-url must not be affected AT ALL (they read /proc/uptime, never
-# date +%s -- docs/rootfs.md "Setup page") -- this is what proves the setup
-# window is monotonic, not wall-clock, without needing to actually step the
-# system clock (which a host test cannot safely do). tsx-setup-helper's own
-# log() DOES call date (cosmetic timestamps only); it must keep working
-# (not crash), just with a silly-looking log line.
+# A deliberately broken `date`, early on PATH. tsx-config setup and
+# tsx-kiosk-url must not be affected AT ALL. They read /proc/uptime and never
+# call date +%s (docs/rootfs.md "Setup page"). This proves that the setup
+# window is monotonic and not wall-clock. The test does not need to step the
+# system clock, which a host test cannot do safely. The log() of
+# tsx-setup-helper DOES call date, for cosmetic timestamps only. It must keep
+# working and must not crash. It only writes a silly-looking log line.
 cat > "$T/bin/date" <<'EOF'
 #!/bin/sh
 echo "2099-01-01 00:00:00 (FAKE_BROKEN_DATE: not real wall-clock time)"
@@ -135,12 +139,11 @@ s.close()
 PORT=$(get_free_port)
 sed -i "s/TSX_SETUP_PORT=0/TSX_SETUP_PORT=$PORT/" "$T/setup.conf"
 
-# --source connects FROM that local address instead of whatever the OS
-# would otherwise pick, so the server sees a non-loopback peer even though
-# both ends are this same test host (a real second LAN host is not
-# available in CI). A short connect timeout: once tsx-setupd is bound
-# loopback-only, a LAN attempt must fail fast (connection refused), not
-# hang.
+# --source connects FROM that local address and not from the address the OS
+# would pick. The server then sees a non-loopback peer, although both ends
+# are this test host. CI has no real second LAN host. The connect timeout is
+# short: after tsx-setupd binds to loopback only, a LAN attempt must fail
+# fast (connection refused) and must not hang.
 cat > "$T/client.py" <<'PYEOF'
 import argparse, http.client, sys
 p = argparse.ArgumentParser()
@@ -179,13 +182,12 @@ sys.stdout.write(raw.decode(errors="replace"))
 PYEOF
 
 call() {
-	# ServerManager (tsx-setupd) can be mid-rebind (closing one listening
-	# socket, opening another -- e.g. right after a save flips
-	# lan_allowed()) for a few milliseconds; a request that lands in that
-	# exact window gets a connection reset/refused, not a real answer.
-	# Retry a couple of times before treating it as this test's own
-	# failure -- a real client (the kiosk, a browser tab) would do the
-	# same rather than give up on the very first reset.
+	# ServerManager (tsx-setupd) can be in the middle of a rebind for a few
+	# milliseconds. It closes one listening socket and opens another, for
+	# example right after a save flips lan_allowed(). A request that arrives
+	# in that window gets a connection reset or refused, not a real answer.
+	# Retry a few times before the test counts this as a failure. A real
+	# client (the kiosk, a browser tab) also retries after the first reset.
 	local out status tries=0
 	while :; do
 		out=$(python3 "$T/client.py" "$@" --port "$PORT")
@@ -200,8 +202,8 @@ call() {
 status_of() { printf '%s\n' "$1" | sed -n '1p'; }
 cookie_of() { printf '%s\n' "$1" | sed -n '2p'; }
 body_of() { printf '%s\n' "$1" | sed -n '3,$p'; }
-jget() {  # jget PATH <<< "$body"  (dotted path into the JSON object; a
-	# numeric segment indexes a list, e.g. tz_list.0)
+jget() {  # jget PATH <<< "$body"   PATH is a dotted path into the JSON object.
+	# A numeric segment indexes a list, e.g. tz_list.0
 	python3 -c "
 import json, sys
 d = json.load(sys.stdin)
@@ -232,7 +234,7 @@ except Exception:
 [ -n "$LANIP" ] && [ "$LANIP" != 127.0.0.1 ] || LANIP=
 
 # ---- start tsx-setup-helper (the root side) + tsx-setupd (unprivileged) --
-# tsx-config itself reads TSX_RUN (a base dir; it appends /tsx internally);
+# tsx-config itself reads TSX_RUN, a base dir. It appends /tsx internally.
 # tsx-setup-helper/tsx-setupd/tsx-kiosk-url read TSX_RUN_DIR (the tsx dir
 # itself, like tsx-panelctl's TSX_RUN_DIR) -- both must resolve to the same
 # physical directory.
@@ -341,11 +343,11 @@ out=$(call POST /setup/api/submit --data '{"KIOSK_URL":"https://ha.example.org",
 body=$(body_of "$out")
 [ "$(jget errors.ORIENTATION <<<"$body")" != "" ] && ok "unknown ORIENTATION rejected" || bad "ORIENTATION sideways accepted: $out"
 
-# shell metacharacters: MQTT_PASSWORD has no character restriction in
-# tsx-config's own val_ok, so this must be accepted -- and, critically,
-# stored and passed through literally, never executed (subprocess argv
-# lists and the helper's own argv-shaped FIFO protocol only, never a shell
-# string built from form input).
+# Shell metacharacters. MQTT_PASSWORD has no character restriction in the
+# val_ok of tsx-config, so tsx-config must accept it. The password must also
+# be stored and passed through literally, and never executed. The code uses
+# only subprocess argv lists and the argv-shaped FIFO protocol of the helper,
+# and never builds a shell string from form input.
 rm -f "$T/PWNED"
 PAYLOAD='$(touch '"$T"'/PWNED); `touch '"$T"'/PWNED2`; ;rm -rf /'
 printf '%s' "$PAYLOAD" > "$T/payload.txt"
@@ -429,7 +431,7 @@ fi
 # ---- 7. tsx-config setup re-opens it for one window, then it expires ---
 # (fake broken `date` is on PATH for all of this: proves the window uses
 # /proc/uptime, not wall-clock time -- docs/rootfs.md "Setup page")
-echo "== tsx-config setup (monotonic window; PATH has a deliberately broken date) =="
+echo "== tsx-config setup (monotonic window, PATH has a deliberately broken date) =="
 BEFORE_UPTIME=$(awk '{print int($1)}' /proc/uptime)
 PATH="$T/bin:$PATH" TSX_CONF="$CONF" TSX_RUN="$RUNBASE" TSX_APPLY_ALLOW_NONROOT=1 \
 	busybox sh "$TSXCONFIG" setup >/dev/null 2>&1

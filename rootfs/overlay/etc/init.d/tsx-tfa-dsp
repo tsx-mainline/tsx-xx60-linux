@@ -1,16 +1,18 @@
 #!/sbin/openrc-run
-# TSW-1060 TFA9890 CoolFlux DSP loader : runs the userspace loader
-# (tsx-tfa-dsp start) once at boot, after tsx-audio has set up the sound
-# card. Needs a kernel built with snd_soc_tfa989x.dsp=1; does nothing, and
-# never fails the boot, if that is not the case, if the TSW1060 sound card
-# is missing, or if the load itself fails (the amplifiers then stay in the
-# kernel's own bypass setup). Variant/vstep/profile: /etc/tsx/tfa-dsp.conf.
+# TSW-1060 TFA9890 CoolFlux DSP loader. It runs the userspace loader
+# (tsx-tfa-dsp start) once at boot, after tsx-audio has configured the sound
+# card. It needs a kernel built with snd_soc_tfa989x.dsp=1.
+# It does nothing, and never fails the boot, in three cases: the kernel lacks
+# that option, the TSW1060 sound card is missing, or the load itself fails.
+# After a failed load, the amplifiers stay in the own bypass setup of the
+# kernel. Variant, vstep and profile: /etc/tsx/tfa-dsp.conf.
 # Log: /var/log/tsx-tfa-dsp.log.
 #
-# On success, writes /run/tsx/tfa-dsp.ok so tsx-audio knows the
-# "Amp Input" mixer controls are already set to DSP and leaves them alone
-# on a later "tsx-audio init" (e.g. a manual re-init after editing
-# audio.conf), instead of resetting them to the plain Left/Right bypass.
+# On success, it writes /run/tsx/tfa-dsp.ok. With that file, tsx-audio knows
+# that the "Amp Input" mixer controls are already set to DSP. On a later
+# "tsx-audio init" (for example a manual re-init after an edit of
+# audio.conf), tsx-audio leaves them alone. It does not reset them to the
+# plain Left/Right bypass.
 description="Load the TFA9890 CoolFlux DSP once at boot (see /etc/tsx/tfa-dsp.conf)"
 depend() {
 	after tsx-audio

@@ -1,43 +1,48 @@
 #!/bin/sh
-# tsx-panelctl: the panel's ONLY privileged surface for the unprivileged
-# Home Assistant ESPHome plugin (PLAN.md section 18). Runs as root, reads
-# fixed, whitelisted commands from a FIFO group-writable by "kiosk" and runs
-# them with the existing root-only CLIs (tsx-ledbar, tsx-keypad, tsx-blank,
-# tsx-config, reboot) or writes the runtime override files they use. Its
-# second client is the quick-settings overlay (tsx-overlay, also user kiosk):
-# brightness-offset, als, blank, reload-page, setup (the "Setup" button,
-# docs/rootfs.md "Setup page").
+# tsx-panelctl: the ONLY privileged surface of the panel for the
+# unprivileged Home Assistant ESPHome plugin (PLAN.md section 18). It runs
+# as root and reads fixed, whitelisted commands from a FIFO that the group
+# "kiosk" can write. It runs them with the existing root-only CLIs
+# (tsx-ledbar, tsx-keypad, tsx-blank, tsx-config, reboot), or it writes the
+# runtime override files that they use. Its second client is the
+# quick-settings overlay (tsx-overlay, also user kiosk): brightness-offset,
+# als, blank, reload-page, setup (the "Setup" button, docs/rootfs.md "Setup
+# page").
 #
 # WHY THIS EXISTS: the voice satellite (tsx-voice / linux-voice-assistant)
-# runs as user kiosk (group kiosk, + audio), not root -- an always-on process that both talks to
-# the network (the ESPHome API port, 6053) and to audio hardware should not
-# also run as root. But every one of these actions already needs root on
-# this panel: tsx-blank signals tsx-idled with pkill (only root or the same
-# UID may signal another user's process), /run/tsx/brightness and
-# /run/tsx/buttons.ctl are root:root 0600/0755 (see rootfs/src/tsx-idled.c,
-# tsx-buttons.c), and tsx-config apply refuses to run non-root. So when the
-# voice satellite's own plugin (rootfs/voice/shim/tsx_lva) needs to act on
-# one of the panel's Home Assistant entities, it writes one line here
-# instead of running the command itself; tsx-esphome (the standalone
-# ESPHome server used when VOICE=off) runs as root already, like tsx-mqtt,
-# and never needs this -- see rootfs/voice/shim/tsx_panel/backend.py's
-# module docstring for the euid check that picks one path or the other.
+# runs as user kiosk (group kiosk, + audio), not as root. It is an always-on
+# process that talks to the network (the ESPHome API port, 6053) and to the
+# audio hardware, so it must not also run as root. But every one of these
+# actions already needs root on this panel:
+# - tsx-blank signals tsx-idled with pkill. Only root or the same UID may
+#   signal the process of another user.
+# - /run/tsx/brightness and /run/tsx/buttons.ctl are root:root 0600/0755
+#   (see rootfs/src/tsx-idled.c, tsx-buttons.c).
+# - tsx-config apply refuses to run as non-root.
+# So when the own plugin of the voice satellite (rootfs/voice/shim/tsx_lva)
+# must act on one of the Home Assistant entities of the panel, it writes one
+# line here. It does not run the command itself. tsx-esphome (the standalone
+# ESPHome server that runs when VOICE=off) already runs as root, like
+# tsx-mqtt, and never needs this. See the module docstring of
+# rootfs/voice/shim/tsx_panel/backend.py for the euid check that picks one
+# path or the other.
 #
-# THREAT MODEL: the FIFO's writer is the "kiosk" group, and "kiosk" is also
-# the user Chromium (unsandboxed on this hardware) runs as -- so treat every
-# line as hostile, not just malformed. Every command below is matched
-# against the EXACT form tsx_panel/backend.py sends (fixed argument count,
-# numeric args range-checked, enum args compared with `=`, never a glob or a
-# caller-chosen string handed to a root CLI as a positional/option
-# argument); anything else is logged (truncated, control characters
-# stripped) and dropped, never run. `read` splits the line into fixed
-# fields itself (no unquoted `$line`/`$*` re-split of caller input), and
-# `set -f` additionally disables pathname expansion as a second layer.
+# THREAT MODEL: the writer of the FIFO is the "kiosk" group. "kiosk" is also
+# the user that Chromium (unsandboxed on this hardware) runs as. So treat
+# every line as hostile, not only as malformed. The script matches every
+# command below against the EXACT form that tsx_panel/backend.py sends: a
+# fixed argument count, numeric args range-checked, enum args compared with
+# `=`. It never hands a glob or a string that the caller chose to a root CLI
+# as a positional or option argument. It logs anything else (truncated, with
+# control characters stripped) and drops it. It never runs it. `read`
+# splits the line into fixed fields itself (no unquoted `$line` or `$*`
+# that splits the input of the caller again). `set -f` also disables
+# pathname expansion as a second layer.
 #
 # Env overrides for tests: TSX_RUN_DIR, TSX_PANELCTL, TSX_LEDBAR, TSX_KEYPAD,
 # TSX_BLANK, TSX_ALS_BIN, TSX_CONFIG_BIN, TSX_REBOOT_BIN, TSX_AMIXER,
 # TSX_SOUND_CARD, TSX_UPDATE_BIN, TSX_PANELCTL_ONESHOT=1 (handle exactly one
-# line then exit; tests only).
+# line, then exit. Tests only).
 set -u -f
 R=${TSX_RUN_DIR:-/run/tsx}
 FIFO=${TSX_PANELCTL:-$R/panelctl}
@@ -54,12 +59,12 @@ ONESHOT=${TSX_PANELCTL_ONESHOT:-0}
 
 log() { echo "$(date '+%F %T') tsx-panelctl: $*"; }
 
-# strip control characters and cap length before a hostile/malformed line
-# ever reaches a log line (it is otherwise never run, only printed).
+# Strip control characters and cap the length before a hostile or malformed
+# line reaches a log line. The script never runs such a line, it only prints it.
 safe() { printf '%s' "$1" | tr -d '\000-\010\013-\037\177' | cut -c1-120; }
 
-# digits only (no sign, no leading '-'), length-capped BEFORE the numeric
-# compare below so an absurdly long digit string can't upset `[ -ge/-le ]`.
+# Digits only (no sign, no leading '-'). The length cap comes BEFORE the
+# numeric compare below, so a very long digit string cannot upset `[ -ge/-le ]`.
 is_uint() {
 	case "$1" in ''|*[!0-9]*) return 1;; esac
 	[ "${#1}" -le 6 ]
@@ -73,11 +78,11 @@ if [ ! -p "$FIFO" ]; then rm -f "$FIFO"; mkfifo "$FIFO" || { log "mkfifo $FIFO f
 chown root:kiosk "$FIFO" 2>/dev/null || true
 chmod 660 "$FIFO"
 
-# handle CMD A1 A2 A3 A4 REST -- always called with exactly six fields (some
-# empty); REST is anything past the 5th field (extra tokens on the line),
-# and every branch below that does not itself consume REST requires it to be
-# empty, so a caller cannot smuggle extra arguments onto a valid-looking
-# command.
+# handle CMD A1 A2 A3 A4 REST -- the script always calls it with exactly six
+# fields (some empty). REST is anything past the 5th field (extra tokens on
+# the line). Every branch below that does not use REST itself requires it to
+# be empty. So a caller cannot smuggle extra arguments onto a command that
+# looks valid.
 handle() {
 	cmd=$1 a1=$2 a2=$3 a3=$4 a4=$5 rest=$6
 	case "$cmd" in
@@ -106,23 +111,24 @@ handle() {
 			log "brightness $a1"; echo "$a1" > "$R/brightness"
 		else reject "brightness $a1 $a2 $a3 $a4 $rest"; fi;;
 	brightness-offset)
-		# the local manual setting (tsx-overlay's slider): signed steps on
-		# top of ALS / the schedule; replaces an absolute override (offset
-		# first, so tsx-idled never shows the level without either). Not
-		# logged: a slider drag sends one line per step.
+		# The local manual setting (the slider of tsx-overlay): signed steps
+		# on top of ALS or the schedule. It replaces an absolute override
+		# (the offset comes first, so tsx-idled never shows the level without
+		# either). The script does not log it, because a slider drag sends
+		# one line per step.
 		n=${a1#-}
 		if [ -z "$a2$a3$a4$rest" ] && in_range "$n" 0 31 && { [ "$n" = "$a1" ] || [ "-$n" = "$a1" ]; }; then
 			if [ "$n" = 0 ]; then rm -f "$R/brightness-offset"; else echo "$a1" > "$R/brightness-offset"; fi
 			rm -f "$R/brightness"
 		else reject "brightness-offset $a1 $a2 $a3 $a4 $rest"; fi;;
 	blank-timeout)
-		# seconds (0 = never); persisted in panel.conf, applied through
-		# /run/tsx/blank-timeout (tsx-idled watches it)
+		# Seconds (0 = never). panel.conf stores it, and tsx-idled gets it
+		# through /run/tsx/blank-timeout (it watches that file).
 		if in_range "$a1" 0 86400 && [ -z "$a2$a3$a4$rest" ]; then
 			log "blank-timeout $a1"; "$CONFIG" set BLANK_TIMEOUT "$a1" && "$CONFIG" apply
 		else reject "blank-timeout $a1 $a2 $a3 $a4 $rest"; fi;;
 	orientation)
-		# screen orientation (panel.conf ORIENTATION); apply turns the
+		# Screen orientation (panel.conf ORIENTATION). Apply turns the
 		# running kiosk (tsx-orientation apply). Fixed names only.
 		case "$a1" in
 		landscape|portrait|landscape-flipped|portrait-flipped)
@@ -148,10 +154,10 @@ handle() {
 		*) reject "config-url $a1 $a2 $a3 $a4 $rest";;
 		esac;;
 	verbose-boot)
-		# BOOT_VERBOSE: kernel/boot text on the LCD from the next boot on
-		# (persisted in panel.conf, applied by tsx-config apply); state is
-		# read back from the /etc/tsx/boot-verbose flag file it leaves,
-		# same shape as blank-timeout/config-url above.
+		# BOOT_VERBOSE: kernel and boot text on the LCD from the next boot on
+		# (panel.conf stores it, and tsx-config apply applies it). Callers
+		# read the state back from the /etc/tsx/boot-verbose flag file that it
+		# leaves, the same way as for blank-timeout and config-url above.
 		if { [ "$a1" = on ] || [ "$a1" = off ]; } && [ -z "$a2$a3$a4$rest" ]; then
 			v=0; [ "$a1" = on ] && v=1
 			log "verbose-boot $a1"; "$CONFIG" set BOOT_VERBOSE "$v" && "$CONFIG" apply
@@ -165,10 +171,10 @@ handle() {
 			log "update-install requested"; "$UPDATE_BIN" now &
 		else reject "update-install $a1 $a2 $a3 $a4 $rest"; fi;;
 	setup)
-		# the quick-settings overlay's "Setup" button (tsx-overlay.c):
-		# reopen the on-panel setup page for one ~15 min window even on
-		# an already-configured panel, same as `tsx-config setup` over
-		# ssh (docs/rootfs.md "Setup page").
+		# The "Setup" button of the quick-settings overlay (tsx-overlay.c).
+		# It reopens the on-panel setup page for one ~15 min window, even on
+		# an already-configured panel, like `tsx-config setup` over ssh
+		# (docs/rootfs.md "Setup page").
 		if [ -z "$a1$a2$a3$a4$rest" ]; then
 			log "setup requested"; "$CONFIG" setup
 		else reject "setup $a1 $a2 $a3 $a4 $rest"; fi;;
@@ -177,9 +183,9 @@ handle() {
 	esac
 }
 
-# <> (read+write) keeps a permanent reference on the FIFO so a transient
-# writer (each caller opens, writes one line, closes) never makes our read
-# see EOF -- see docs/ha.md "One Home Assistant device" for why a plain
+# Opening with <> (read+write) keeps a permanent reference on the FIFO. A
+# short-lived writer (each caller opens, writes one line, closes) then never
+# makes the read see EOF. See docs/ha.md "One Home Assistant device": a plain
 # read-only open would make this loop exit after the very first command.
 exec 3<>"$FIFO"
 log "listening on $FIFO"

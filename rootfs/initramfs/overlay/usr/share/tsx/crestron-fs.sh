@@ -1,8 +1,8 @@
 # crestron-fs.sh: the Crestron factory file systems of the xx60 SD card, as
 # measured on two factory-state cards (captures/tsw-1060/backup = unit A,
-# xx60-FACTORY.img = a TSW-760): identical superblock parameters on both.
-# Sourced by factory/puf-tool.sh (host, image files) and tsx-factory-restore
-# (rescue system, block devices). POSIX sh.
+# xx60-FACTORY.img = a TSW-760). The superblock parameters are identical on both.
+# These files source it: factory/puf-tool.sh (host, image files) and
+# tsx-factory-restore (rescue system, block devices). POSIX sh.
 #
 # part start(sector) sectors  type bs   isize inodes  features                                  label   uuid
 CRESTRON_FS="
@@ -16,7 +16,7 @@ CRESTRON_P1_START=81920 CRESTRON_P1_SECTORS=81920 CRESTRON_P1_VOLID=1D142256
 CRESTRON_P2_START=206849 CRESTRON_P2_SECTORS=1638400
 CRESTRON_ENV_OFFSET=1048576 CRESTRON_ENV_SIZE=65536
 CRESTRON_DISK_SECTORS=7774208
-# crestron_mke2fs PART TARGET [OFFSET_BYTES]: make partition PART's file system on
+# crestron_mke2fs PART TARGET [OFFSET_BYTES]: make the file system of partition PART on
 # TARGET (a block device, or an image file with the partition at OFFSET_BYTES)
 crestron_mke2fs() {
 	local part=$1 tgt=$2 off=${3:-} line p st n ty bs is ino feat lab uuid
@@ -26,9 +26,9 @@ crestron_mke2fs() {
 	mke2fs -q -F -t "$ty" -b "$bs" -I "$is" -N "$ino" -O "$feat" -m 5 -L "$lab" \
 		$( [ "$uuid" != - ] && echo "-U $uuid" ) ${off:+-E offset=$off} "$tgt" $(( n * 512 / bs ))
 }
-# crestron_mkfat TARGET: p1's FAT16 exactly as on the factory cards (mkdosfs:
+# crestron_mkfat TARGET: make the FAT16 of p1 exactly as on the factory cards (mkdosfs:
 # 4 sectors/cluster, 4 reserved, 2 FATs of 80 sectors, 512 root entries, media
-# 0xf8, geometry 123/62, 0 hidden sectors, volume id 1D14-2256). TARGET = the
+# 0xf8, geometry 123/62, 0 hidden sectors, volume id 1D14-2256). TARGET is the
 # p1 block device, or a file of 81920 sectors.
 crestron_mkfat() {
 	mkfs.fat -a -F 16 -s 4 -R 4 -f 2 -r 512 -M 0xf8 -h 0 -g 123/62 -D 0 -i $CRESTRON_P1_VOLID "$1" $((CRESTRON_P1_SECTORS / 2)) >/dev/null

@@ -1,25 +1,28 @@
 #!/bin/bash
-# Host: make sure a stock-Android xx60 has a Crestron admin account, the
-# way the web UI's first-run page does it. A factory-fresh /data has none:
-# GET /Device/Authentication then says AuthenticationState.IsEnabled=false and
-# lists no LocalUsers. On a unit with forced authentication (env
-# forced_auth_mode=true, e.g. the TSS-10 tested) every page of https://PANEL/
-# also redirects to /createUser.html; a unit without it (e.g. a TSW-760 as
-# shipped) serves its pages with authentication off and no redirect. Either
-# way the account is created with the call the first-run form makes:
+# Host: make sure a stock-Android xx60 has a Crestron admin account. This is
+# what the first-run page of the web UI does. A factory-fresh /data has no
+# account: GET /Device/Authentication then says AuthenticationState.IsEnabled=false
+# and lists no LocalUsers. On a unit with forced authentication (env
+# forced_auth_mode=true, e.g. the TSS-10 tested), every page of https://PANEL/
+# also redirects to /createUser.html. A unit without it (e.g. a TSW-760 as
+# shipped) serves its pages with authentication off and no redirect. In both
+# cases the script creates the account with the call that the first-run form
+# makes:
 #   POST /Device/Authentication
 #   {"Device":{"Authentication":{"AuthenticationState":{"AdminUsername":U,"AdminPassword":P,"IsEnabled":true}}}}
-# (answer: StatusId 0, "Authentication enabled successfully"; done on unit B
-# 2026-09-27 07:55). If an account already exists nothing is changed.
-# Afterwards the Crestron SSH console must answer `ver` with that login.
+# The answer is StatusId 0, "Authentication enabled successfully" (done on unit
+# B 2026-09-27 07:55). If an account already exists, the script changes
+# nothing. Afterwards the Crestron SSH console must answer `ver` with that
+# login.
 #
-#   steps/crestron-admin PANEL     (user $TSX_ADMIN_USER, default admin;
-#                                      password: required, $TSX_ADMIN_PW)
+#   steps/crestron-admin PANEL     (user $TSX_ADMIN_USER, default admin.
+#                                      Password: required, $TSX_ADMIN_PW)
 #   steps/crestron-admin --status PANEL
-#                                  print "none" (no account yet) or "exists";
-#                                  no login, no change, no password needed
-# Exit 0 = the console answers with that login (--status: state printed);
-# 1 = it does not (--status: web UI does not answer); 2 = usage.
+#                                  print "none" (no account yet) or "exists".
+#                                  It does not log in, change anything or need
+#                                  a password.
+# Exit 0 = the console answers with that login (--status: it printed the state).
+# 1 = it does not (--status: the web UI does not answer). 2 = usage.
 set -uo pipefail
 STATUS=0; [ "${1:-}" = --status ] && { STATUS=1; shift; }
 H=${1:?PANEL}; U=${TSX_ADMIN_USER:-admin}

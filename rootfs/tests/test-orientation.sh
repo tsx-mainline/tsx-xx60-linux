@@ -1,22 +1,25 @@
 #!/bin/sh
 # Host test for the screen orientation (panel.conf ORIENTATION, docs/rootfs.md
 # "Orientation"), no panel needed:
-#   - tsx-orientation: the four names, the table (sway transform, touch
-#     matrix, fbcon rotation, slide direction), the configured name from the
-#     file (missing / junk = landscape), the sway lines, and `apply` (swaymsg
-#     on every sway socket of the kiosk user, a stale one is skipped);
-#   - touch agrees with the picture: tsx-splash draws a marker at a frame
-#     position, turned onto the LCD (fbpng), and a touch on the LCD where the
-#     marker shows maps back to that frame position through the touch matrix
-#     and then the output transform, the way wlroots applies it to a touch
-#     device mapped to an output (measured on a TSS-10 with injected touches);
-#   - kiosk-session puts the sway lines into the session config, the
-#     initramfs gets the same tsx-orientation;
-#   - tsx-overlay's layout (tsx-overlay-layout.h) on the four outputs
-#     (1280x800, 1024x600 and both turned): unchanged in landscape, no higher
-#     than the 10-inch landscape overlay in portrait, and everything inside.
-# The last two parts compile C with CC (default gcc); busybox and python3
-# are needed for the rest.
+#   - tsx-orientation: the four names, and the table (sway transform, touch
+#     matrix, fbcon rotation, slide direction). Also the configured name from
+#     the file (missing or junk = landscape), the sway lines, and `apply`.
+#     `apply` runs swaymsg on every sway socket of the kiosk user and skips a
+#     stale socket.
+#   - touch agrees with the picture. tsx-splash draws a marker at a frame
+#     position, turned onto the LCD (fbpng). A touch on the LCD where the
+#     marker shows must map back to that frame position. The map goes through
+#     the touch matrix and then the output transform. This is how wlroots
+#     applies a touch device that is mapped to an output. We measured this on
+#     a TSS-10 with injected touches.
+#   - kiosk-session puts the sway lines into the session config, and the
+#     initramfs gets the same tsx-orientation.
+#   - the layout of tsx-overlay (tsx-overlay-layout.h) on the four outputs
+#     (1280x800, 1024x600, and both turned). It must stay unchanged in
+#     landscape. In portrait it must be no higher than the 10-inch landscape
+#     overlay, and everything must be inside.
+# The last two parts compile C with CC (default gcc). The other parts need
+# busybox and python3.
 set -eu
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
 ORI=$HERE/rootfs/overlay/usr/local/bin/tsx-orientation
@@ -82,7 +85,7 @@ CC=${CC:-gcc}
 echo "== touch (matrix + output transform) vs the turned splash (CC=$CC) =="
 $CC -O2 -Wall -Wextra -Werror -o "$T/tsx-splash" "$HERE/rootfs/src/tsx-splash.c"
 mkdir -p "$T/d"
-# frames with an 11x11 white marker centred on (105, 205), upright
+# frames with an 11x11 white marker centered on (105, 205), upright
 python3 - "$T/d" <<'PY'
 import sys
 d = sys.argv[1]
@@ -114,7 +117,7 @@ a, bb, c, d, e, f = map(float, sys.argv[2].split())
 x, y = cx / w, cy / h                    # the touch where the marker shows, raw 0..1
 lx, ly = a * x + bb * y + c, d * x + e * y + f   # libinput calibration
 # wlroots then turns the touch by the output transform (sway maps the
-# touchscreen to the built-in output); measured on the panel:
+# touchscreen to the built-in output). Measured on the panel:
 lx, ly = {'normal': (lx, ly), '90': (ly, 1 - lx), '180': (1 - lx, 1 - ly), '270': (1 - ly, lx)}[sys.argv[3]]
 turned = sys.argv[3] in ('90', '270')    # a quarter turn: the frame is 800x1280
 fw, fh = (h, w) if turned else (w, h)

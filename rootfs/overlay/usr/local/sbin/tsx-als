@@ -1,26 +1,27 @@
 #!/bin/sh
-# tsx-als: ambient light sensor -> backlight level for the xx60 kiosk .
+# tsx-als: ambient light sensor -> backlight level for the xx60 kiosk.
 #
 #   tsx-als                 daemon (OpenRC service tsx-als)
 #   tsx-als status          current lux, level, auto state
 #   tsx-als auto on|off     runtime switch: on = back to automatic (drops the
-#                           manual level and offset); off = keep the level on
+#                           manual level and offset). Off = keep the level on
 #                           the glass as a fixed level (/run/tsx/brightness)
 #   tsx-als lux             one reading in lux (no smoothing)
 #
-# Reads the MAX44009 through IIO (in_illuminance_input, lux), smooths it,
-# maps it to a backlight step with ALS_CURVE (/etc/tsx/als.conf) and applies
-# hysteresis. The step goes to /run/tsx/als-level, which tsx-idled uses in
-# place of the day/night level while the file is fresh (< 30 s). An absolute
-# manual level (/run/tsx/brightness: "brightness N" key action, HA Backlight)
-# still wins; the local manual setting (/run/tsx/brightness-offset: key-strip
-# slide, quick-settings overlay, "brightness +N/-N") is added to the step.
+# It reads the MAX44009 through IIO (in_illuminance_input, lux) and smooths
+# the value. It maps the value to a backlight step with ALS_CURVE
+# (/etc/tsx/als.conf) and applies hysteresis. The step goes to
+# /run/tsx/als-level. tsx-idled uses that file in place of the day/night
+# level while the file is fresh (< 30 s). An absolute manual level still wins
+# (/run/tsx/brightness: "brightness N" key action, HA Backlight). The script
+# adds the local manual setting to the step (/run/tsx/brightness-offset:
+# key-strip slide, quick-settings overlay, "brightness +N/-N").
 # While the screen is lit, tsx-als also ramps the backlight itself one step at
-# a time, so the change is smooth and immediate; while blank it never touches
-# the backlight.
+# a time, so the change is smooth and immediate. While the screen is blank,
+# it never touches the backlight.
 #
 # State for tsx-mqtt: /run/tsx/als.state ("lux N", "raw N", "report N",
-# "level N", "auto on|off"; lux values are integers).
+# "level N", "auto on|off"). Lux values are integers.
 #
 # Env overrides for tests: TSX_ALS_CONF, TSX_KIOSK_CONF, TSX_RUN_DIR,
 # TSX_IIO_DIR, TSX_BACKLIGHT_DIR, TSX_IDLED_STATE, TSX_ALS_LOOPS (stop after N
@@ -104,8 +105,9 @@ auto)
 	case ${2:-} in
 	on)  echo on > "$R/als-auto"; rm -f "$R/brightness" "$R/brightness-offset";;
 	off) echo off > "$R/als-auto"
-	     # freeze what is on the glass (else the offset would suddenly apply
-	     # to the day/night level instead): tsx-idled's level while lit
+	     # Freeze what is on the glass. Otherwise the offset would suddenly
+	     # apply to the day/night level instead. Use the level of tsx-idled
+	     # while lit.
 	     if [ ! -e "$R/brightness" ]; then
 	         l=$(sed -n 's/^level //p' "$R/brightness.state" 2>/dev/null | head -n 1)
 	         st=; [ -r "$IDLED" ] && read -r st _ < "$IDLED"
@@ -136,31 +138,32 @@ while :; do
 	if [ -n "${TSX_ALS_NOW:-}" ]; then now=$((now + ALS_INTERVAL)); else now=$(date +%s); fi
 	[ -n "$dev" ] && [ -r "$dev/in_illuminance_input" ] || dev=$(find_dev)
 	if [ -z "$dev" ]; then
-		[ -n "$warned" ] || { log "no max44009 IIO device yet (CONFIG_MAX44009, DT node light-sensor@4a); waiting"; warned=1; }
+		[ -n "$warned" ] || { log "no max44009 IIO device yet (CONFIG_MAX44009, DT node light-sensor@4a). Waiting"; warned=1; }
 		rm -f "$R/als-level"; sleep 10; continue
 	fi
 	raw=$(read_dlux "$dev") || { sleep "$ALS_INTERVAL"; continue; }
-	# Right after a cold boot the MAX44009 can read 0 lx for several seconds
-	# before its first conversion; taken at face value that dimmed the boot
-	# splash to the darkest step and back up 10-20 s later. Until the first
-	# level, a 0 reading waits (at most ALS_START_WAIT readings): no
-	# als-level yet, so tsx-idled keeps the level on the glass (boot hold).
+	# Right after a cold boot, the MAX44009 can read 0 lx for several seconds
+	# before its first conversion. If the script took that value at face
+	# value, it dimmed the boot splash to the darkest step and back up 10-20 s
+	# later. Until the first level, a 0 reading waits (at most ALS_START_WAIT
+	# readings). There is no als-level yet, so tsx-idled keeps the level on
+	# the glass (boot hold).
 	if [ "$raw" -le 0 ] && [ "$cur" -eq 0 ] && [ "$n" -le "$ALS_START_WAIT" ]; then
 		[ -n "${TSX_ALS_LOOPS:-}" ] || sleep "$ALS_INTERVAL"
 		continue
 	fi
 	[ -n "$warned" ] && { log "sensor $dev: $((raw / 10)) lx"; warned=; }
 
-	# own-backlight compensation
+	# Compensate for the own backlight
 	bd=$(bl_dir); bl=0
 	[ -n "$bd" ] && bl=$(cat "$bd/brightness" 2>/dev/null || echo 0)
 	amb=$(( raw - ALS_BL_COMP * bl )); [ "$amb" -ge 0 ] || amb=0
 
-	# smoothing
+	# Smooth the value
 	if [ -z "$acc" ]; then acc=$(( amb * ALS_SMOOTH )); else acc=$(( acc - acc / ALS_SMOOTH + amb )); fi
 	dl=$(( acc / ALS_SMOOTH ))
 
-	# level with hysteresis
+	# Pick the level with hysteresis
 	want=$(curve_level "$dl")
 	if [ "$ALS_NIGHT_CAP" -gt 0 ] && is_night && [ "$want" -gt "$ALS_NIGHT_CAP" ]; then want=$ALS_NIGHT_CAP; fi
 	[ "$want" -le "$BACKLIGHT_MAX" ] || want=$BACKLIGHT_MAX
@@ -176,11 +179,11 @@ while :; do
 		fi
 	fi
 
-	# hand over to tsx-idled; ramp the backlight while lit and not overridden
+	# Hand over to tsx-idled. Ramp the backlight while it is lit and not overridden.
 	if auto_on; then
 		echo "$cur" > "$R/als-level.tmp" && mv -f "$R/als-level.tmp" "$R/als-level"
 		st=; [ -r "$IDLED" ] && read -r st _ < "$IDLED"
-		# the local manual offset, as tsx-idled adds it (clamped 1..BACKLIGHT_MAX)
+		# The local manual offset, as tsx-idled adds it (clamped 1..BACKLIGHT_MAX)
 		off=0; [ -r "$R/brightness-offset" ] && read -r off _ < "$R/brightness-offset"
 		case $off in [0-9]|[0-9][0-9]|-[0-9]|-[0-9][0-9]) ;; *) off=0;; esac
 		tgt=$((cur + off)); [ "$tgt" -ge 1 ] || tgt=1; [ "$tgt" -le "$BACKLIGHT_MAX" ] || tgt=$BACKLIGHT_MAX
@@ -201,7 +204,7 @@ while :; do
 		rm -f "$R/als-level"; a=off
 	fi
 
-	# report value for MQTT with a deadband
+	# Report a value for MQTT, with a deadband
 	lx=$(( (dl + 5) / 10 ))
 	if [ "$rep" -lt 0 ]; then rep=$lx; rep_t=$now
 	else

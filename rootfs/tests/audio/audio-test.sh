@@ -3,25 +3,25 @@
 #   scp rootfs/tests/audio/audio-test.sh rootfs/tests/audio/tone-*.wav tools/regs/regdump root@<panel-ip>:/tmp/
 #   ssh root@<panel-ip> sh /tmp/audio-test.sh STEP
 #
-# Steps (in this order; each one prints what to look for):
+# Steps (in this order). Each step prints what to look for:
 #   info        read only: kernel, dmesg of every audio driver, ALSA cards and
 #               controls, amplifier revisions (from dmesg), ZL38051 versions,
 #               speaker enable state, registers (regs). No sound.
 #   regs        register dump only (AIU, AUDIN, clocks, MPLL, BSD_EN bits)
-#   spk-en      toggle GPIO_BSD_EN through a 3 s silent playback and dump the
+#   spk-en      toggle GPIO_BSD_EN during a 3 s silent playback and dump the
 #               BSD_EN registers while on and after (no sound: zeros)
 #   tone [DB]   ONE 1 kHz tone, 1 s, straight to hw:TSW1060,0 (no softvol) at
-#               DB dBFS: -30 (default) or -20 (tests/tone-1k-m30dB.wav /
-#               tone-1k-m20dB.wav); nothing louder is possible here.
-#               Needs a person at the panel to confirm it is heard.
+#               DB dBFS: -30 (default) or -20 (tests/tone-1k-m30dB.wav or
+#               tone-1k-m20dB.wav). Nothing louder is possible here.
+#               A person at the panel must confirm that the tone is heard.
 #   lr          440 Hz on the LEFT only, then 880 Hz on the RIGHT only, -30 dBFS
-#   rec [S]     S seconds (default 5) from hw:TSW1060,1 to /tmp/rec.wav while
-#               someone speaks; prints peak/RMS per channel (tsx-peak)
-#   raw [S]     same with the AUDIN driver's raw=1 layout check (S32 words)
+#   rec [S]     record S seconds (default 5) from hw:TSW1060,1 to /tmp/rec.wav
+#               while someone speaks. Prints peak and RMS per channel (tsx-peak)
+#   raw [S]     the same, with the raw=1 layout check of the AUDIN driver (S32 words)
 #   all-quiet   info + spk-en + rec (no audible output at all)
 #
-# Nothing here writes storage; the only register writes are none (reads only);
-# the only module parameter change is "raw" (restored). Output also goes to
+# The script writes no storage and writes no register (reads only). It changes
+# one module parameter, "raw", and restores it. The output also goes to
 # /tmp/audio-test-<step>.log.
 set -u
 STEP=${1:-info}; ARG=${2:-}

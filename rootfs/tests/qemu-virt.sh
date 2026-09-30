@@ -1,15 +1,18 @@
 #!/bin/bash
 # Boot the kiosk rootfs under qemu-system-arm -M virt with the switch_root
 # initramfs and a virt test kernel (build-virt-kernel.sh).
-# Proves: initramfs finds LABEL=tsxroot and switch_roots, OpenRC reaches the
-# default runlevel, the kiosk service runs cage + Chromium on virtio-gpu.
+# The test proves that:
+#  - the initramfs finds LABEL=tsxroot and runs switch_root
+#  - OpenRC reaches the default runlevel
+#  - the kiosk service runs cage and Chromium on virtio-gpu
 #
 #   tests/qemu-virt.sh start   boot in the background (serial log in $W/serial.log)
 #   tests/qemu-virt.sh ssh CMD run CMD in the guest (root/tsx, port 2222)
 #   tests/qemu-virt.sh shot F  save a screenshot of the guest display to F (.png)
 #   tests/qemu-virt.sh stop
-# The rootfs image is not modified: the guest writes to a qcow2 overlay. The
-# overlay gets a getty on ttyAMA0 and a test kiosk.conf (via debugfs).
+# The script does not modify the rootfs image. The guest writes to a qcow2
+# overlay. The overlay gets a getty on ttyAMA0 and a test kiosk.conf (with
+# debugfs).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 W=${W:-${TMPDIR:-/tmp}/tsx-qemu}
@@ -53,11 +56,11 @@ D
 ssh) shift; "${SSHP[@]}" "$@";;
 mon) shift; mon "$*" >/dev/null;;
 shot)
-	# a VNC client forces a fresh frame; QEMU's screendump alone returns a stale
+	# a VNC client forces a fresh frame. QEMU's screendump alone returns a stale
 	# surface when no display client is connected
 	if command -v gvnccapture >/dev/null; then timeout 60 gvnccapture 127.0.0.1:57 "$2" >/dev/null 2>&1
 	else mon "screendump shot.ppm" >/dev/null; sleep 1; python3 -c "from PIL import Image; Image.open('$W/shot.ppm').save('$2')"; fi
 	echo "saved $2";;
 stop) mon quit >/dev/null || kill "$(cat "$W/qemu.pid")"; echo stopped;;
-*) sed -n '2,13p' "$0"; exit 2;;
+*) sed -n '2,15p' "$0"; exit 2;;
 esac

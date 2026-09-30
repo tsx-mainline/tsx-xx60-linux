@@ -27,11 +27,11 @@ exec 7<>$T/input/event0     # keep a writer open so the FIFO does not hit EOF
 ev() { python3 -c 'import struct,sys,time; t=time.time(); sys.stdout.buffer.write(struct.pack("llHHi",int(t),0,int(sys.argv[1]),int(sys.argv[2]),int(sys.argv[3]))+struct.pack("llHHi",int(t),0,0,0,0))' "$@" >&7; }
 # evs "type code value" ... : one frame, SYN_REPORT at the end
 evs() { python3 -c 'import struct,sys,time; t=time.time(); sys.stdout.buffer.write(b"".join(struct.pack("llHHi",int(t),0,*map(int,a.split())) for a in sys.argv[1:]+["0 0 0"]))' "$@" >&7; }
-# two-finger tap: slots 0/1 down at (x,y) (x2,y2), then up after $1 s; $2 = move finger 2 by px
+# two-finger tap: slots 0 and 1 go down at (x,y) and (x2,y2), then up after $1 s. $2 = move finger 2 by px
 tap2() { evs "3 47 0" "3 57 11" "3 53 100" "3 54 100" "3 47 1" "3 57 12" "3 53 300" "3 54 100" "1 330 1"
 	 [ "$2" != 0 ] && evs "3 47 1" "3 53 $((300 + $2))"
 	 sleep $1; evs "3 47 0" "3 57 -1" "3 47 1" "3 57 -1" "1 330 0"; }
-# three-finger tap (the default OSK_GESTURE), up after $1 s; $2 = move finger 3 by px
+# three-finger tap (the default OSK_GESTURE), up after $1 s. $2 = move finger 3 by px
 tap3() { evs "3 47 0" "3 57 21" "3 53 100" "3 54 100" "3 47 1" "3 57 22" "3 53 300" "3 54 100" "3 47 2" "3 57 23" "3 53 500" "3 54 100" "1 330 1"
 	 [ "${2:-0}" != 0 ] && evs "3 47 2" "3 53 $((500 + $2))"
 	 sleep $1; evs "3 47 0" "3 57 -1" "3 47 1" "3 57 -1" "3 47 2" "3 57 -1" "1 330 0"; }

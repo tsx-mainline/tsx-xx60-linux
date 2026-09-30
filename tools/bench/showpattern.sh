@@ -1,6 +1,6 @@
 #!/bin/bash
 # Push pattern.raw to the panel framebuffer. Usage: showpattern.sh <IP> [--console]
-# Detaches fbcon first so the text console does not draw over it; --console re-attaches it.
+# Detaches fbcon first so the text console does not draw over it. --console re-attaches it.
 IP=${1:?usage: showpattern.sh <panel-ip> [--console]}; D=$(dirname "$0")
 S="sshpass -p tsx ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR root@$IP"
 if [ "$2" = --console ]; then

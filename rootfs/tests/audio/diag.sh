@@ -1,14 +1,14 @@
 #!/bin/sh
-# Audio diagnosis, run ON THE PANEL as root (user-approved reversible
-# register writes). Needs /tmp/regdump, /tmp/padsample.py, /tmp/ringdump.py.
+# Audio diagnosis, run ON THE PANEL as root. The user approved these
+# reversible register writes. Needs /tmp/regdump, /tmp/padsample.py, /tmp/ringdump.py.
 #   sh /tmp/diag.sh pulldown   GPIOY_5 pull-down during capture (restored)
-#   sh /tmp/diag.sh clocks     gates / AIU / AUD_CLK registers idle vs playing
+#   sh /tmp/diag.sh clocks     gates, AIU and AUD_CLK registers idle vs playing
 #   sh /tmp/diag.sh audcntl    playback with HHI_AUD_CLK_CNTL bit 23 set (vendor
 #                              "Audio DAC clock enable"), pads sampled (restored)
-#   sh /tmp/diag.sh aomux      AO pinmux read back; re-assert bits 27..30 while
+#   sh /tmp/diag.sh aomux      read back the AO pinmux. Set bits 27..30 again while
 #                              playing and sample the pads (restored)
 #   sh /tmp/diag.sh hold [-30|-20] [N]  1 kHz tone N x 1 s (default -30, 20), TFA status every 2 s
-# Every write prints the old value and is undone at the end of the step.
+# Every write prints the old value. The step undoes the write at its end.
 R=/tmp/regdump
 say() { echo; echo "=== $*"; }
 val() { $R "$@" | cut -d= -f2; }
@@ -30,7 +30,7 @@ pulldown)
 	echo "pull-up on: $(val c 0x203d)"; pads 8000; python3 /tmp/ringdump.py 64 | head -3
 	$R -w c 0x203d "$P"; $R -w c 0x204b "$E"
 	echo "restored: $(val c 0x203d) $(val c 0x204b)"; wait $rec
-	echo "interpretation: Y_5 follows the pull = pin not driven; stays 1 with pull-down = ZL drives it high";;
+	echo "interpretation: Y_5 follows the pull = pin not driven. Stays 1 with pull-down = ZL drives it high";;
 clocks)
 	for st in idle playing; do
 		[ $st = playing ] && { play_silence 4; sleep 1.5; }

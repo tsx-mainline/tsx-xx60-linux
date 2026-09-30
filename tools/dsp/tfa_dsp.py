@@ -561,7 +561,7 @@ def cold_start(cnt, t, profile=0, vstep=0, say=print):
     t.dsp_msg(MODULE_SPEAKERBOOST, SB_PARAM_SET_LSMODEL, spk.payload)
     vs = prof["files"][0]
     write_vstep(t, vs.steps[vstep])
-    # "configured": SBSL=1 lets the DSP start; the vendor then checks MTPEX + cal-done
+    # "configured": SBSL=1 lets the DSP start. The vendor then checks MTPEX + cal-done
     t.set_bf(0x0950, 1)
     mtp = t.rd(REG_MTP0)
     cal = int.from_bytes(t.mem_read(DMEM_XMEM, XMEM_CAL_DONE, 1), "big")
@@ -680,7 +680,7 @@ def cmd_start(a):
     addrs = [a.dev] if a.dev else [d["addr"] for d in cnt.devices]
     tfas = [Tfa(bus, x) for x in addrs]
     if a.dry_run:
-        print("# dry run: reads are real, writes are printed only; RMW values and"
+        print("# dry run: reads are real, writes are printed only. RMW values and"
               " DSP replies below assume nothing was written")
         for t in tfas:
             try:
@@ -723,7 +723,7 @@ def cmd_status(a):
         print("0x%02x: %s" % (addr, " ".join("%02x=%04x" % kv for kv in sorted(regs.items()))))
         print("  status  %s" % decode_status(st))
         print("  sys     %s" % decode_sys(sysc))
-        print("  i2s     CHS12=%d CHS3=%d CHSA=%d I2SSR=%d; VOL=%d (-%.1f dB) CFSM=%d"
+        print("  i2s     CHS12=%d CHS3=%d CHSA=%d I2SSR=%d. VOL=%d (-%.1f dB) CFSM=%d"
               % (bf_get(regs[4], 0x0431), bf_get(regs[4], 0x0450), bf_get(regs[4], 0x0461),
                  bf_get(regs[4], 0x04c3), bf_get(regs[6], 0x0687), bf_get(regs[6], 0x0687) / 2.0,
                  bf_get(regs[6], 0x0650)))

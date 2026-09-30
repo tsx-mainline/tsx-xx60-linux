@@ -1,40 +1,43 @@
 #!/system/bin/bash
-# xx60 mainline installer v2, step 1: runs on the STOCK ANDROID root shell
-# (ssh -tt admin@<panel>, root bash 3.2). Arms a ONE-SHOT boot into the
-# mainline rescue system and reboots; the rescue (not this script) does the
-# whole eMMC/root install afterwards (installer/steps/tsx-rescue-install; see
-# docs/install.md "Install: rescue-first (v2)" and docs/boot.md "The v2 env
-# state machine"). Unlike the old tsx-android-install.sh this writes NOTHING
-# to p2 and does not touch the MBR: the SD card's Android partitions are left
-# completely alone until the rescue itself folds them (a v2 install can still
-# be walked back by power-cycling once more than the arm, see docs/recovery.md).
+# xx60 mainline installer v2, step 1. It runs on the STOCK ANDROID root shell
+# (ssh -tt admin@<panel>, root bash 3.2). It arms a ONE-SHOT boot into the
+# mainline rescue system and reboots. The rescue does the whole eMMC and root
+# install afterwards (installer/steps/tsx-rescue-install). See docs/install.md
+# "Install: rescue-first (v2)" and docs/boot.md "The v2 env state machine".
+# Unlike the old tsx-android-install.sh, this script writes NOTHING to p2 and
+# does not touch the MBR. It leaves the Android partitions of the SD card
+# alone until the rescue folds them. You can still undo a v2 install: power-
+# cycle once more than the arm (see docs/recovery.md).
 #
 #   bash tsx-rescue-arm.sh preflight [options]   read only: checks + plan
 #   bash tsx-rescue-arm.sh install   [options]   do it (asks for "INSTALL")
 #   bash tsx-rescue-arm.sh status                what is armed now
 #
 # Options:
-#   --rescue FILE       the mainline rescue image (installer/rescue*/*.sh output;
+#   --rescue FILE       the mainline rescue image (output of installer/rescue*/*.sh:
 #                        an Android v0 boot image with /etc/tsx/rescue-image set)
-#   --guard once|fallback|nogolden   U-Boot hook variant (default once: the
-#                        true one-shot, gated on tsx_once, not boot_retry --
-#                        see docs/boot.md "The v2 env state machine". fallback/
-#                        nogolden are the older boot_retry<6 persistent hook,
-#                        kept for testing/compatibility; see installer/android/tsx-lib.sh)
+#   --guard once|fallback|nogolden   U-Boot hook variant. The default is once,
+#                        the true one-shot, gated on tsx_once and not on
+#                        boot_retry (see docs/boot.md "The v2 env state
+#                        machine"). fallback and nogolden are the older
+#                        persistent hook with boot_retry<6. They stay for
+#                        testing and compatibility (see installer/android/tsx-lib.sh).
 #   --no-defuse-golden   do not set DataRecoveryDone=1 (default: set it)
 #   --no-reboot          do not reboot at the end
 #   --yes                do not ask
 #
-# What it writes: p1:boot.img (backup, then <- the rescue: this is Crestron's
-# golden/factory-recovery slot, permanently the rescue from here on -- see
-# docs/recovery.md), p1:tsxboot.img (<- the same rescue image: the one-shot
-# hook target), and the U-Boot env via Android's fw_setenv, each value read back
-# (tsx_boot, golden_boot_retry=0, DataRecoveryDone=1, boot_retry=0, tsx_once=1
-# with --guard once (default; boot_retry=3 with --guard fallback|nogolden, the
-# legacy arm value -- see ARM_BOOT_RETRY below), then switch_bootmode last).
-# It never writes p2, p5..p8, or the MBR -- the rescue does the card fold
-# later, once it has verified the eMMC writes (docs/boot.md "The v2 env state
-# machine").
+# What it writes:
+#   - p1:boot.img: first a backup, then a copy of the rescue. This is the
+#     golden (factory recovery) slot of Crestron. From here on it is
+#     permanently the rescue (see docs/recovery.md).
+#   - p1:tsxboot.img: a copy of the same rescue image (the one-shot hook target)
+#   - the U-Boot env, through the fw_setenv of Android. The script reads each
+#     value back: tsx_boot, golden_boot_retry=0, DataRecoveryDone=1,
+#     boot_retry=0, tsx_once=1 with --guard once (the default) or
+#     boot_retry=3 with --guard fallback|nogolden (the legacy arm value, see
+#     ARM_BOOT_RETRY below), and switch_bootmode last.
+# It never writes p2, p5..p8 or the MBR. The rescue folds the card later, after
+# it has verified the eMMC writes (docs/boot.md "The v2 env state machine").
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../android/tsx-lib.sh"
@@ -63,25 +66,27 @@ while [ $# -gt 0 ]; do
 done
 case "$CMD" in preflight|install|status) ;; *) sed -n '2,30p' "$0"; exit 2;; esac
 case "$GUARD" in once) WANT_SWITCH=$TSX_SWITCH_ONCE;; fallback) WANT_SWITCH=$TSX_SWITCH_FALLBACK;; nogolden) WANT_SWITCH=$TSX_SWITCH_NOGOLDEN;; *) die "--guard once|fallback|nogolden";; esac
-# --guard once (default): the real one-shot is tsx_once, not boot_retry (see
-# installer/android/tsx-lib.sh TSX_SWITCH_ONCE and docs/boot.md "The v2 env
-# state machine"). U-Boot clears tsx_once BEFORE running tsx_boot, so the shot
-# is spent the instant that line is reached regardless of boot_retry or of
-# whether the rescue ever checks in; boot_retry is just reset to 0 here so it
-# starts clean (Android resets it on every boot of its own anyway).
+# --guard once (the default): the real one-shot is tsx_once, not boot_retry
+# (see TSX_SWITCH_ONCE in installer/android/tsx-lib.sh and docs/boot.md "The
+# v2 env state machine"). U-Boot clears tsx_once BEFORE it runs tsx_boot. So
+# the shot is spent as soon as U-Boot reaches that line, whether or not the
+# rescue ever checks in. This script only resets boot_retry to 0, so it starts
+# clean. Android resets it on every boot of its own anyway.
 #
-# --guard fallback|nogolden (legacy, kept for testing/compatibility): these
-# don't know about tsx_once at all -- the persistent hook runs tsx_boot on
-# every boot while boot_retry<6. ARM_BOOT_RETRY=3 is the old one-shot-by-
-# exhaustion trick: checkBootRetry() increments on every boot, so the NEXT
-# boot lands at 4 (<6: hook runs, the ONE rescue attempt this arm grants).
-# Crestron's U-Boot treats a boot that finds boot_retry=4 specially (seen on
-# hardware 2026-09-27: it saves 5 and resets the SoC, and the second pass
-# saves 6), so arming at 4 skipped the rescue entirely and booted Android.
-# From 4, a boot AFTER the rescue with nothing having reset it goes
-# 4 -> 5 -> reset -> 6 (hook stops, stock Android boots) -- the safety net,
-# entirely from the existing boot_retry<6 guard, no new hook logic. Not used
-# by --guard once, where tsx_once is the only gate.
+# --guard fallback|nogolden (legacy, kept for testing and compatibility): these
+# do not know about tsx_once. The persistent hook runs tsx_boot on every boot
+# while boot_retry<6. ARM_BOOT_RETRY=3 is the old one-shot by exhaustion.
+# checkBootRetry() increments boot_retry on every boot, so the NEXT boot lands
+# at 4. That is below 6, so the hook runs. This gives the ONE rescue attempt
+# that the arm grants. The U-Boot of Crestron treats a boot that finds
+# boot_retry=4 in a special way. It saved 5 and reset the SoC, and the second
+# pass saved 6 (seen on hardware 2026-09-27). So arming at 4 skipped the
+# rescue and booted Android.
+# From 4, a boot AFTER the rescue, where nothing has reset the counter, goes
+# 4 -> 5 -> reset -> 6. Then the hook stops and stock Android boots. This is
+# the safety net. It comes entirely from the existing boot_retry<6 guard and
+# needs no new hook logic. --guard once does not use it, because tsx_once is
+# its only gate.
 ARM_BOOT_RETRY=3
 
 W=${TSX_WORKDIR:-/dev/tsx-inst}
@@ -95,7 +100,7 @@ FAILS=0
 chk() { if [ "$1" = ok ]; then log "  ok    $2"; else log "  FAIL  $2"; FAILS=$((FAILS+1)); fi; }
 
 log "== xx60 rescue-arm v2 ($CMD) $(date 2>/dev/null)"
-[ "$(id -u)" = 0 ] && chk ok "running as root" || chk fail "not root (id -u = $(id -u)); use: ssh -tt admin@<panel>"
+[ "$(id -u)" = 0 ] && chk ok "running as root" || chk fail "not root (id -u = $(id -u)). Use: ssh -tt admin@<panel>"
 tsx_find_disk && chk ok "boot disk $WHOLE: $TSX_DISK_LAYOUT layout" || chk fail "no mmcblk device with the Crestron (or card-stage) partition layout"
 [ $FAILS = 0 ] || die "basic checks failed"
 
@@ -125,7 +130,7 @@ if [ "$CMD" != status ]; then
 	[ -n "$RESCUE" ] && [ -f "$RESCUE" ] && [ "$(dd if="$RESCUE" bs=8 count=1 2>/dev/null)" = "ANDROID!" ] && chk ok "rescue image: $RESCUE ($(tsx_size "$RESCUE") bytes)" \
 		|| chk fail "no valid rescue image (--rescue FILE, an Android boot image)"
 	if [ -n "$RESCUE" ] && [ -f "$RESCUE" ]; then
-		RNEED=$(( $(tsx_size "$RESCUE") / 1024 * 2 + 512 ))   # room for a side-by-side boot.img + tsxboot.img copy
+		RNEED=$(( $(tsx_size "$RESCUE") / 1024 * 2 + 512 ))   # room for boot.img and tsxboot.img side by side
 		GOLD=0; [ -f "$MNT_P1/boot.img" ] && GOLD=$(( $(tsx_size "$MNT_P1/boot.img") / 1024 ))
 		OLDT=0; [ -f "$MNT_P1/tsxboot.img" ] && OLDT=$(( $(tsx_size "$MNT_P1/tsxboot.img") / 1024 ))
 		[ $(( ${P1FREE:-0} + GOLD + OLDT )) -gt $RNEED ] && chk ok "p1 has room for the rescue image (golden + tsxboot.img)" || chk fail "p1 too full for the rescue image (need ~$RNEED KiB)"
@@ -134,7 +139,7 @@ fi
 
 log "== plan"
 log "  1. back up: env block (64 KiB), first 2 MiB of $WHOLE -> /data/local/tsx-backup/"
-log "  2. p1:boot.img -> backup, then <- rescue (golden slot, permanent); p1:tsxboot.img <- rescue (one-shot hook target); remove tsxboot.off"
+log "  2. p1:boot.img -> backup, then <- rescue (golden slot, permanent). p1:tsxboot.img <- rescue (one-shot hook target). Remove tsxboot.off"
 if [ "$GUARD" = once ]; then
 	log "  3. env (Android fw_setenv, each read back): tsx_boot, golden_boot_retry=0$( [ $DEFUSE = 1 ] && echo ', DataRecoveryDone=1'), boot_retry=0, tsx_once=1 (arms ONE rescue boot), switch_bootmode = once hook (last)"
 else
@@ -146,7 +151,7 @@ if [ "$CMD" = status ]; then
 	log "== status: hook=$HOOK boot_retry=$BR golden_boot_retry=$GBR tsx_once=$(tsx_env tsx_once 2>/dev/null) p1:tsxboot.img=$( [ -f "$MNT_P1/tsxboot.img" ] && echo yes || echo no ) tsxboot.off=$( [ -f "$MNT_P1/tsxboot.off" ] && echo yes || echo no )"
 	exit 0
 fi
-[ $FAILS = 0 ] || die "$FAILS check(s) failed; nothing written"
+[ $FAILS = 0 ] || die "$FAILS check(s) failed. Nothing written"
 if [ "$CMD" = preflight ]; then log "== preflight OK (nothing written). Run again with 'install' to do it."; exit 0; fi
 
 if [ $YES != 1 ]; then
@@ -176,7 +181,7 @@ if [ "$(sha256sum 2>/dev/null < "$MNT_P1/boot.img" | cut -d' ' -f1)" != "$RSHA" 
 	cp "$RESCUE" "$MNT_P1/boot.new" && sync
 	[ "$(sha256sum < "$MNT_P1/boot.new" | cut -d' ' -f1)" = "$RSHA" ] || { rm -f "$MNT_P1/boot.new"; die "rescue copy to p1:boot.img corrupt (golden backup: $BK/golden-boot.img)"; }
 	mv "$MNT_P1/boot.new" "$MNT_P1/boot.img" && sync
-	log "p1:boot.img = rescue ($RSHA); Crestron's golden image backed up to $BK/golden-boot.img"
+	log "p1:boot.img = rescue ($RSHA). Crestron's golden image backed up to $BK/golden-boot.img"
 else
 	log "p1:boot.img is already this rescue image ($RSHA)"
 fi
@@ -194,17 +199,18 @@ else
 fi
 rm -f "$MNT_P1/tsxboot.off"; sync
 
-# 3. env through Android's own fw_setenv, one variable per call, each read
-# back (the writer tsx-android-install.sh uses, proven on hardware). Android's
-# fw_setenv/fw_printenv take no -c/-l/-s, so tsx_env_apply (installer/lib/
-# tsx-rescue.sh, for the rescue's fw_setenv) cannot be used here.
-# Order: the hook (switch_bootmode) goes LAST, so a power loss between any
-# two writes leaves either the stock/previous hook (Android boots, tsx_once
-# not yet consulted by anything) or the complete one-shot arm. With --guard
-# once, tsx_once=1 is what actually arms the rescue boot; boot_retry is just
-# reset to 0 (Android resets it to 0 on every boot of its own anyway, so this
-# is a clean starting point, not a special value). With --guard fallback/
-# nogolden (legacy), boot_retry=$ARM_BOOT_RETRY is still the arm.
+# 3. Write the env through the own fw_setenv of Android, one variable per call.
+# Read each value back. This is the writer that tsx-android-install.sh uses, and
+# it is proven on hardware. The fw_setenv and fw_printenv of Android take no
+# -c, -l or -s. So this script cannot use tsx_env_apply (installer/lib/
+# tsx-rescue.sh, for the fw_setenv of the rescue).
+# The hook (switch_bootmode) goes LAST. A power loss between two writes then
+# leaves either the stock or previous hook (Android boots, and nothing has read
+# tsx_once yet) or the complete one-shot arm. With --guard once, tsx_once=1
+# arms the rescue boot. The script only resets boot_retry to 0. Android resets
+# it to 0 on every boot of its own anyway, so this is a clean starting point and
+# not a special value. With --guard fallback or nogolden (legacy),
+# boot_retry=$ARM_BOOT_RETRY is still the arm.
 setv() {
 	tsx_fw_bound "$FWS" "$1" "$2" >> "$LOG" 2>&1 || die "fw_setenv $1 failed or timed out (env backup: $BK/env-0x100000.bin)"
 	[ "$(tsx_env "$1")" = "$2" ] || die "readback of $1 differs after fw_setenv (env backup: $BK/env-0x100000.bin)"
@@ -226,15 +232,16 @@ tsx_env_sane >/dev/null || die "env not sane after the writes: restore $BK/env-0
 sync
 if [ "$P1_MOUNTED_BY_US" = 1 ]; then umount "$MNT_P1" && P1_MOUNTED_BY_US=0; fi
 if [ "$GUARD" = once ]; then
-	log "DONE. Next boot: U-Boot -> tsx_once=1 clears itself (setenv 0; saveenv) -> p1:tsxboot.img -> the mainline rescue, exactly once; if it never checks in and the unit reboots again, tsx_once is already 0 and stock Android boots automatically (no boot_retry involved)."
+	log "DONE. Next boot: U-Boot -> tsx_once=1 clears itself (setenv 0, then saveenv) -> p1:tsxboot.img -> the mainline rescue, exactly once. If it never checks in and the unit reboots again, tsx_once is already 0 and stock Android boots automatically (no boot_retry involved)."
 else
-	log "DONE. Next boot: U-Boot -> p1:tsxboot.img -> the mainline rescue (boot_retry $ARM_BOOT_RETRY -> 4, one attempt); if it never checks in and the unit reboots again, boot_retry -> 6 and stock Android boots automatically."
+	log "DONE. Next boot: U-Boot -> p1:tsxboot.img -> the mainline rescue (boot_retry $ARM_BOOT_RETRY -> 4, one attempt). If it never checks in and the unit reboots again, boot_retry -> 6 and stock Android boots automatically."
 fi
 if [ $REBOOT = 1 ]; then
-	# in the background, immune to the ssh session's hangup, so this script
-	# returns (and the host sees DONE) before the reboot drops the connection
-	# (tsx_reboot_detached: own session, HUP ignored; each step goes to a
-	# trace on /data that the host reads if the panel does not go down)
+	# Reboot in the background, immune to the hangup of the ssh session. Then
+	# this script returns, and the host sees DONE before the reboot drops the
+	# connection. tsx_reboot_detached runs in its own session and ignores HUP.
+	# Each step goes to a trace on /data. The host reads it if the panel does
+	# not go down.
 	log "rebooting in 3 s"
 	log "reboot trace: $BK/reboot.trace"
 	sync

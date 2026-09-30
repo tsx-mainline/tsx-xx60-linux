@@ -1,9 +1,10 @@
 #!/bin/sh
-# Runs INSIDE an armv7 alpine:3.24 container (run.sh): builds the guest
-# initramfs for the voice satellite test: Alpine base + ALSA + the "voice"
-# packages of rootfs/packages.txt, the voice/audio overlay files of rootfs/,
-# tsx-peak, linux-voice-assistant through the SAME voice/install-lva.sh as
-# mkrootfs.sh, test samples, /init.
+# Runs INSIDE an armv7 alpine:3.24 container (run.sh). It builds the guest
+# initramfs for the voice satellite test: Alpine base, ALSA, the "voice"
+# packages of rootfs/packages.txt, the voice and audio overlay files of
+# rootfs/, tsx-peak, and linux-voice-assistant. The script installs
+# linux-voice-assistant through the SAME voice/install-lva.sh as
+# mkrootfs.sh. It also adds test samples and /init.
 #   mkinitramfs.sh OUT.cpio.gz
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)

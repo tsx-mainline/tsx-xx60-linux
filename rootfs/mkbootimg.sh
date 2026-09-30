@@ -1,10 +1,11 @@
 #!/bin/bash
-# Build the mainline Android boot image for the installed system:
-# the LVDS kernel (drm/meson LVDS) + the switch_root initramfs, packed by
-# kernel/mkimage.sh with the DTBs of both panel sizes (--board-dtbs: U-Boot
-# picks the TSW-760 or TSW-1060 DTB by its env aml_dt). Output: out/tsxboot.img (for FAT p1, see the U-Boot hook
-# notes) and its sha256. Reads the kernel read-only from KDIR (default the
-# kernel fork checkout's own out/, sibling of this repo).
+# Build the mainline Android boot image for the installed system.
+# kernel/mkimage.sh packs the LVDS kernel (drm/meson LVDS), the switch_root
+# initramfs and the DTBs of both panel sizes. With --board-dtbs, U-Boot picks
+# the TSW-760 or TSW-1060 DTB by its env aml_dt.
+# Output: out/tsxboot.img (for FAT p1, see the U-Boot hook notes) and its
+# sha256. The script only reads the kernel, from KDIR (default: the own out/
+# of the kernel fork checkout, a sibling of this repo).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)

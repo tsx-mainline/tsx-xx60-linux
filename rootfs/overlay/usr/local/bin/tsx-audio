@@ -1,19 +1,20 @@
 #!/bin/sh
-# tsx-audio: TSW-1060 sound card helper . Config /etc/tsx/audio.conf.
+# tsx-audio: TSW-1060 sound card helper. Config /etc/tsx/audio.conf.
 #
 #   tsx-audio init                  card setup at boot: amplifier inputs, ZL38051
 #                                   mic/AEC, softvol controls, saved or default levels
 #   tsx-audio store                 save the mixer state (STATE)
 #   tsx-audio status                card, controls, speaker enable, open streams
-#   tsx-audio volume [N|+N|-N]      Master in % (0..100 of -50..-6 dB); no arg = print
-#   tsx-audio mute on|off|toggle    Master mute (softvol has no switch: 0 %, the
-#                                   level is kept in RUN/audio-mute)
+#   tsx-audio volume [N|+N|-N]      Master in % (0..100 of -50..-6 dB). No arg = print
+#   tsx-audio mute on|off|toggle    Master mute (softvol has no switch, so it
+#                                   sets 0 % and keeps the level in RUN/audio-mute)
 #   tsx-audio speaker hold|release  keep the amplifiers and SPK_EN on (plays silence)
 #   tsx-audio enable|disable sendspin|voice
-#                                   runlevel + start/stop (sendspin also dbus and
-#                                   avahi-daemon; voice = tsx-voice)
+#                                   runlevel + start/stop (sendspin also uses dbus
+#                                   and avahi-daemon. Voice = tsx-voice)
 #
-# Exit 0 without a card for init/store (so boot never fails); 2 otherwise.
+# Without a card, init and store exit 0, so the boot never fails. Other
+# commands exit 2 without a card.
 CONF=${TSX_AUDIO_CONF:-/etc/tsx/audio.conf}
 ASOUND=${TSX_ASOUND_DIR:-/proc/asound}
 RUN=${TSX_RUN_DIR:-/run/tsx}
@@ -33,7 +34,7 @@ mixer() { $AMIXER -q -c "$CARD" "$@" 2>/dev/null; }
 has_ctl() { $AMIXER -c "$CARD" controls 2>/dev/null | grep -q "name='$1'"; }
 onoff() { case $1 in on|1|yes|ON) echo on;; *) echo off;; esac; }
 
-# create the alsa-lib softvol controls without opening the hardware
+# Create the alsa-lib softvol controls without opening the hardware.
 make_softvols() {
 	for p in tsx_master_ctl tsx_media_ctl; do
 		$APLAY -q -D "$p" -t raw -f S16_LE -r 48000 -c 2 /dev/null 2>/dev/null ||
@@ -55,11 +56,11 @@ cmd_init() {
 		log "defaults: Master ${MASTER_DEFAULT}%, Media ${MEDIA_DEFAULT}%"
 	fi
 
-	# always: amplifier slots and the ZL38051 settings of audio.conf. Leave
-	# "Amp Input" alone if tsx-tfa-dsp already set it to DSP this
-	# boot (marker $RUN/tfa-dsp.ok); otherwise apply the plain Left/Right
-	# bypass defaults below (tsx-tfa-dsp runs after tsx-audio and, on a
-	# successful load, switches Amp Input to DSP itself).
+	# Always apply the amplifier slots and the ZL38051 settings of audio.conf.
+	# Leave "Amp Input" alone if tsx-tfa-dsp already set it to DSP during
+	# this boot (marker $RUN/tfa-dsp.ok). Otherwise apply the plain
+	# Left/Right bypass defaults below. tsx-tfa-dsp runs after tsx-audio and,
+	# after a successful load, switches Amp Input to DSP itself.
 	if [ -s "$RUN/tfa-dsp.ok" ]; then
 		log "TFA9890 DSP active ($RUN/tfa-dsp.ok): leaving Amp Input alone"
 	else

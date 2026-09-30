@@ -1,5 +1,5 @@
 #!/sbin/openrc-run
-description="RGB LED bar: boot colour and screen-blank following (/etc/tsx/ledbar.conf)"
+description="RGB LED bar: boot color and screen-blank following (/etc/tsx/ledbar.conf)"
 supervisor=supervise-daemon
 command=/usr/local/sbin/tsx-ledbard
 respawn_delay=5

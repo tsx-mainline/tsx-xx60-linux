@@ -1,18 +1,18 @@
 #!/bin/sh
 # cpufreq (ON THE PANEL): CPU stress + DVFS/thermal logger + silent-corruption check.
-# The tsx DT no longer has the 1800 MHz boost OPP; the 1800 notes below apply
+# The tsx DT no longer has the 1800 MHz boost OPP. The 1800 notes below apply
 # only to a test DT that enables it again.
 # WARNING: 1800 MHz (boost) passed constant load here but panicked the kernel
 # under the bursty kiosk load (docs/hardware.md). On the 7.2 kernel, boost
 # 1 -> 0 leaves cpuinfo_max_freq at 1800000 (docs/kernel.md "CPU frequency"):
-# restore() writes scaling_max_freq=1608000 BEFORE boost 0 for that reason;
-# reboot after a boost run to reset the kernel's limit fully.
+# restore() writes scaling_max_freq=1608000 BEFORE boost 0 for that reason.
+# Reboot after a boost run to reset the kernel's limit fully.
 # busybox-only. Usage:
 #   stress.sh -t MINUTES -f FREQ_KHZ|free [-g GOVERNOR] [-w WORKERS] [-o OUTDIR] [-n]
-#     -f 1800000 : governor performance, scaling_max_freq=1800000 (pins 1.8 GHz;
-#                  the userspace governor is a module and the rootfs has no modules)
+#     -f 1800000 : governor performance, scaling_max_freq=1800000 (pins 1.8 GHz.
+#                  The userspace governor is a module and the rootfs has no modules)
 #     -f free    : leave the governor alone (or set -g), scaling_max_freq=cpuinfo_max
-#     1800000 (a boost OPP) turns boost on for the run; BOOST=1 with -f free
+#     1800000 (a boost OPP) turns boost on for the run. BOOST=1 with -f free
 #     -a         : keep the screen awake (tsx-blank off whenever tsx-idled blanks)
 #     -s         : stop the tsx-cpufreq service for the run (it rewrites the
 #                  governor on blank/wake), restart it at the end

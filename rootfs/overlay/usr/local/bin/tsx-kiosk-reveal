@@ -1,32 +1,33 @@
 #!/usr/bin/env python3
 """tsx-kiosk-reveal: show the kiosk browser only once its page has painted.
 
-Started by kiosk-session (sway session, boot splash on) next to Chromium. The
+kiosk-session (sway session, boot splash on) starts it next to Chromium. The
 generated sway config makes the browser window fully transparent
-(`for_window [app_id="^chrome-"] opacity 0`), so the output shows sway's
-background, the boot splash, while Chromium starts and loads the page: no
-white window, no half-drawn page. This helper watches the page over the
-DevTools protocol (KIOSK_DEVTOOLS=1, 127.0.0.1:9222) and sets the window
+(`for_window [app_id="^chrome-"] opacity 0`). While Chromium starts and loads
+the page, the output shows the background of sway, the boot splash. So there
+is no white window and no half-drawn page. This helper watches the page over
+the DevTools protocol (KIOSK_DEVTOOLS=1, 127.0.0.1:9222). It sets the window
 opaque when the page has painted:
 
   document.readyState is "complete", the first contentful paint happened,
-  Home Assistant's own loading screen (#ha-launch-screen) is gone and the
-  largest contentful paint has settled (700 ms without a bigger element, at
-  most 4 s after the first paint); then two animation frames, so the painted
-  frame is on the glass.
+  the own loading screen of Home Assistant (#ha-launch-screen) is gone, and
+  the largest contentful paint has settled (700 ms without a bigger element,
+  at most 4 s after the first paint). Then two animation frames pass, so
+  the painted frame is on the glass.
 
-A browser error page (chrome-error://, e.g. a TLS "clock is behind" error
-while NTP has not synced yet, or no network yet) is retried: wait for the
-clock (chronyc, at most TIME_WAIT s), load the kiosk URL again, at most
-once every 5 s. After TIMEOUT s it reveals whatever is there, so a page that
-never finishes (or keeps failing) still shows up. Without DevTools it reveals DELAY s after the
-browser window appeared.
+The helper retries a browser error page (chrome-error://, for example a TLS
+"clock is behind" error while NTP has not synced yet, or no network yet). It
+waits for the clock (chronyc, at most TIME_WAIT s) and loads the kiosk URL
+again, at most once every 5 s. After TIMEOUT s, it reveals whatever is
+there, so a page that never finishes (or keeps failing) still shows up.
+Without DevTools, it reveals the window DELAY s after the browser window
+appeared.
 
-With the window revealed, sway's background (still the splash) is replaced by
-a solid colour: the page's own background colour (read over DevTools), else
-black. The background shows wherever the window does not cover the output for
-a moment, e.g. while Chromium repaints at its new size when the on-screen
-keyboard hides; it must not be the splash any more then.
+After the reveal, a solid color replaces the background of sway (still the
+splash). The color is the own background color of the page (read over
+DevTools), else black. The background shows wherever the window does not
+cover the output for a moment, for example while Chromium repaints at its new
+size when the on-screen keyboard hides. It must not be the splash then.
 
 Usage: tsx-kiosk-reveal URL [--devtools 0|1] [--timeout S] [--time-wait S]
 Env: SWAYSOCK (from sway), TSX_REVEAL_DEVTOOLS (host:port, tests).
@@ -60,8 +61,8 @@ PAINTED = r'''new Promise(r => {
     const now = performance.now();
     // painted: loaded, first contentful paint done, no HA loading screen, and
     // the largest paint has settled (no bigger element for 700 ms, at most
-    // 4 s after the first paint): the login form or the dashboard, not the
-    // empty card HA paints first
+    // 4 s after the first paint). This is the login form or the dashboard,
+    // not the empty card that HA paints first
     if (document.readyState === "complete" && fcp && !document.getElementById("ha-launch-screen")
         && (now - Math.max(lcp, fcp.startTime) > 700 || now - fcp.startTime > 4000))
       return requestAnimationFrame(() => requestAnimationFrame(() => r("painted")));
@@ -69,8 +70,8 @@ PAINTED = r'''new Promise(r => {
     setTimeout(f, 100);
   })();
 })'''
-# the page's background colour as #rrggbb ('' if transparent): body first,
-# else the root element (Home Assistant colours <html>)
+# The background color of the page as #rrggbb ('' if transparent). Use the
+# body first, else the root element (Home Assistant colors <html>).
 BACKGROUND = r'''(() => {
   for (const e of [document.body, document.documentElement]) {
     if (!e) continue;
@@ -97,10 +98,10 @@ def swaymsg(cmd):
 
 
 def reveal(why, bg=None):
-    # the later rule wins for windows that map from now on; then the open one
+    # The later rule wins for windows that map from now on. Then set the open window.
     swaymsg('for_window %s opacity 1' % RULE)
     swaymsg('%s opacity 1' % RULE)
-    # no splash behind the page from now on (see the module docstring)
+    # No splash behind the page from now on (see the module docstring)
     bg = bg if isinstance(bg, str) and re.fullmatch(r'#[0-9a-f]{6}', bg) else '#000000'
     swaymsg('output * bg %s solid_color' % bg)
     log('revealed: %s (background %s)' % (why, bg))
@@ -240,7 +241,7 @@ def main():
                 reveal('page painted', bg.get('result', {}).get('result', {}).get('value'))
                 return 0
             if state == 'error':
-                # the clock first (TLS), then at most one new try per RETRY_GAP s
+                # Wait for the clock first (TLS). Then try again, at most once per RETRY_GAP s.
                 end = min(deadline, time.monotonic() + float(opts['--time-wait']))
                 while not clock_synced() and time.monotonic() < end:
                     time.sleep(1)
@@ -254,8 +255,8 @@ def main():
                 ws.call('Page.navigate', {'url': url}, cid)
                 last_try = time.monotonic()
         except (OSError, EOFError, ValueError) as e:
-            # DevTools not up yet, or the page navigated while we waited
-            # (its execution context went away): look again
+            # DevTools is not up yet, or the page navigated during the wait
+            # (its execution context went away). Look again.
             if not isinstance(e, (ConnectionRefusedError, urllib.error.URLError)):
                 log('retrying: %s' % str(e)[:80])
             time.sleep(0.25)

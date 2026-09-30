@@ -1,15 +1,16 @@
 #!/bin/bash
-# Build an Android boot image the xx60 vendor U-Boot (Amlogic 2011, Crestron 1.00.12) boots.
+# Build an Android boot image that the xx60 vendor U-Boot (Amlogic 2011, Crestron 1.00.12) boots.
 #
 # What U-Boot requires (common/cmd_bootm.c, arch/arm/lib/bootm.c, common/aml_dt.c):
-#   - Android boot image v0, page size 2048 (bootm hardcodes the 0x800 header skip).
-#   - The "kernel" payload must be a legacy uImage (bootm reads type/comp/load/entry
-#     from the uImage header at +0x800). A raw zImage is rejected.
-#   - The ramdisk is passed to Linux through the FDT (/chosen linux,initrd-*).
-#   - The "second" payload is the device tree: either a plain FDT or an Amlogic
+#   - An Android boot image v0 with page size 2048. bootm hardcodes the 0x800 header skip.
+#   - The "kernel" payload must be a legacy uImage. bootm reads type, comp, load
+#     and entry from the uImage header at +0x800. It rejects a raw zImage.
+#   - U-Boot passes the ramdisk to Linux through the FDT (/chosen linux,initrd-*).
+#   - The "second" payload is the device tree. It is a plain FDT or an Amlogic
 #     "AML_" multi-DTB container (selected by env aml_dt). U-Boot relocates it,
-#     writes /chosen bootargs, the memory node and initrd, then jumps with r2 = FDT.
-#   - Header load addresses are ignored by bootm; kept equal to stock for clarity.
+#     writes /chosen bootargs, the memory node and initrd, and jumps with r2 = FDT.
+#   - bootm ignores the load addresses in the header. This script keeps them
+#     equal to stock for clarity.
 #
 # Usage:
 #   mkimage.sh --kernel zImage --dtb board.dtb [--initrd initrd.cpio.gz] [--cmdline ".."] \
@@ -20,19 +21,22 @@
 #   mkimage.sh --selftest        (repack the stock boot.img and compare byte for byte,
 #                                  plus a multi-DTB "AML_" container round-trip check)
 #
-# --dtbs packs an Amlogic "AML_" multi-DTB container (via aml-dt.py) and uses it as the
-# second payload instead of a plain FDT, so one boot.img can serve several board variants
-# selected at runtime by the vendor U-Boot's env aml_dt (see aml_dt.c / aml-dt.py header
-# comment). Each name is "soc_platform_variant", e.g. yushan_one_10inch. Mutually
-# exclusive with --dtb and incompatible with --append-dtb (which needs a single flat FDT).
+# --dtbs packs an Amlogic "AML_" multi-DTB container (with aml-dt.py) and uses
+# it as the second payload instead of a plain FDT. One boot.img can then serve
+# several board variants. The env aml_dt of the vendor U-Boot selects the
+# variant at runtime (see aml_dt.c and the header comment of aml-dt.py).
+# Each name is "soc_platform_variant", for example yushan_one_10inch.
+# --dtbs excludes --dtb. It also does not work with --append-dtb, which needs
+# a single flat FDT.
 #
-# --board-dtbs DIR is the one xx60 boot image for every panel size: the container from
-# DIR/meson8m2-crestron-tsw1060.dtb and DIR/meson8m2-crestron-tsw760.dtb, one entry per
-# aml_dt value U-Boot may hold (board_dtbs below). U-Boot boots nothing when no entry
-# matches its aml_dt (aml_dt.c returns the container itself), so the "old" variants of
-# the vendor container get the DTB of their panel size, the same DTB a plain FDT gave
-# them before. A DIR without the TSW-760 DTB (a kernel older than the TSW-760 DTS) gives
-# the plain TSW-1060 FDT, as before.
+# --board-dtbs DIR makes the one xx60 boot image for every panel size. The
+# container comes from DIR/meson8m2-crestron-tsw1060.dtb and
+# DIR/meson8m2-crestron-tsw760.dtb, with one entry for each aml_dt value that
+# U-Boot can hold (board_dtbs below). U-Boot boots nothing when no entry
+# matches its aml_dt (aml_dt.c returns the container itself). So the "old"
+# variants of the vendor container get the DTB of their panel size, the same
+# DTB that a plain FDT gave them before. If DIR has no TSW-760 DTB (a kernel
+# older than the TSW-760 DTS), the script makes the plain TSW-1060 FDT, as before.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 LOADADDR=0x00208000          # = Meson TEXT_OFFSET, same as stock uImage
@@ -104,9 +108,9 @@ if [ $SELFTEST = 1 ]; then
   mkbootimg "$HERE/stock/kernel.uImage" "$HERE/stock/ramdisk.img" "$HERE/stock/second" "" "$TMP/re.img" >/dev/null
   cmp "$STOCK" "$TMP/re.img" && echo "selftest OK: repacked stock boot.img is byte-identical"
 
-  # Multi-DTB container path (--dtbs): pack the TSW-1060 and TSW-760 DTBs (the
-  # TSW-1060 one twice when there is no TSW-760 DTB in out/), then unpack and
-  # confirm both entries round-trip intact.
+  # Multi-DTB container path (--dtbs): pack the TSW-1060 and TSW-760 DTBs.
+  # If out/ has no TSW-760 DTB, pack the TSW-1060 DTB twice. Then unpack the
+  # container and confirm that both entries round-trip intact.
   TSW1060_DTB=$HERE/out/meson8m2-crestron-tsw1060.dtb TSW760_DTB=$HERE/out/meson8m2-crestron-tsw760.dtb
   [ -f "$TSW760_DTB" ] || TSW760_DTB=$TSW1060_DTB
   if [ -f "$TSW1060_DTB" ]; then
@@ -140,12 +144,12 @@ if [ -n "$KERNEL" ]; then
   if [ -n "$DTBS" ]; then
     : # SECOND already built above as the multi-DTB container
   elif [ $APPEND = 1 ]; then
-    # fallback: DTB appended to zImage (needs CONFIG_ARM_APPENDED_DTB); second stays empty
+    # fallback: DTB appended to zImage (needs CONFIG_ARM_APPENDED_DTB). Second stays empty
     cat "$DTB" >> "$TMP/zImage"
   else
     SECOND=$DTB
   fi
-  # -C none: U-Boot copies the zImage to LOADADDR; the zImage decompressor then
+  # -C none: U-Boot copies the zImage to LOADADDR. The zImage decompressor then
   # places the kernel at (pc & 0xf8000000) + TEXT_OFFSET = 0x00208000.
   mkimage -A arm -O linux -T kernel -C none -a $LOADADDR -e $LOADADDR \
           -n "Linux-mainline" -d "$TMP/zImage" "$TMP/uImage" >/dev/null

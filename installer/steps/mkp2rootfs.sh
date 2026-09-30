@@ -1,19 +1,19 @@
 #!/bin/bash
 # Card stage: make the kiosk rootfs image for p2 (800 MiB) from the rootfs build,
-# without rebuilding it: copy rootfs/out/rootfs.ext4 (1492 MiB, ~670 MiB
-# used), copy its files into a new ext4 of exactly p2's size, then (debugfs)
+# without a rebuild. Copy rootfs/out/rootfs.ext4 (1492 MiB, ~670 MiB used).
+# Copy its files into a new ext4 of exactly the size of p2. Then add, with debugfs:
 #   /etc/fstab     + /dev/mmcblk0p1 on /media/bootfat (noauto) + LABEL=tsxdata on /data (nofail)
-#   /data          mount point for p4 (formatted by the first mainline boot)
+#   /data          mount point for p4 (the first mainline boot formats it)
 #   /usr/local/sbin/tsx-boot-ok, /etc/tsx/uboot-env.conf   = the current work/rootfs
 #                  overlay (finds the env disk on the card-stage layout too)
-#   /var/lib/tsx/install.info   the card-stage source image hashes
-# Output: out/rootfs-p2.ext4 (+ .sha256). Android never mounts p2, so the ext4
-# features of the rootfs build are kept.
+#   /var/lib/tsx/install.info   the hashes of the card-stage source image
+# Output: out/rootfs-p2.ext4 (+ .sha256). Android never mounts p2, so the script
+# keeps the ext4 features of the rootfs build.
 #   mkp2rootfs.sh [--rootfs-ext4 IMG] [--out IMG] [--url URL] [--token-file F] [--config-file F]
-#     --config-file: installer/panel.conf.example, injected as
-#     /etc/tsx/panel.conf.seed (p2/the card stage has no /data yet; tsx-config
-#     apply promotes it to /data/tsx/panel.conf on the first boot that has
-#     /data mounted -- docs/rootfs.md "Panel configuration")
+#     --config-file: installer/panel.conf.example. The script injects it as
+#     /etc/tsx/panel.conf.seed. p2 (the card stage) has no /data yet. On the
+#     first boot that has /data mounted, tsx-config apply promotes the seed to
+#     /data/tsx/panel.conf (docs/rootfs.md "Panel configuration").
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INSTALLER_DIR=$(cd "$HERE/.." && pwd); ROOTFS_DIR=$(cd "$INSTALLER_DIR/../rootfs" && pwd)
 SRC=$ROOTFS_DIR/out/rootfs.ext4 OUT=$INSTALLER_DIR/out/rootfs-p2.ext4 URL= TOKEN= CONF=
@@ -21,10 +21,11 @@ while [ $# -gt 0 ]; do case $1 in --rootfs-ext4) SRC=$2; shift;; --out) OUT=$2; 
 	--token-file) TOKEN=$2; shift;; --config-file) CONF=$2; shift;; *) sed -n '2,17p' "$0"; exit 2;; esac; shift; done
 P2BYTES=$((1638400 * 512))
 W=$(mktemp -d "${TMPDIR:-/var/tmp}/mkp2.XXXX"); trap 'rm -rf "$W"' EXIT
-# resize2fs cannot shrink the 1492 MiB build below ~1240 MiB (inode tables), so
-# the files are copied into a new 800 MiB ext4 with mke2fs -d (owners, modes,
-# setuid bits and xattrs kept), in a privileged container that mounts the build
-# read-only through a loop device. Same mke2fs options as rootfs/mkrootfs.sh.
+# resize2fs cannot shrink the 1492 MiB build below ~1240 MiB (inode tables). So
+# the script copies the files into a new 800 MiB ext4 with mke2fs -d. This keeps
+# owners, modes, setuid bits and xattrs. It runs in a privileged container that
+# mounts the build read-only through a loop device. The mke2fs options are the
+# same as in rootfs/mkrootfs.sh.
 truncate -s $P2BYTES "$W/p2.ext4"
 docker run --rm --privileged --platform linux/amd64 -v "$(dirname "$SRC"):/src:ro" -v "$W:/w" alpine:3.24 sh -euc "
 	apk add -q --no-cache e2fsprogs e2fsprogs-extra >/dev/null
@@ -51,8 +52,8 @@ if [ -n "$CONF" ]; then dbg "mkdir /etc/tsx" || true; put "$CONF" /etc/tsx/panel
 dbg "mkdir /var/lib/tsx" || true; put "$W/install.info" /var/lib/tsx/install.info 0100644
 e2fsck -fn "$W/p2.ext4" > "$W/fsck2.log" 2>&1 || { cat "$W/fsck2.log"; exit 1; }
 [ "$(debugfs -R 'cat /usr/local/sbin/tsx-boot-ok' "$W/p2.ext4" 2>/dev/null | sha256sum)" = "$(sha256sum < "$ROOTFS_DIR/overlay/usr/local/sbin/tsx-boot-ok")" ] || { echo "tsx-boot-ok not injected"; exit 1; }
-# -m 0 above leaves no reserved blocks (root has no separate quota on p2), so
-# all free space is headroom for ssh-keygen host keys, apk, logs, etc. at
+# -m 0 above leaves no reserved blocks (root has no separate quota on p2). So
+# all free space is headroom for the ssh-keygen host keys, apk, logs and more at
 # first boot. Fail the build if that headroom is too thin to be useful.
 FREE_MIB=$(dumpe2fs -h "$W/p2.ext4" 2>/dev/null | awk -F: '/^Free blocks/{f=$2}END{printf "%d", f*4/1024}')
 echo "p2 free space: ${FREE_MIB} MiB"

@@ -1,24 +1,29 @@
 #!/bin/bash
-# Host test for the panel's ESPHome device (see rootfs/voice/shim/tsx_panel/
-# and PLAN.md section 18), through both front ends: tsx-esphome (the
-# standalone server used when VOICE=off) and the voice satellite's code path
-# (linux-voice-assistant's own VoiceSatelliteProtocol with the tsx_lva
-# patches, esphome-lva-harness.py, VOICE=on). Fake sysfs/state-file fixtures
-# + a fake Chromium DevTools endpoint, the real tsx_panel code, and a real
-# Home Assistant ESPHome client (aioesphomeapi, the version Home Assistant
-# 2026.9 pins) checking the entity list, a light toggle, a text (kiosk URL)
-# set and a front-key press event -- exactly the "one HA device" this
-# feature adds -- plaintext and with ESPHome's noise encryption (HA_API_KEY:
-# right key works, wrong key and plaintext clients are refused), the same
-# device name in both modes, a key file that cannot be used (refuse to
-# start), and HA_ALLOW_FROM. Only needs network to fetch pinned, public
-# packages (same ones rootfs/voice/install-lva.sh fetches for the panel
-# image); nothing here compiles anything.
+# Host test for the ESPHome device of the panel (see rootfs/voice/shim/tsx_panel/
+# and PLAN.md section 18). The test uses both front ends:
+#  - tsx-esphome, the standalone server that runs when VOICE=off.
+#  - The code path of the voice satellite: the VoiceSatelliteProtocol of
+#    linux-voice-assistant with the tsx_lva patches (esphome-lva-harness.py,
+#    VOICE=on).
+# The fixtures are fake sysfs and state files, and a fake Chromium DevTools
+# endpoint. The test runs the real tsx_panel code. A real Home Assistant
+# ESPHome client (aioesphomeapi, the version that Home Assistant 2026.9 pins)
+# checks the "one HA device" that this feature adds:
+#  - the entity list, a light toggle, a text (kiosk URL) set and a front-key
+#    press event
+#  - plaintext and ESPHome noise encryption (HA_API_KEY): the right key works,
+#    and a wrong key or a plaintext client is refused
+#  - the same device name in both modes
+#  - a key file that the server cannot use (the server refuses to start)
+#  - HA_ALLOW_FROM
+# The test needs the network only to fetch pinned, public packages. These are
+# the packages that rootfs/voice/install-lva.sh fetches for the panel image.
+# The test compiles nothing.
 #
 # tsx_panel reuses linux_voice_assistant.entity.LEDLightEntity (the LED bar
-# and key-LED lights), which imports python-mpv even though this test never
-# plays audio -- so a system libmpv is a real, if easy to miss, dependency;
-# see ci/lint.sh / .github/workflows/tests.yml for the apt-get package name.
+# and key-LED lights). That module imports python-mpv, although this test never
+# plays audio. So the test needs a system libmpv, and this is easy to miss.
+# See ci/lint.sh and .github/workflows/tests.yml for the apt-get package name.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 SHIM=$HERE/../voice/shim
@@ -26,7 +31,7 @@ T=$(mktemp -d)
 PIDS=
 trap 'for p in $PIDS; do kill "$p" 2>/dev/null || true; done; [ -n "${KEEP:-}" ] && echo "kept $T" || rm -rf "$T"' EXIT
 
-# ---- pinned linux-voice-assistant source (same as install-lva.sh; we only
+# ---- pinned linux-voice-assistant source (same as install-lva.sh. We only
 # need the linux_voice_assistant/ package tree, not its wake-word/audio deps)
 LVA=1.1.15
 LVA_SHA256=077696e60b57ae3a98aca3d49d1b9f9971ffd36d62f5c23b8603ccc4c9fcdbd8
@@ -39,7 +44,7 @@ echo "$LVA_SHA256  $CACHE/lva-$LVA.tar.gz" | sha256sum -c - >/dev/null
 tar -C "$T" -xzf "$CACHE/lva-$LVA.tar.gz"
 LVA_SRC=$T/linux-voice-assistant-$LVA
 
-# ---- python venv with the (loosely-versioned; this is a host test, not the
+# ---- python venv with the (loosely-versioned. This is a host test, not the
 # panel image) client + server dependencies -----------------------------
 python3 -m venv "$T/venv"
 "$T/venv/bin/pip" -q install --disable-pip-version-check --only-binary :all: \
@@ -51,7 +56,7 @@ mkdir -p "$F/run/tsx" "$F/etc/tsx" "$F/sys/thermal" "$F/proc/asound" "$F/bin"
 echo "want 50 60 70" > "$F/run/tsx/ledbar.state"
 printf 'led 128 unknown\nlast power short\n' > "$F/run/tsx/buttons.state"
 echo "on 17" > "$F/run/tsx-idled.state"
-# tsx-autoupdate's own status (write_ha_json's shape; PLAN.md section 21)
+# the own status of tsx-autoupdate (the shape of write_ha_json, PLAN.md section 21)
 cat > "$F/run/tsx/update-ha-state.json" <<'EOF'
 {"installed_version":"abc123","latest_version":"abc123+1pending","title":"TSX test-panel packages","release_summary":"pkg1 (1.0 -> 1.1)","in_progress":false}
 EOF
@@ -59,7 +64,7 @@ cat > "$F/etc/kiosk.conf" <<'EOF'
 BACKLIGHT_MAX=23
 KIOSK_URL="https://ha.example.org/default"
 EOF
-# tsx-config's override wins; the fake DevTools page shows yet another URL
+# tsx-config's override wins. The fake DevTools page shows yet another URL
 # (https://ha.example.org/), which the Kiosk URL entity must NOT report
 echo 'KIOSK_URL="https://ha.example.org/configured"' > "$F/run/tsx/kiosk.conf"
 cat > "$F/etc/tsx/buttons.conf" <<'EOF'
@@ -85,12 +90,12 @@ PIDS="$PIDS $!"
 KEY=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
 BADKEY=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
 
-# start_server KIND LOG PORT PANEL_NAME [ENV=VALUE...]: KIND is standalone
-# (tsx-esphome, VOICE=off) or voice (the voice satellite's code path,
-# esphome-lva-harness.py, VOICE=on). Every instance gets its own
-# PANEL_NAME: they all announce themselves over mDNS on this host, and the
-# name is now the same in both modes (tsx_panel/naming.py), so two with
-# one name would collide. Nothing is read from this host's /run/tsx.
+# start_server KIND LOG PORT PANEL_NAME [ENV=VALUE...]
+# KIND is standalone (tsx-esphome, VOICE=off) or voice (the voice satellite
+# code path, esphome-lva-harness.py, VOICE=on). Every instance gets its own
+# PANEL_NAME. All instances announce themselves over mDNS on this host, and
+# the name is the same in both modes (tsx_panel/naming.py). Two instances
+# with one name would collide. The test reads nothing from /run/tsx on this host.
 start_server() {
 	local kind=$1 log=$2 port=$3 pname=$4; shift 4
 	local cmd
@@ -137,7 +142,7 @@ os.environ.pop("TSX_PANEL_NAME", None)
 assert n.resolve("02:aa:bb:cc:dd:ee", "TSW-1060-HOST") == ("tsx-02aabbccddee", "TSW-1060-HOST")
 os.environ["TSX_PANEL_NAME"] = "TSS-10-ABCDEF"
 assert n.resolve("02:aa:bb:cc:dd:ee", "TSW-1060-HOST") == ("tss-10-abcdef", "TSS-10-ABCDEF")
-print("OK: PANEL_NAME -> lowercase name + PANEL_NAME friendly name; fallback tsx-<mac> + --name")
+print("OK: PANEL_NAME -> lowercase name + PANEL_NAME friendly name, with the fallback tsx-<mac> and --name")
 ' || rc=1
 
 # full_check TITLE PORT [esphome-check.py args...]: the whole entity check
@@ -166,7 +171,7 @@ full_check() {
 		&& echo "OK: verbose boot persisted through tsx-config (set BOOT_VERBOSE 1 + apply)" || { echo "FAIL: tsx-config set BOOT_VERBOSE 1 missing"; rc=1; }
 	grep -q '^tsx-autoupdate now$' "$F/cmds.log" 2>/dev/null && echo "OK: update entity Install ran tsx-autoupdate now" || { echo "FAIL: tsx-autoupdate now missing"; rc=1; }
 	grep -q '^tsx-config set ORIENTATION portrait$' "$F/cmds.log" 2>/dev/null && ! grep -q 'ORIENTATION sideways' "$F/cmds.log" \
-		&& echo "OK: orientation persisted through tsx-config (portrait; the bad option never reached it)" || { echo "FAIL: tsx-config set ORIENTATION portrait missing"; rc=1; }
+		&& echo "OK: orientation persisted through tsx-config (portrait, and the bad option never reached it)" || { echo "FAIL: tsx-config set ORIENTATION portrait missing"; rc=1; }
 }
 noise_check() {  # noise_check PORT MODE [KEY]
 	"$T/venv/bin/python3" "$HERE/esphome-noise-check.py" "$@" || rc=1
@@ -182,7 +187,7 @@ grep -q 'connection accepted: 127.0.0.1 (plaintext)' "$T/server.log" && echo "OK
 grep -q 'connection closed: 127.0.0.1 (plaintext)' "$T/server.log" && echo "OK: closed connection logged (plaintext)" || { echo "FAIL: no closed-connection log line"; rc=1; }
 noise_check "$API_PORT" noise-on-plain "$KEY"
 
-# ---- the same, encrypted (HA_API_KEY; tsx_panel/noise.py) -----------------
+# ---- the same, encrypted (HA_API_KEY. tsx_panel/noise.py) -----------------
 ENC_PORT=$((API_PORT + 20))
 start_server standalone "$T/server-enc.log" "$ENC_PORT" Enc-Panel TSX_HA_API_KEY="$KEY"
 wait_listening "$T/server-enc.log"
@@ -195,10 +200,11 @@ noise_check "$ENC_PORT" wrong-key "$BADKEY"
 noise_check "$ENC_PORT" plaintext
 grep -q 'handshake rejected: Handshake MAC failure' "$T/server-enc.log" && echo "OK: wrong key logged" || { echo "FAIL: wrong key not logged"; rc=1; }
 
-# ---- the voice satellite's code path (VOICE=on), encrypted and not --------
-# Same entity check through linux-voice-assistant's own VoiceSatelliteProtocol
-# with the tsx_lva patches, plus the satellite's own entities (--voice); the
-# device name must come out the same as tsx-esphome's (not lva-<mac>).
+# ---- the voice satellite code path (VOICE=on), encrypted and not ----------
+# This is the same entity check, through the VoiceSatelliteProtocol of
+# linux-voice-assistant with the tsx_lva patches. It also checks the entities
+# of the satellite itself (--voice). The device name must match the name of
+# tsx-esphome (not lva-<mac>).
 VENC_PORT=$((API_PORT + 30)); VPLAIN_PORT=$((API_PORT + 31))
 start_server voice "$T/voice-enc.log" "$VENC_PORT" Voice-Enc TSX_HA_API_KEY="$KEY"
 start_server voice "$T/voice-plain.log" "$VPLAIN_PORT" Voice-Plain TSX_HA_API_KEY=
@@ -231,7 +237,7 @@ st=0; wait "$VBADKEY_PID" || st=$?
 [ "$st" != 0 ] && grep -q 'not serving the ESPHome API unencrypted' "$T/voice-badkey.log" && echo "OK: the voice satellite exits ($st) on a bad key file" || { echo "FAIL: the voice satellite did not refuse a bad key file"; cat "$T/voice-badkey.log"; rc=1; }
 
 # ---- HA_ALLOW_FROM: an allowed peer connects, a denied one is closed ------
-# (rootfs/voice/shim/tsx_panel/security.py; defence in depth on top of
+# (rootfs/voice/shim/tsx_panel/security.py. Defence in depth on top of
 # HA_API_KEY, or the only access control without one)
 echo "== HA_ALLOW_FROM =="
 ALLOW_PORT=$((API_PORT + 10)); DENY_PORT=$((API_PORT + 11))

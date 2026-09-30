@@ -1,14 +1,16 @@
 #!/bin/bash
-# mkpayload refuses payloads that must not go on a stick:
-#   - a rootfs without ENV_VERIFIED=yes (stale build: tsx-boot-ok would not reset boot_retry)
-#   - a boot image whose initramfs has no tsx-autoinstall (today's p1 image
-#     rootfs/out/tsxboot.img = the current audio-bring-up image, built without stage 2)
-# accepts the same kernel repacked with the stage-2 initramfs
-# (installer/out/tsxboot-audio-autoinstall.img, initramfs/repack-bootimg.py),
-# and reports what the current rootfs/out/rootfs.tar.gz contains. Also checks
-# the --usb and --recovery layouts (installer/emmc/tsx-usb-recovery round trip
-# is in installer/emmc/tests/test-usb-recovery.sh) against synthetic fixtures,
-# so those checks run without a real build.
+# mkpayload must refuse payloads that must not go on a stick:
+#   - a rootfs without ENV_VERIFIED=yes (a stale build: tsx-boot-ok would not
+#     reset boot_retry)
+#   - a boot image whose initramfs has no tsx-autoinstall (the current p1
+#     image rootfs/out/tsxboot.img, the audio bring-up image, built without
+#     stage 2)
+# mkpayload must accept the same kernel repacked with the stage-2 initramfs
+# (installer/out/tsxboot-audio-autoinstall.img, initramfs/repack-bootimg.py).
+# It also reports what the current rootfs/out/rootfs.tar.gz contains.
+# The test also checks the --usb and --recovery layouts against synthetic
+# fixtures, so those checks run without a real build. The round trip of
+# installer/emmc/tsx-usb-recovery is in installer/emmc/tests/test-usb-recovery.sh.
 set -uo pipefail
 INSTALLER_DIR=$(cd "$(dirname "$0")/.." && pwd); ROOT=$(cd "$INSTALLER_DIR/.." && pwd)
 MKPAYLOAD=$INSTALLER_DIR/payload/mkpayload
@@ -46,7 +48,7 @@ grep -q "stale build" "$W/1.txt" && echo "  ok: rootfs with ENV_VERIFIED=no refu
 if [ -f "$I" ]; then
 	"$MKPAYLOAD" --out "$W/o2" --rootfs "$W/yes.tar.gz" --bootimg-tsw1060 "$I" > "$W/2.txt" 2>&1
 	grep -q "no /usr/sbin/tsx-autoinstall" "$W/2.txt" && echo "  ok: today's p1 image $(basename "$I") ($(sha256sum < "$I" | cut -c1-12)) refused: no tsx-autoinstall" || { echo "  FAIL noauto"; cat "$W/2.txt"; rc=1; }
-else echo "  info: $I not built here; skipping the real-p1-image refusal check"; fi
+else echo "  info: $I not built here. Skipping the real-p1-image refusal check"; fi
 "$MKPAYLOAD" --out "$W/o3" --rootfs "$W/yes.tar.gz" --bootimg-tsw1060 "$W/auto.img" > "$W/3.txt" 2>&1 && [ -f "$W/o3/tsx-install/SHA256SUMS" ] && echo "  ok: good payload accepted" || { echo "  FAIL good"; cat "$W/3.txt"; rc=1; }
 
 echo "== --usb layout (synthetic fixtures)"
@@ -81,8 +83,8 @@ if [ -f "$IA" ]; then
 	"$MKPAYLOAD" --out "$W/o4" --rootfs "$R" --bootimg-tsw1060 "$IA" --rescue-tsw1060 "$RS" > "$W/4.txt" 2>&1 && grep -q "^DEFUSE_GOLDEN=1" "$W/o4/tsx-install/tsx-install.conf" \
 		&& grep -q "^RESCUE_tsw1060=tsx-install/rescue-tsw1060.img" "$W/o4/tsx-install/tsx-install.conf" \
 		&& (cd "$W/o4" && sha256sum -c --quiet tsx-install/SHA256SUMS) \
-		&& echo "  ok: real payload accepted: $(basename "$IA") ($(sha256sum < "$IA" | cut -c1-12)) + rescue $(sha256sum < "$RS" | cut -c1-12) + current rootfs.tar.gz; DEFUSE_GOLDEN=1, RESCUE_tsw1060; SHA256SUMS verify" \
+		&& echo "  ok: real payload accepted: $(basename "$IA") ($(sha256sum < "$IA" | cut -c1-12)) + rescue $(sha256sum < "$RS" | cut -c1-12) + current rootfs.tar.gz. DEFUSE_GOLDEN=1, RESCUE_tsw1060. SHA256SUMS verify" \
 		|| { echo "  FAIL real payload"; cat "$W/4.txt"; rc=1; }
-else echo "  info: $IA not built here (initramfs/build-initramfs.sh + repack-bootimg.py); skipping the real-payload check"; fi
+else echo "  info: $IA not built here (initramfs/build-initramfs.sh + repack-bootimg.py). Skipping the real-payload check"; fi
 if [ -f "$R" ]; then echo "  info: rootfs/out/rootfs.tar.gz ($(sha256sum < "$R" | cut -c1-12), $(stat -c %y "$R" | cut -c1-16)) has $(tar -xzOf "$R" ./etc/tsx/uboot-env.conf 2>/dev/null | grep ^ENV_VERIFIED)"; fi
 [ $rc = 0 ] && echo PASS test-mkpayload || echo FAIL test-mkpayload; exit $rc

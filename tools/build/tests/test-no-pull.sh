@@ -1,9 +1,9 @@
 #!/bin/bash
-# Host test: remote-build.sh's --no-pull / REMOTE_PULL=0 opt-out (README.md
-# "Remote build (optional)"). No ssh/rsync needed for this one: the arg
-# parser and maybe_pull() are self-contained, so pull them out of the real
-# script (same technique as test-push-protect.sh's PROTECT= extraction) and
-# exercise them directly with a stub pull().
+# Host test: the --no-pull and REMOTE_PULL=0 opt-out of remote-build.sh
+# (README.md "Remote build (optional)"). This test needs no ssh and no rsync.
+# The argument parser and maybe_pull() are self-contained. The test extracts
+# them from the real script (the same technique as the PROTECT= extraction in
+# test-push-protect.sh) and runs them with a stub pull().
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 N=0 F=0

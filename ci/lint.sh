@@ -1,24 +1,25 @@
 #!/bin/bash
-# Syntax / smoke lint for the whole repo, no hardware and no build needed.
-# Run locally exactly like CI does: ci/lint.sh
-#   - every script with a "#!/bin/sh" shebang must pass `busybox sh -n`
-#     (this is the shell that runs on the panel and in the Alpine build
-#     containers -- no bash-only syntax allowed there)
+# Syntax and smoke lint for the whole repo. It needs no hardware and no build.
+# Run it locally the way CI does: ci/lint.sh
+#   - every script with a "#!/bin/sh" shebang must pass `busybox sh -n`.
+#     This is the shell that runs on the panel and in the Alpine build
+#     containers, so bash-only syntax is not allowed there.
 #   - every script with a "#!/bin/bash" shebang must pass `bash -n`
 #   - every *.py file must byte-compile
 #   - the host installer drivers must support --help
-# work/ (old per-session reports, not part of the shipped tree) is skipped.
-# Run in docker as the calling user (-u "$(id -u):$(id -g)"), so any file this
-# leaves behind is owned by that user, not root. `python3 -m py_compile`
-# always writes a __pycache__/*.pyc next to each file regardless of
-# PYTHONDONTWRITEBYTECODE, so those are removed again at the end.
+# The script skips work/ (old per-session reports, not part of the shipped tree).
+# It runs in docker as the calling user (-u "$(id -u):$(id -g)"). The calling
+# user then owns any file that the script leaves behind, and root does not.
+# `python3 -m py_compile` always writes a __pycache__/*.pyc next to each file,
+# whatever PYTHONDONTWRITEBYTECODE says. The script removes those files again
+# at the end.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 fail=0
 
-# Classify by the file's actual first line (not a content grep: some scripts
-# embed a "#!/bin/sh" heredoc for a script they generate, which is not their
-# own shebang).
+# Classify by the actual first line of the file. Do not grep the content:
+# some scripts embed a "#!/bin/sh" heredoc for a script that they generate,
+# and that line is not their own shebang.
 sh_files=() bash_files=()
 while IFS= read -r -d '' f; do
 	case "$(head -c 4096 "$f" 2>/dev/null | tr -d '\0' | head -n1)" in

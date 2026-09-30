@@ -10,12 +10,12 @@ TOOL="$HERE/tsx-usb-recovery"
 STOCK_SWITCH='usb start 0;if fatexist usb 0 jabil.txt; then run jabil_factory; else   fi;'
 FALLBACK_HOOK="${STOCK_SWITCH}if itest \${boot_retry} -lt 6; then run tsx_boot; fi"
 ONCE_HOOK="${STOCK_SWITCH}if itest \${tsx_once} -eq 1; then setenv tsx_once 0; saveenv; run tsx_boot; fi"
-# Bound every fw_printenv/fw_setenv call the tool makes (see tsx-usb-recovery's
-# TSX_FWENV_TIMEOUT): a config whose declared env size doesn't match the real
-# file size makes u-boot-tools' read loop spin at 100% CPU forever instead of
-# erroring out (confirmed on both uboot-tools 2026.07 and Alpine's 2026.04).
-# Keep it short here since every fixture below is well-formed and should
-# return immediately; a long run means something regressed.
+# Bound every fw_printenv and fw_setenv call of the tool (see TSX_FWENV_TIMEOUT
+# in tsx-usb-recovery). The declared env size can differ from the real file
+# size. Then the read loop of u-boot-tools spins at 100% CPU forever and never
+# returns an error. We confirmed this on uboot-tools 2026.07 and on Alpine
+# 2026.04. Keep the value short here, because every fixture below is
+# well-formed and must return at once. A long run means a regression.
 export TSX_FWENV_TIMEOUT=3
 W=$(mktemp -d)
 cleanup() { jobs -p | xargs -r kill -9 2>/dev/null; rm -rf "$W"; }
@@ -55,7 +55,7 @@ sys.exit(0 if zlib.crc32(d[4:]) & 0xffffffff == stored else 1)
 
 echo "== 1. status on the stock hook (disabled)"
 E=$W/env.bin; mkenv "$E" "$STOCK_SWITCH"
-OUT=$(TSX_ENV_DEV="$E" TSX_RUN="$W" "$TOOL" status) && ok "status exits 0 on a recognised (disabled) hook"
+OUT=$(TSX_ENV_DEV="$E" TSX_RUN="$W" "$TOOL" status) && ok "status exits 0 on a recognized (disabled) hook"
 echo "$OUT" | grep -q ': disabled ' && ok "status reports disabled"
 
 echo "== 2. enable"

@@ -1,11 +1,14 @@
 #!/bin/bash
-# The android-crestron/kernel GPL drop has no .S files at all (the repo's .gitignore
-# has "*.s", apparently committed on a case-insensitive file system). Make a build
-# copy of the vendor tree and restore them:
-#   - files that exist in linux-stable v3.10.33 (same base version) from there,
-#   - Amlogic-only files (mach-meson*, drivers/amlogic, ...) from endlessm/linux-meson
-#     (Amlogic 3.10.101 tree with the same mach-meson6/8/8b/g9 layout).
-# Output: srcfix/vendor-kernel, and srcfix/restored-asm.txt listing every file and its source.
+# The android-crestron/kernel GPL drop has no .S files at all. The .gitignore
+# of the repo has "*.s", and someone apparently committed on a case-insensitive
+# file system. This script makes a build copy of the vendor tree and restores
+# the files:
+#   - Files that exist in linux-stable v3.10.33 (the same base version) come
+#     from there.
+#   - Amlogic-only files (mach-meson*, drivers/amlogic, ...) come from
+#     endlessm/linux-meson (the Amlogic 3.10.101 tree with the same
+#     mach-meson6/8/8b/g9 layout).
+# Output: srcfix/vendor-kernel, and srcfix/restored-asm.txt with every file and its source.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 V=$HERE/../../../android-crestron/kernel

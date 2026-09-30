@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Host-side test for tsx-emmc-restore, against a real unit-B eMMC
-# capture (out/bundle-unitB + a sparse copy of the captured raw eMMC image).
-# Never touches any panel, ssh host, or serial port --
-# workstation only, using a sparse copy of the captured raw eMMC image and, for
-# the loop-device/mount paths, a privileged alpine container (same pattern as
-# installer/tests/test-factory.sh).
-# Needs a real unit's eMMC + boot0 captures (CAPTURES_DIR, not part of this
-# repo -- proprietary/per-unit); SKIPS if they are not present.
+# capture (out/bundle-unitB and a sparse copy of the captured raw eMMC image).
+# The test never touches a panel, an ssh host or a serial port.
+# It runs on the workstation only. The loop-device and mount paths run in a
+# privileged Alpine container (same pattern as installer/tests/test-factory.sh).
+# The test needs the eMMC and boot0 captures of a real unit (CAPTURES_DIR).
+# They are proprietary, one set per unit, and not part of this repo.
+# The test skips if they are not present.
 set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -25,7 +25,7 @@ BOOT0=$CAPTURES/tsw-1060-unitB/emmc/unitB-mmcblk1boot0-20260926-2114.img
 TSXBOOT=$INSTALLER/emmc/out/tsxboot-emmc.img
 
 if [ -z "$CAPTURES" ] || [ ! -f "$BOOT0" ] || [ ! -f "$RAW" ]; then
-	echo "SKIPPED: needs a real unit's eMMC + boot0 captures (set CAPTURES_DIR and RAW); not present here"
+	echo "SKIPPED: needs a real unit's eMMC + boot0 captures (set CAPTURES_DIR and RAW). Not present here"
 	exit 0
 fi
 
@@ -212,7 +212,7 @@ else
 		$SH "$SRC" run "$BUNDLE" --yes >"$T/log-t4.txt" 2>&1; echo "T4_EXIT=$?" >>"$T/log-t4.txt"
 	env TSX_EMMC="$T/emmc.img" TSX_BOOT0="$T/boot0.img" \
 		$SH "$SRC" run "$BUNDLE" --yes >"$T/log-t5.txt" 2>&1; echo "T5_EXIT=$?" >>"$T/log-t5.txt"
-	echo "SKIPPED: test 6 (loop device + mount refusal) needs docker --privileged; docker not usable here"
+	echo "SKIPPED: test 6 (loop device + mount refusal) needs docker --privileged. docker not usable here"
 fi
 
 # ---- evaluate test 1 --------------------------------------------------------

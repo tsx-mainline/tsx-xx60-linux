@@ -1,6 +1,6 @@
-# /etc/inittab (TSX kiosk). The panel screen belongs to the kiosk (cage on the
-# active VT via seatd), so there is no getty on tty1..6; login on the serial
-# console or over ssh.
+# /etc/inittab (TSX kiosk). The kiosk owns the panel screen (cage on the
+# active VT through seatd), so there is no getty on tty1..6.
+# Log in on the serial console or over ssh.
 ::sysinit:/sbin/openrc sysinit
 ::sysinit:/sbin/openrc boot
 ::wait:/sbin/openrc default

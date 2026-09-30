@@ -1,21 +1,22 @@
 #!/bin/sh
-# Build libtensorflowlite_c.so (TensorFlow Lite C API 2.17.1, the version the
-# pymicro-wakeword / pyopen-wakeword wheels ship) for Alpine armv7 (musl).
-# PyPI only has a glibc armv7 build (Cortex-A7, neon-vfpv4): it does not load
-# on musl, not even with gcompat (strtoll_l missing), and vfpv4 is not on the
-# Cortex-A9. Run INSIDE an armv7 alpine:3.24 container on the build host:
+# Build libtensorflowlite_c.so (TensorFlow Lite C API 2.17.1, the version that
+# the pymicro-wakeword and pyopen-wakeword wheels ship) for Alpine armv7 (musl).
+# PyPI has only a glibc armv7 build (Cortex-A7, neon-vfpv4). It does not load
+# on musl, not even with gcompat (strtoll_l is missing). The Cortex-A9 has no
+# vfpv4. Run this script inside an armv7 alpine:3.24 container on the build host:
 #   docker run --rm --platform linux/arm/v7 -v $P17:$P17 alpine:3.24 sh $P17/voice/build-tflite.sh
-# Result: voice/tflite/libtensorflowlite_c.so + SHA256SUMS + BUILDINFO, which
-# install-lva.sh installs (checksum verified). Compiler flags = Alpine armv7
-# defaults (armv7-a, vfpv3-d16, hard float): no NEON assumed. musl has no
-# strtoll_l: flatbuffers is built with FLATBUFFERS_LOCALE_INDEPENDENT=0.
+# Result: voice/tflite/libtensorflowlite_c.so, SHA256SUMS and BUILDINFO.
+# install-lva.sh installs them and verifies the checksum. The compiler flags
+# are the Alpine armv7 defaults (armv7-a, vfpv3-d16, hard float). The build
+# does not assume NEON. musl has no strtoll_l, so the build sets
+# FLATBUFFERS_LOCALE_INDEPENDENT=0 for flatbuffers.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 P17=$(cd "$HERE/.." && pwd)
 TF=2.17.1
 TF_SHA256=2d3cfb48510f92f3a52fb05b820481c6f066a342a9f5296fe26d72c4ea757700
 C=${TFLITE_CACHE:-$P17/cache}
-B=${TFLITE_BUILD:-$P17/build-tflite}   # kept between runs (incremental)
+B=${TFLITE_BUILD:-$P17/build-tflite}   # stays between runs (incremental build)
 apk add -q --no-cache build-base cmake samurai git curl python3 linux-headers patch >/dev/null
 mkdir -p "$C" /build
 [ -s "$C/tensorflow-$TF.tar.gz" ] || curl -fsSL -o "$C/tensorflow-$TF.tar.gz" https://github.com/tensorflow/tensorflow/archive/refs/tags/v$TF.tar.gz

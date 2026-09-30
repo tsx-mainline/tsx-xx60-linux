@@ -1,19 +1,23 @@
 #!/system/bin/bash
-# xx60 mainline installer: runs on the STOCK ANDROID root shell
-# (ssh -tt admin@<panel>, root bash 3.2). No UART, no U-Boot prompt needed.
-# One root-shell command does the whole conversion, no second stage: p2
-# (golden /system, unused by the running Android) <- the kiosk rootfs
-# (rootfs-p2.ext4.gz on the stick), p1:boot.img (Crestron golden) <- the
-# mainline rescue, p1:tsxboot.img <- the kiosk image, U-Boot env hook, and
-# LAST one MBR byte (entry 4 type 0x05 -> 0x83): p5..p8 (Android sdcard/
-# data/cache/logs) disappear, p4 becomes one 2.8 GiB partition that the
-# first mainline boot formats as ext4 tsxdata (/data), because
-# p1:tsxlayout.cfg orders it. The card's Android is gone afterwards;
-# factory/puf-tool.sh + tsx-factory-restore bring it back from the .puf.
-# This "card stage" is temporary: tsx-card-to-emmc (steps/tsx-card-to-emmc)
-# then migrates boot+root onto the eMMC, which is the panel's normal end
-# state. tsx-install-mainline runs this and the eMMC migration as one command;
-# calling this script directly is an expert/debug step.
+# xx60 mainline installer. It runs on the STOCK ANDROID root shell
+# (ssh -tt admin@<panel>, root bash 3.2). It needs no UART and no U-Boot
+# prompt. One root-shell command does the whole conversion, with no second
+# stage:
+#   - p2 (the golden /system, unused by the running Android) gets the kiosk
+#     rootfs (rootfs-p2.ext4.gz on the stick)
+#   - p1:boot.img (the Crestron golden) gets the mainline rescue
+#   - p1:tsxboot.img gets the kiosk image
+#   - the U-Boot env gets the hook
+#   - LAST, one MBR byte changes (entry 4 type 0x05 -> 0x83). p5..p8 (Android
+#     sdcard, data, cache, logs) disappear. p4 becomes one 2.8 GiB partition.
+#     The first mainline boot formats it as ext4 tsxdata (/data), because
+#     p1:tsxlayout.cfg orders it.
+# The Android on the card is gone afterwards. factory/puf-tool.sh and
+# tsx-factory-restore bring it back from the .puf.
+# This "card stage" is temporary. tsx-card-to-emmc (steps/tsx-card-to-emmc)
+# then migrates boot and root onto the eMMC, which is the normal end state of
+# the panel. tsx-install-mainline runs this script and the eMMC migration as
+# one command. Calling this script directly is an expert and debug step.
 #
 #   bash tsx-android-install.sh preflight [options]   read only: checks + plan
 #   bash tsx-android-install.sh install   [options]   do it (asks for "INSTALL")
@@ -24,30 +28,30 @@
 #                      and the directory this script was started from)
 #   --p2-written       p2 ALREADY holds the kiosk rootfs image, written from outside
 #                      (e.g. a direct write to /dev/block/mmcblk0p2 by another tool).
-#                      The stick directory then needs no rootfs-p2.ext4.gz (348 MiB: fits
-#                      no card partition), only ROOTFS_P2_SHA256 and ROOTFS_P2_BYTES in
+#                      The stick directory then needs no rootfs-p2.ext4.gz (348 MiB, it fits
+#                      no card partition). It needs only ROOTFS_P2_SHA256 and ROOTFS_P2_BYTES in
 #                      tsx-install.conf. preflight hashes p2 (about a minute) and refuses
-#                      a mismatch; install writes nothing to p2.
+#                      a mismatch. Install writes nothing to p2.
 #   --bootimg FILE     boot image to put on p1 (default: tsxboot-<model>.img on the stick)
-#   --guard fallback|nogolden   U-Boot hook variant (default fallback = the one
-#                      proven on the TSW-1060; nogolden = untested)
-#   --no-defuse-golden do not set DataRecoveryDone=1. Default: set it (the golden
-#                      image then does not format p5 / wipe /data if it
-#                      ever runs; mainline's tsx-boot-ok keeps it at 1 after each boot)
+#   --guard fallback|nogolden   U-Boot hook variant (default fallback, the one
+#                      proven on the TSW-1060. Nogolden is untested)
+#   --no-defuse-golden do not set DataRecoveryDone=1. Default: set it. Then the golden
+#                      image does not format p5 or wipe /data if it ever runs.
+#                      The tsx-boot-ok of mainline keeps it at 1 after each boot.
 #   --no-sdcard-backup do not tar the Android sdcard (p5) contents to the stick
 #   --no-reboot        do not reboot at the end
 #   --yes              do not ask
 #
 # What it writes: p2 (kiosk rootfs, unless --p2-written), the Crestron golden
-# p1:boot.img -> backups then <- the mainline rescue, p1:tsxboot.img <- the
-# kiosk image, p1:tsxlayout.cfg (orders the first mainline boot to format p4
-# as tsxdata), three or four U-Boot env variables through Android's own
-# fw_setenv, and LAST the MBR byte that switches p5..p8 for p4 (every earlier
-# state still boots: Android, or mainline from p2). Backups go to the stick
-# and to /data/local/tsx-backup. It never writes the eMMC, U-Boot (the card's
-# U-Boot copy in the first MiB included) or p3.
-# (Older single-stage and second-stage alternatives to this flow were
-# dropped: this is the only supported path now.)
+# p1:boot.img (backups first, then the mainline rescue), p1:tsxboot.img (the
+# kiosk image), p1:tsxlayout.cfg (orders the first mainline boot to format p4
+# as tsxdata), three or four U-Boot env variables through the own fw_setenv of
+# Android, and LAST the MBR byte that swaps p5..p8 for p4. Every earlier state
+# still boots: Android, or mainline from p2. Backups go to the stick and to
+# /data/local/tsx-backup. It never writes the eMMC, U-Boot (the U-Boot copy of
+# the card in the first MiB included) or p3.
+# The older single-stage and second-stage alternatives to this flow are gone.
+# This is the only supported path now.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/tsx-lib.sh"
@@ -79,7 +83,7 @@ done
 case "$CMD" in preflight|install|status) ;; *) sed -n '2,53p' "$0"; exit 2;; esac
 case "$GUARD" in fallback) WANT_SWITCH=$TSX_SWITCH_FALLBACK;; nogolden) WANT_SWITCH=$TSX_SWITCH_NOGOLDEN;; *) die "--guard fallback|nogolden";; esac
 
-W=${TSX_WORKDIR:-/dev/tsx-inst}          # /dev is a tmpfs on Android: RAM, gone after reboot
+W=${TSX_WORKDIR:-/dev/tsx-inst}          # /dev is a tmpfs on Android (RAM, gone after a reboot)
 mkdir -p "$W" || die "cannot create $W"
 LOG=$W/install.log
 MNT_P1=$W/p1 P1_MOUNTED_BY_US=0
@@ -91,7 +95,7 @@ FAILS=0
 chk() { if [ "$1" = ok ]; then log "  ok    $2"; else log "  FAIL  $2"; FAILS=$((FAILS+1)); fi; }
 
 log "== xx60 installer ($CMD) $(date 2>/dev/null)"
-[ "$(id -u)" = 0 ] && chk ok "running as root" || chk fail "not root (id -u = $(id -u)); use: ssh -tt admin@<panel>"
+[ "$(id -u)" = 0 ] && chk ok "running as root" || chk fail "not root (id -u = $(id -u)). Use: ssh -tt admin@<panel>"
 log "  busybox: $BB"
 tsx_pick_fwenv && chk ok "fw_printenv/fw_setenv: $FWP" || chk fail "no fw_printenv/fw_setenv"
 BBLIST=$("$BB" --list 2>/dev/null)
@@ -118,7 +122,7 @@ BR=$(tsx_env boot_retry 2>/dev/null); GBR=$(tsx_env golden_boot_retry 2>/dev/nul
 log "  boot_retry=$BR golden_boot_retry=$GBR DataRecoveryDone=$(tsx_env DataRecoveryDone 2>/dev/null) fwUpgrade=$(tsx_env fwUpgrade 2>/dev/null)"
 [ "$(tsx_env fwUpgrade 2>/dev/null)" = 0 ] || chk fail "fwUpgrade is not 0: a Crestron firmware update is in progress"
 
-# p1 (FAT, golden boot.img). Android does not mount it; mount it ourselves.
+# p1 (FAT, golden boot.img). Android does not mount it, so this script mounts it.
 M=$(tsx_mounts_of "$P1" | head -n 1)
 if [ -n "$M" ]; then MNT_P1=$M; log "  p1 already mounted at $M"
 else
@@ -153,9 +157,9 @@ if [ -n "$STICK" ] && [ -n "${MODEL:-}" ] && [ "$CMD" != status ]; then
 	SUMS=$STICK/tsx-install/SHA256SUMS
 	P2REL=$(tsx_conf ROOTFS_P2 "$CONF")
 	if [ $P2WRITTEN = 1 ] && [ -n "$P2REL" ] && [ ! -f "$STICK/$P2REL" ]; then
-		# the rootfs archive is not on the stick by design: p2 itself is checked below
+		# By design, the rootfs archive is not on the stick. The script checks p2 itself below.
 		grep -v "  $P2REL\$" "$SUMS" > "$W/sums.in"; SUMS=$W/sums.in
-		log "  --p2-written: $P2REL is not on the stick (expected); p2 is hashed instead"
+		log "  --p2-written: $P2REL is not on the stick (expected). p2 is hashed instead"
 	fi
 	if (cd "$STICK" && sha256sum -c "$SUMS" > "$W/sums.txt" 2>&1); then chk ok "stick payload: all sha256 match$( [ "$SUMS" != "$STICK/tsx-install/SHA256SUMS" ] && echo ' (rootfs archive excluded)')"
 	else chk fail "stick payload corrupt: $(grep -v ': OK$' "$W/sums.txt" | head -n 3 | tr '\n' ' ')"; fi
@@ -178,7 +182,7 @@ if [ "$CMD" != status ]; then
 	elif [ -n "$P2IMG" ] && [ -f "$P2IMG" ] && [ -n "$P2SHA" ] && [ -n "$P2BYTES" ]; then
 		[ "$P2BYTES" -le $((1638400 * 512)) ] && [ $((P2BYTES % 1048576)) = 0 ] && chk ok "kiosk rootfs for p2 on the stick ($P2BYTES bytes)" \
 			|| chk fail "ROOTFS_P2_BYTES=$P2BYTES does not fit p2 (800 MiB, whole MiB)"
-	else chk fail "no rootfs-p2 image on the stick (mkpayload --rootfs-p2; ROOTFS_P2, ROOTFS_P2_SHA256, ROOTFS_P2_BYTES; or --p2-written)"; fi
+	else chk fail "no rootfs-p2 image on the stick (mkpayload --rootfs-p2. ROOTFS_P2, ROOTFS_P2_SHA256, ROOTFS_P2_BYTES. Or --p2-written)"; fi
 	[ -n "$RESC" ] && [ -f "$RESC" ] && [ "$(dd if="$RESC" bs=8 count=1 2>/dev/null)" = "ANDROID!" ] && chk ok "rescue image for the golden slot: $RESC" \
 		|| chk fail "no rescue image for ${MODEL:-?} on the stick (mkpayload --rescue-tsw1060)"
 	[ -z "$(tsx_mounts_of "$P2")" ] && chk ok "p2 is not mounted (Android uses it only in the golden image)" || chk fail "p2 is mounted"
@@ -215,7 +219,7 @@ if [ "$CMD" = status ]; then
 	log "== status: hook=$HOOK tsx_boot=$( [ -n "$TB" ] && echo set || echo unset ) p1:tsxboot.img=$( [ -f "$MNT_P1/tsxboot.img" ] && echo yes || echo no ) tsxboot.off=$( [ -f "$MNT_P1/tsxboot.off" ] && echo yes || echo no ) p5=$("$BB" blkid "$P5" 2>/dev/null)"
 	exit 0
 fi
-[ $FAILS = 0 ] || die "$FAILS check(s) failed; nothing written"
+[ $FAILS = 0 ] || die "$FAILS check(s) failed. Nothing written"
 if [ "$CMD" = preflight ]; then log "== preflight OK (nothing written). Run again with 'install' to do it."; exit 0; fi
 
 # ------------------------------------------------------------------ install
@@ -224,7 +228,7 @@ if [ $YES != 1 ]; then
 	read -r ans; [ "$ans" = INSTALL ] || die "not confirmed"
 fi
 
-# 1. backups (everything below is read-only until step 2)
+# 1. Backups. Everything below is read-only until step 2.
 TS=$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)
 BK=/data/local/tsx-backup/$UNIT-$TS
 mkdir -p "$BK" || die "cannot create $BK"
@@ -254,7 +258,7 @@ if [ -n "$STICK" ]; then
 	fi
 fi
 
-# 2. p1 (FAT): boot image, env backup copy; golden boot.img is never opened for writing
+# 2. p1 (FAT): boot image and a copy of the env backup. The script never opens the golden boot.img for writing.
 cp "$BK/env-0x100000.bin" "$MNT_P1/tsxenv.bak" && sync
 BSHA=$(sha256sum < "$BOOTIMG" | cut -d' ' -f1)
 if [ -f "$MNT_P1/tsxboot.img" ] && [ "$(sha256sum < "$MNT_P1/tsxboot.img" | cut -d' ' -f1)" = "$BSHA" ]; then
@@ -272,17 +276,17 @@ else
 fi
 [ "$(sha256sum < "$MNT_P1/boot.img" | cut -d' ' -f1)" = "$GSHA" ] || warn "golden boot.img changed?!"
 
-# 3. p2 = kiosk rootfs, golden slot = rescue, order for the first mainline boot
+# 3. p2 gets the kiosk rootfs, the golden slot gets the rescue, and p1 gets the order for the first mainline boot.
 if [ $P2WRITTEN = 1 ]; then
 	[ "$P2GOT" = "$P2SHA" ] || die "p2 does not hold the rootfs image ($P2GOT != $P2SHA)"
 	GOT=$P2GOT
-	log "p2 already holds the kiosk rootfs (hashed from the card during the checks: $GOT); nothing written to p2"
+	log "p2 already holds the kiosk rootfs (hashed from the card during the checks: $GOT). Nothing written to p2"
 else
 	log "writing the kiosk rootfs to p2 ($P2BYTES bytes, about a minute)"
 	gunzip -c "$P2IMG" | dd of="$P2" bs=1048576 2>"$W/dd.txt" || die "write to p2 failed: $(cat "$W/dd.txt") (Android still boots: p2 is only the golden /system)"
 	sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 	GOT=$(dd if="$P2" bs=1048576 count=$((P2BYTES / 1048576)) 2>/dev/null | sha256sum | cut -d' ' -f1)
-	[ "$GOT" = "$P2SHA" ] || die "p2 readback $GOT != $P2SHA (nothing else changed yet; Android still boots)"
+	[ "$GOT" = "$P2SHA" ] || die "p2 readback $GOT != $P2SHA (nothing else changed yet. Android still boots)"
 	log "p2 written and verified ($GOT)"
 fi
 RSHA=$(sha256sum < "$RESC" | cut -d' ' -f1)
@@ -292,7 +296,7 @@ if [ "$(sha256sum < "$MNT_P1/boot.img" 2>/dev/null | cut -d' ' -f1)" != "$RSHA" 
 	cp "$RESC" "$MNT_P1/boot.new" && sync
 	[ "$(sha256sum < "$MNT_P1/boot.new" | cut -d' ' -f1)" = "$RSHA" ] || die "rescue copy to p1 corrupt (golden backup: $BK/golden-boot.img)"
 	mv "$MNT_P1/boot.new" "$MNT_P1/boot.img" && sync
-	log "p1:boot.img = mainline rescue ($RSHA); Crestron's golden image: $BK/golden-boot.img${STICK:+ and the stick}"
+	log "p1:boot.img = mainline rescue ($RSHA). Crestron's golden image: $BK/golden-boot.img${STICK:+ and the stick}"
 fi
 MKUUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null)
 [ -n "$MKUUID" ] || die "cannot generate MKDATA_UUID (/proc/sys/kernel/random/uuid unreadable)"
@@ -300,7 +304,7 @@ MKUUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null)
 rm -f "$MNT_P1/tsxinst.cfg"
 rm -f "$MNT_P1/tsxboot.off"; sync
 
-# 4. U-Boot env through Android's fw_setenv (the same writer Crestron's scripts use on every boot)
+# 4. Write the U-Boot env through the own fw_setenv of Android. The scripts of Crestron use the same writer on every boot.
 setv() {
 	tsx_fw_bound "$FWS" "$1" "$2" >> "$LOG" 2>&1 || die "fw_setenv $1 failed or timed out (env backup: $BK/env-0x100000.bin, p1:tsxenv.bak)"
 	[ "$(tsx_env "$1")" = "$2" ] || die "readback of $1 differs after fw_setenv (restore the env backup with tsx-android-uninstall.sh --restore-env)"
@@ -315,7 +319,7 @@ tsx_fw_bound "$FWP" > "$BK/fw_printenv-after.txt" 2>&1
 tsx_env_sane >/dev/null || die "env not sane after the writes: restore $BK/env-0x100000.bin (tsx-android-uninstall.sh --restore-env)"
 log "U-Boot env hook installed ($GUARD)"
 
-# 5. the MBR byte, LAST (every earlier state still boots: Android, or mainline from p2)
+# 5. The MBR byte, LAST. Every earlier state still boots: Android, or mainline from p2.
 if [ "$(od -An -tx1 -j $TSX_MBR_P4_TYPE_OFFSET -N 1 "$WHOLE" | tr -d ' ')" != 83 ]; then
 	printf '\203' | dd of="$WHOLE" bs=1 seek=$TSX_MBR_P4_TYPE_OFFSET count=1 conv=notrunc 2>>"$LOG" || die "MBR write failed"
 	sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
@@ -326,7 +330,7 @@ fi
 [ -n "$STICK" ] && { mkdir -p "$STICK/tsx-install/log"; cp "$LOG" "$STICK/tsx-install/log/$UNIT-$TS-android.log"; }
 sync
 if [ "$P1_MOUNTED_BY_US" = 1 ]; then umount "$MNT_P1" && P1_MOUNTED_BY_US=0; fi
-log "DONE. Next boot: U-Boot -> p1:tsxboot.img -> kiosk from p2; the initramfs formats p4 as tsxdata once. The stick can go."
+log "DONE. Next boot: U-Boot -> p1:tsxboot.img -> kiosk from p2. The initramfs formats p4 as tsxdata once. The stick can go."
 if [ $REBOOT = 1 ]; then
 	log "rebooting in 5 s (Android's own reboot script hangs once p5 is not the Android sdcard)"
 	sync; sleep 5

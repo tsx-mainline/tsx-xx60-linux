@@ -1,8 +1,9 @@
 #!/bin/bash
-# Host test for tsx-buttons (+ the tsx-idled brightness override/offset, the
-# key-strip slide and the overlay FIFO): fake LED and
-# backlight sysfs dirs, a FIFO as the key input device, a fake HA REST API and a
-# fake Chromium DevTools endpoint (fakesrv.py), and the real tsx-idled for blanking.
+# Host test for tsx-buttons. It also covers the brightness override and offset
+# of tsx-idled, the key-strip slide and the overlay FIFO. The fixtures are
+# fake LED and backlight sysfs dirs and a FIFO as the key input device. They
+# also include a fake HA REST API and a fake Chromium DevTools endpoint
+# (fakesrv.py). The real tsx-idled does the blanking.
 # Usage: tests/test-buttons.sh      (builds both daemons with host gcc)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -128,8 +129,8 @@ press $F14 0.06; sleep 0.05; press $F17 0.06; sleep 0.6
 ok "two taps three keys apart: no slide, home short fires"
 
 # the panel hung flipped (ORIENTATION landscape-flipped / portrait-flipped):
-# the physical top key is at the bottom / left, so the slide turns around;
-# portrait (keys below, top key on the right) keeps it. Read at every step.
+# the physical top key is at the bottom / left, so the slide turns around.
+# Portrait (keys below, top key on the right) keeps it. Read at every step.
 echo landscape-flipped > $T/orientation
 slide $F14 $F15; sleep 0.6
 [ "$(bl)" = 5 ] || fail "landscape-flipped: physical down slide must be brighter: $(bl), want 5"
@@ -144,7 +145,7 @@ slide $F14 $F15; sleep 0.6
 [ "$(bl)" = 3 ] || fail "no orientation file: physical down slide must be darker: $(bl), want 3"
 ok "slide direction: turned around for landscape-/portrait-flipped, kept for portrait and landscape"
 
-# overlay FIFO: no reader -> OVERLAY_FALLBACK (blank toggle); a reader -> "full"/"slider"
+# overlay FIFO: no reader -> OVERLAY_FALLBACK (blank toggle). A reader -> "full"/"slider"
 [ -p $T/run/overlay.ctl ] || fail "no overlay FIFO $T/run/overlay.ctl"
 key $F13 1; sleep 0.6; key $F13 0; sleep 0.5
 grep -q '^blank' $T/idled.state || fail "overlay without a reader: fallback blank toggle did not blank"
@@ -158,7 +159,7 @@ slide $F15 $F14; sleep 0.3
 read -t 2 line <&8 && [ "$line" = slider ] || fail "slide: overlay reader got '${line:-nothing}', want slider"
 ctl "overlay hide"; read -t 2 line <&8 && [ "$line" = hide ] || fail "ctl overlay hide: '${line:-nothing}'"
 exec 8<&-
-ok "overlay: long hold -> full (reader) / fallback blank (no reader); slide -> slider; ctl overlay hide"
+ok "overlay: long hold -> full (reader) / fallback blank (no reader). Slide -> slider. Ctl overlay hide"
 rm -f $T/run/brightness-offset; sleep 0.4
 
 ctl "page reload"; sleep 0.8
@@ -172,7 +173,7 @@ grep -q '^blank' $T/idled.state || fail "power short: not blanked ($(cat $T/idle
 [ "$(bl)" = 0 ] || fail "power: backlight $(bl)"
 [ "$(led keypad)" = 5 ] || fail "blank: keypad LED $(led keypad), want LED_BLANK 5"
 [ "$(led key2)" = 1 ] || fail "blank: key LED enable $(led key2), want 1 (LED_BLANK > 0)"
-ok "power short -> blank via tsx-idled; key LEDs -> LED_BLANK"
+ok "power short -> blank via tsx-idled. Key LEDs -> LED_BLANK"
 
 kill -USR1 $(pgrep -x tsx-idled | head -1); sleep 0.9
 [ "$(led keypad)" = 128 ] || fail "wake: keypad LED $(led keypad)"
@@ -185,7 +186,7 @@ ctl "led auto"; sleep 0.3; [ "$(led keypad)" = 128 ] || fail "ctl led auto: $(le
 ctl "led 0"; sleep 0.3; [ "$(led keypad)$(led key1)" = 00 ] || fail "ctl led 0: enables should be off"
 ctl "led auto"; sleep 0.3
 echo 77 > "$T/leds/tsx:keypad/brightness"; sleep 5.5; [ "$(led keypad)" = 128 ] || fail "external LED change not re-applied"
-ok "control FIFO: led N/auto/0, key NAME off/auto; re-apply after external change"
+ok "control FIFO: led N/auto/0, key NAME off/auto. re-apply after external change"
 
 K=$HERE/../../rootfs/overlay/usr/local/bin/tsx-keypad
 TSX_RUN_DIR=$T/run $K led 60; sleep 0.3; [ "$(led keypad)" = 60 ] || fail "tsx-keypad led 60"
@@ -204,7 +205,7 @@ press $F14 0.6; sleep 1
 grep -q 'restarting the kiosk' $T/buttons.log || fail "fallback not logged"
 press $F14 0.1; sleep 1
 [ ! -e $T/run/kiosk-url ] || fail "home did not remove kiosk-url"
-ok "no DevTools -> kiosk-url + restart fallback; home clears it"
+ok "no DevTools -> kiosk-url + restart fallback. Home clears it"
 
 # panel.conf override: /run/tsx/kiosk.conf (tsx-config apply) wins over
 # KIOSK_CONF's KIOSK_URL for the derived HA_URL -- same precedence as

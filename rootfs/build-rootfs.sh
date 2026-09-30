@@ -1,41 +1,46 @@
 #!/bin/bash
 # Build the xx60 kiosk rootfs (Alpine armv7) and the switch_root
-# initramfs, in docker with qemu-user binfmt.
+# initramfs. The build runs in docker with qemu-user binfmt.
 #
 #   ./build-rootfs.sh [modules|rootfs|initramfs|all]
 #
 # Outputs (out/): rootfs.tar.gz, rootfs.ext4 (1492 MiB = mmcblk0p5), rootfs.manifest
 # (exact package versions), rootfs.sizes, rootfs.sha256, initramfs-switchroot.cpio.gz
 #
-# Env: ALPINE (default v3.24), KBUILD (kernel build dir to take modules from,
-# read only; default: every flavor build dir tools/build/kbuild.sh made next to
-# this repo, ../build-lts and ../build-stable, whichever exist, else ../build),
-# IMG_MB (default 1492). "modules" copies KBUILD's
-# *.ko (stripped) into modules/lib/modules/<release>; the rootfs build then
-# includes that tree. It replaces only that release's dir and older trees of
-# the same kernel series (same major.minor, e.g. an earlier 6.18.y build):
-# the other flavor's tree, staged by an earlier "modules" run with the other
-# KBUILD, stays. Run it once per flavor (KBUILD=../build-lts, then
-# KBUILD=../build-stable) for a rootfs with both. KVER (default: every release dir found under
-# modules/lib/modules, space-separated) selects which of possibly several
-# release trees under modules/lib/modules/ (e.g. from `make modules_install
-# INSTALL_MOD_PATH=...` for more than one kernel) get copied into the rootfs;
-# set it explicitly to build for only one. DRM_MESON, PANEL_LVDS, LIMA, touch
-# and backlight are built in, so the panel works without modules; they are
-# extras (USB, sound, ...).
+# Env:
+# ALPINE (default v3.24).
+# KBUILD is the kernel build dir that supplies the modules. The build only
+# reads it. The default is every flavor build dir that tools/build/kbuild.sh
+# made next to this repo (../build-lts and ../build-stable, whichever exist),
+# else ../build.
+# IMG_MB (default 1492).
+# "modules" copies the stripped *.ko files of KBUILD into
+# modules/lib/modules/<release>. The rootfs build then includes that tree.
+# "modules" replaces only the dir of that release and the older trees of the
+# same kernel series (same major.minor, for example an earlier 6.18.y build).
+# The tree of the other flavor stays. An earlier "modules" run with the other
+# KBUILD staged that tree. Run "modules" once per flavor (KBUILD=../build-lts,
+# then KBUILD=../build-stable) to get a rootfs with both.
+# KVER selects which release trees under modules/lib/modules/ the build copies
+# into the rootfs. There can be several, for example from `make modules_install
+# INSTALL_MOD_PATH=...` for more than one kernel. The default is every release
+# dir found there, space-separated. Set KVER to build for one release only.
+# DRM_MESON, PANEL_LVDS, LIMA, touch and backlight are built in, so the panel
+# works without modules. The modules are extras (USB, sound, ...).
 # Downloads: only Alpine packages from dl-cdn.alpinelinux.org (branch $ALPINE)
-# and the alpine:3.24 docker image; versions are recorded in out/rootfs.manifest.
-# CHROMIUM_ES2_PATCH (default 1): patch Chromium's ES3->ES2 fallback gate
-# (src/chromium-es2/); 0 = stock binary. Not used with TSX_APK_LOCAL.
-# This project's apk repository (tsx-aports, docs/updates.md):
+# and the alpine:3.24 docker image. out/rootfs.manifest records the versions.
+# CHROMIUM_ES2_PATCH (default 1) patches the Chromium ES3 to ES2 fallback gate
+# (src/chromium-es2/). 0 gives the stock binary. TSX_APK_LOCAL disables it.
+# This project's apk repository is tsx-aports (docs/updates.md).
 # TSX_APK_URL (default https://tsx-aports.unexceptional.net) is the base URL
-# the panel's /etc/apk/repositories lists first (<url>/<ALPINE>/common and
-# /xx60); it is never fetched during the build. TSX_APK_LOCAL (optional) is a
-# local copy of the published tree (the directory holding <ALPINE>/common and
-# <ALPINE>/xx60, e.g. tsx-aports' scripts/index.sh --out DIR): the packages in
+# that /etc/apk/repositories on the panel lists first (<url>/<ALPINE>/common
+# and /xx60). The build never fetches it.
+# TSX_APK_LOCAL (optional) is a local copy of the published tree: the directory
+# that holds <ALPINE>/common and <ALPINE>/xx60, for example from tsx-aports
+# scripts/index.sh --out DIR. The build then installs the packages in
 # packages-tsx.txt (tsx-xx60-chromium, both kernel flavors, sendspin-cli,
-# tensorflow-lite-c, tsx-keys) are installed from it instead of Alpine's
-# chromium + the in-place patch and the local sendspin/TFLite builds.
+# tensorflow-lite-c, tsx-keys) from that copy. It does not use the Alpine
+# chromium with the in-place patch, or the local sendspin and TFLite builds.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 TOP=$(cd "$HERE/../.." && pwd)
@@ -45,28 +50,29 @@ IMAGE=${IMAGE:-alpine:3.24}
 KBUILD_SET=${KBUILD:+1}
 KBUILD=${KBUILD:-$TOP/build}
 MODULES=$HERE/modules
-# "|| true" after the pipe: under pipefail, ls's exit status (nonzero when
-# $MODULES/lib/modules does not exist yet -- the normal case before "modules"
-# has ever been run) still fails the pipeline and kills the script under set
-# -e, even with stderr redirected to /dev/null (the same class of bug as the
-# "ash dd stdin trap" in docs/recovery.md, just pipefail instead of a
-# backgrounded job).
+# The "|| true" after the pipe is needed. Under pipefail, the ls exit status
+# is nonzero when $MODULES/lib/modules does not exist yet. That is the normal
+# case before anyone runs "modules". The nonzero status fails the pipeline and
+# kills the script under set -e, even with stderr redirected to /dev/null.
+# This is the same class of bug as the "ash dd stdin trap" in docs/recovery.md.
+# Here pipefail causes it, not a backgrounded job.
 KVER=${KVER:-$(ls "$MODULES/lib/modules" 2>/dev/null | tr '\n' ' ' || true)}
 IMG_MB=${IMG_MB:-1492}
 UIDGID="$(id -u):$(id -g)"
-# armv7 containers (rootfs, initramfs) need qemu-user; "modules" does not
+# The armv7 containers (rootfs, initramfs) need qemu-user. "modules" does not.
 need_binfmt() { [ -e /proc/sys/fs/binfmt_misc/qemu-arm ] || { echo "need qemu-arm binfmt (qemu-user-static)"; exit 1; }; }
 
 modules() {
-	# read-only copy of another agent's build dir: no make, nothing written there
+	# This step only reads the build dir of another agent. It runs no make and
+	# writes nothing there.
 	local rel; rel=$(cat "$KBUILD/include/config/kernel.release")
-	# refuse stale modules: their vermagic must name the release of the kernel image
+	# Refuse stale modules. Their vermagic must name the release of the kernel image.
 	local one; one=$(find "$KBUILD" -name '*.ko' ! -path '*/source/*' -print -quit)
 	[ -n "$one" ] || { echo "no *.ko in $KBUILD (run 'make modules' there first)"; return 1; }
 	local vm; vm=$(grep -a -m1 -o 'vermagic=[^ ]*' "$one" | cut -d= -f2)
 	[ "$vm" = "$rel" ] || { echo "stale modules in $KBUILD: vermagic $vm, kernel $rel (rebuild modules there first)"; return 1; }
-	# replace this release and older trees of the same series (major.minor)
-	# only; other series (the other flavor) stay staged
+	# Replace only this release and the older trees of the same series
+	# (major.minor). Other series (the other flavor) stay staged.
 	local ser old; ser=$(echo "$rel" | cut -d. -f1-2)
 	for old in "$MODULES/lib/modules/$ser".*; do
 		[ -d "$old" ] || continue
@@ -81,7 +87,7 @@ modules() {
 	docker run --rm -u "$UIDGID" -v "$MODULES:$MODULES" tsx-mainline \
 		find "$D" -name '*.ko' -exec arm-linux-gnueabihf-strip --strip-debug {} +
 	echo "modules for $rel: $(find "$D" -name '*.ko' | wc -l) files, $(du -sh "$D" | cut -f1)"
-	# SOURCE: one line per staged release ("<release> source: <KBUILD> (<commit>)")
+	# SOURCE has one line per staged release: "<release> source: <KBUILD> (<commit>)".
 	local r rest
 	{ if [ -f "$MODULES/SOURCE" ]; then
 		while read -r r rest; do
@@ -117,7 +123,7 @@ initramfs() {
 		chown $UIDGID /w/out/initramfs-switchroot.cpio.gz"
 }
 
-# "modules" without KBUILD: stage each flavor's default kbuild.sh build dir
+# "modules" without KBUILD stages the default kbuild.sh build dir of each flavor.
 modules_all() {
 	local f n=0
 	if [ -n "$KBUILD_SET" ]; then modules; return; fi

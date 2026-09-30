@@ -1,12 +1,16 @@
 #!/bin/bash
-# Host test for tsx-idled's runtime files in /run/tsx (TSX_RUN_DIR): the
-# brightness offset (the local manual setting of the key-strip slide and the
-# quick-settings overlay) on top of ALS / the schedule, the absolute override
-# winning over it, the blank-timeout override (panel.conf BLANK_TIMEOUT, the
-# HA "Blank timeout"), last-input ("touched recently") and brightness.state.
-# Changes to brightness, brightness-offset and blank-timeout must apply at
-# once (inotify), not at the next 5 s tick. Fake backlight sysfs + a FIFO as
-# input device; runs locally with gcc (no hardware).
+# Host test for the runtime files of tsx-idled in /run/tsx (TSX_RUN_DIR). It
+# covers these files and settings:
+#  - the brightness offset, which is the local manual setting of the key-strip
+#    slide and the quick-settings overlay. It applies on top of ALS and the
+#    schedule.
+#  - the absolute override, which wins over the offset
+#  - the blank-timeout override (panel.conf BLANK_TIMEOUT, the HA
+#    "Blank timeout")
+#  - last-input ("touched recently") and brightness.state
+# A change to brightness, brightness-offset or blank-timeout must apply at
+# once (inotify) and not at the next 5 s tick. The test uses a fake backlight
+# sysfs and a FIFO as the input device. It runs locally with gcc (no hardware).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); SRC=$HERE/../../rootfs/src/tsx-idled.c
 T=$(mktemp -d); PID=; trap '[ -n "$PID" ] && kill $PID 2>/dev/null; rm -rf $T' EXIT

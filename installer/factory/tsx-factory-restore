@@ -1,29 +1,32 @@
 #!/bin/sh
-# tsx-factory-restore: put the xx60 SD card back into Crestron's factory layout
-# from a bundle made by factory/puf-tool.sh bundle (Crestron .puf + this unit's env).
-# Runs in the mainline RESCUE system (golden slot, everything in RAM), as root;
-# refuses while any partition of the card is mounted (so not from the kiosk).
+# tsx-factory-restore: put the xx60 SD card back into the factory layout of
+# Crestron, from a bundle made by factory/puf-tool.sh bundle (the Crestron .puf
+# plus the env of this unit). It runs in the mainline RESCUE system (golden
+# slot, everything in RAM), as root. It refuses to run while any partition of
+# the card is mounted (so not from the kiosk).
 #
 #   tsx-factory-restore check BUNDLE_DIR
 #   tsx-factory-restore run   BUNDLE_DIR [--yes] [--other-unit]
 #
-# BUNDLE_DIR: copied to /tmp over ssh (scp -r bundle root@<rescue ip>:/tmp/), or a
-# mounted USB stick. Writes, in this order (every step is checked by reading back):
-#   1. partition table: crestron-mbr.sfdisk (sfdisk; boot code bytes 0..439 kept, the
-#      card's U-Boot copy in sectors 1..2047 is never written), re-read by the kernel
+# BUNDLE_DIR: copy it to /tmp over ssh (scp -r bundle root@<rescue ip>:/tmp/), or
+# use a mounted USB stick. The script writes in this order and reads back every step:
+#   1. partition table: crestron-mbr.sfdisk (sfdisk). The boot code bytes 0..439
+#      stay. The script never writes the U-Boot copy of the card in sectors
+#      1..2047. The kernel then reads the table again.
 #   2. p2  = system.img (golden /system)
 #   3. p1  = new FAT16 (factory parameters) with boot.img = boot-golden.img
 #      (this removes the mainline kiosk and rescue images from p1)
 #   4. p5..p8 = empty factory file systems (sdcard, data, cache, logs)
-#   5. the U-Boot env (env.bin: this unit's env, hook removed) - last
-# Afterwards U-Boot boots the eMMC Android as a factory-fresh unit; the golden
-# image is Crestron's again. Not restored: Crestron /data, ROMDISK files, logs.
+#   5. the U-Boot env (env.bin: the env of this unit, hook removed), last
+# Afterwards U-Boot boots the eMMC Android as a factory-fresh unit. The golden
+# image belongs to Crestron again. The script does not restore the Crestron
+# /data, the ROMDISK files and the logs.
 # Test hooks: TSX_SHARE TSX_SYSBLOCK TSX_DEVDIR TSX_RUN
 set -eu
 SHARE=${TSX_SHARE:-/usr/share/tsx}
 . "$SHARE/tsx-lib.sh"
 RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
-# the rescue screen (tsx-rescue-status) shows the latest line of a "run" as the current step
+# The rescue screen (tsx-rescue-status) shows the latest line of a "run" as the current step.
 say_state() { [ "${CMD:-}" = run ] || return 0; echo "$$ factory restore" > "$RUN/tsx-op" 2>/dev/null; printf '%s\n' "$*" > "$RUN/tsx-install-state" 2>/dev/null; return 0; }
 say() { echo "tsx-factory-restore: $*" >&2; say_state "$*"; }
 die() { say "ERROR: $*"; exit 1; }
@@ -31,17 +34,18 @@ MiB=1048576
 
 # ---- live progress for a background dd (BusyBox dd has no status=progress) ----
 # pr_dd DEST OFF_MIB LEN_MIB NAME -- DD_ARGS...
-# dd's own stdin (pipe, redirect, or if=) is inherited as-is; its stdout is
-# pointed at a pre-opened (non-truncating) fd on DEST so /proc/<ddpid>/fdinfo/1
-# 'pos:' tracks the destination write offset. Every ~15s (while dd is alive)
-# prints one progress line to fd 2; nothing once dd has exited. Returns dd's
-# own exit status. Always closes its own fd, even on the direct (non-piped)
-# call sites in this script.
+# dd inherits its own stdin as it is (pipe, redirect, or if=). Its stdout goes to
+# a pre-opened (non-truncating) fd on DEST, so 'pos:' in /proc/<ddpid>/fdinfo/1
+# tracks the write offset on the destination. Every ~15 s (while dd is alive)
+# the function prints one progress line to fd 2. It prints nothing once dd has
+# exited. It returns the own exit status of dd. It always closes its own fd,
+# also at the direct (non-piped) call sites in this script.
 pr_dd() {
 	_pd_dev=$1; _pd_off=$2; _pd_len=$3; _pd_name=$4; shift 4; [ "${1:-}" = -- ] && shift
 	exec 8<>"$_pd_dev"
-	# ash (busybox, the rescue) gives a background job /dev/null as stdin unless it is
-	# redirected explicitly (bash does not): keep the caller's stdin (the pipe) on fd 7
+	# ash (busybox, the rescue) gives a background job /dev/null as stdin unless
+	# the script redirects it explicitly (bash does not). So keep the stdin of the
+	# caller (the pipe) on fd 7.
 	exec 7<&0
 	dd "$@" <&7 1>&8 2>/dev/null 7<&- 8<&- &
 	_pd_dp=$!
@@ -66,11 +70,11 @@ pr_dd() {
 	) &
 	_pd_rp=$!
 	wait $_pd_dp; _pd_rc=$?
-	# no explicit "kill $_pd_rp" here: the reporter already notices dd's exit via
-	# its own kill -0 check (within ~1s) and self-terminates; killing a PID that
-	# may by now have already exited and been recycled by the OS is what a
-	# background dd + reporter design must avoid (a stray signal to an unrelated,
-	# reused PID has been observed to take down the whole script)
+	# Do not kill $_pd_rp here. The reporter already sees the exit of dd in its own
+	# kill -0 check (within ~1 s) and ends itself. A design with a background dd
+	# and a reporter must avoid killing a PID that may have exited already and
+	# been recycled by the OS. A stray signal to an unrelated, reused PID took
+	# down the whole script once.
 	wait $_pd_rp 2>/dev/null
 	exec 7<&- 8<&-
 	return $_pd_rc
@@ -118,8 +122,9 @@ blockdev --rereadpt "$WHOLE" 2>/dev/null || partx -u "$WHOLE" 2>/dev/null || tru
 sleep 1
 for i in 1 2 3 4 5 6 7 8 9 10; do TSX_WANT_LAYOUT=stock tsx_find_disk && break; sleep 1; done
 [ "$TSX_DISK_LAYOUT" = stock ] || die "the kernel does not show the Crestron layout after the rewrite (reboot into the rescue and run again)"
-# device nodes: devtmpfs updates them; without it (containers) make sure every node
-# matches the kernel's major:minor after the re-read (partition minors can move)
+# Device nodes: devtmpfs updates them. Without devtmpfs (containers), make sure
+# every node matches the major:minor of the kernel after the re-read. Partition
+# minors can move.
 for b in /sys/block/$DISK/${DISK}p*; do
 	[ -e "$b/dev" ] || continue
 	nd=$DEVDIR/${b##*/}; mm=$(cat "$b/dev")
@@ -156,4 +161,4 @@ dd if="$B/env.bin" of="$WHOLE" bs=65536 seek=16 conv=notrunc 2>/dev/null || die 
 sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
 [ "$(dd if="$WHOLE" bs=65536 skip=16 count=1 2>/dev/null | sha256sum | cut -d' ' -f1)" = "$(sha256sum < "$B/env.bin" | cut -d' ' -f1)" ] || die "env readback differs"
 say "5/5 U-Boot env = this unit's env without the mainline hook"
-say "DONE: factory layout. reboot -f boots Crestron's Android (eMMC); its first boot sets up p5..p8."
+say "DONE: factory layout. reboot -f boots Crestron's Android (eMMC). Its first boot sets up p5..p8."

@@ -19,7 +19,7 @@ jobs:
   # they do not need a privileged job/container, just a runner with docker,
   # which ubuntu-latest already has. Any test that needs a real panel, a real
   # unit's captured backup, or Crestron's proprietary firmware SKIPS itself
-  # (it checks CAPTURES_DIR / PUF_FILE / SYSIMG and prints "SKIPPED ..."); no
+  # (it checks CAPTURES_DIR / PUF_FILE / SYSIMG and prints "SKIPPED ..."). No
   # such input is provided here, so those tests report skipped, not failed.
   host-tests:
     name: host tests (no hardware)
@@ -114,7 +114,7 @@ jobs:
         run: installer/factory/tests/test-emmc-restore.sh
 
   # rootfs/tests/qemu-virt.sh and rootfs/tests/qemu/run.sh boot a full kernel +
-  # rootfs image under qemu-system-arm; they need kernel.yml's and rootfs.yml's
+  # rootfs image under qemu-system-arm. They need kernel.yml's and rootfs.yml's
   # artifacts first and take several minutes, so they are not run on every
   # push/PR here. Run them by hand (or wire a workflow_dispatch job that
   # downloads those artifacts) when checking a change that touches boot or

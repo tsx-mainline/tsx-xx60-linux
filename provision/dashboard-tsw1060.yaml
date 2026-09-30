@@ -1,19 +1,22 @@
 # Home Assistant dashboard for the Crestron TSW-1060 kiosk (1280x800, touch,
-# Cortex-A9 + Mali-450; see dashboard-README.md).
+# Cortex-A9 + Mali-450. See dashboard-README.md).
 # How to use: Settings -> Dashboards -> Add dashboard -> "New dashboard from
-# scratch", title "Wall panel", URL "wall-panel" (needs a hyphen). Open it,
-# three dots -> Edit dashboard -> three dots -> Raw configuration editor, paste
-# this file, replace the example entity ids with yours, Save.
-# Then on the panel: KIOSK_URL="https://<ha>/wall-panel/home" in /etc/kiosk.conf.
+# scratch", title "Wall panel", URL "wall-panel" (the URL needs a hyphen).
+# Open it, then three dots -> Edit dashboard -> three dots -> Raw configuration
+# editor. Paste this file, replace the example entity ids with yours, and save.
+# Then on the panel, set KIOSK_URL="https://<ha>/wall-panel/home" in /etc/kiosk.conf.
 #
-# Rules this layout follows (the panel renders everything the page does on a
-# 4-core 1.6 GHz Cortex-A9):
-#  - sections view, tile cards, heading cards: light, no history fetches
-#  - no history-graph / statistics-graph / trend-graph features, no camera
-#    streams, no map, no iframe, no energy cards, no animated backgrounds
-#  - 3 section columns at 1280 px (max_columns 3) so nothing needs a sideways
-#    scroll; short views instead of one long page (scrolling costs CPU)
-#  - everything reachable with one finger; tap targets from the tile card
+# Rules this layout follows (the panel renders the whole page on a 4-core
+# 1.6 GHz Cortex-A9):
+#  - Use a sections view with tile cards and heading cards. They are light and
+#    fetch no history.
+#  - Use no history-graph, statistics-graph or trend-graph features, no camera
+#    streams, no map, no iframe, no energy cards and no animated backgrounds.
+#  - Use 3 section columns at 1280 px (max_columns 3), so nothing needs a
+#    sideways scroll. Use short views instead of one long page, because
+#    scrolling costs CPU.
+#  - Make everything reachable with one finger. The tap targets come from the
+#    tile card.
 title: Wall panel
 views:
   - title: Home
@@ -115,7 +118,7 @@ views:
           - type: heading
             heading: Weather
             icon: mdi:weather-partly-cloudy
-          # a static forecast card; no radar map or animated weather cards
+          # a static forecast card. No radar map or animated weather cards
           - type: weather-forecast
             entity: weather.home                  # example
             forecast_type: daily

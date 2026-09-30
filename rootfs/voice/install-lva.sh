@@ -1,35 +1,43 @@
 #!/bin/sh
 # Install linux-voice-assistant (OHF-Voice, Home Assistant Assist satellite over
-# the ESPHome native API) into DESTROOT/opt/lva and the launcher
-# DESTROOT/usr/local/bin/linux-voice-assistant. Runs in the armv7 Alpine
-# build container (mkrootfs.sh
-# qemu test); the target needs the Alpine packages listed under "voice" in
-# packages.txt (python3, py3-numpy, py3-protobuf, py3-cryptography,
-# py3-tzlocal, py3-aiohappyeyeballs, py3-zeroconf, py3-mpv + mpv-libs,
-# alsa-utils).
+# the ESPHome native API) into DESTROOT/opt/lva. Also install the launcher
+# DESTROOT/usr/local/bin/linux-voice-assistant. This script runs in the armv7
+# Alpine build container (mkrootfs.sh, qemu test).
+# The target needs the Alpine packages listed under "voice" in packages.txt
+# (python3, py3-numpy, py3-protobuf, py3-cryptography, py3-tzlocal,
+# py3-aiohappyeyeballs, py3-zeroconf, py3-mpv and mpv-libs, alsa-utils).
 #
-# Pinned sources (sha256 below): linux-voice-assistant v1.1.15 (GitHub tag),
-# aioesphomeapi 45.3.1 (the version LVA pins; musllinux armv7 cp314 wheel),
-# netifaces2 0.0.22 (musllinux armv7 abi3 wheel), getmac 0.9.5, websockets 12.0
-# (LVA uses the legacy websockets.server API; Alpine has 16), noiseprotocol
-# 0.3.1, chacha20poly1305-reuseable 0.13.2, async-interrupt 1.2.2,
-# pymicro-features 2.0.2 (sdist, C++ extension compiled here),
-# pymicro-wakeword 2.5.0 and pyopen-wakeword 1.1.0 (sdists; their bundled
-# x86-64 libtensorflowlite_c.so is replaced by TensorFlow Lite C 2.17.1 for
-# Alpine armv7: the tensorflow-lite-c package from this project's apk
-# repository (tsx-aports) when mkrootfs.sh installed it -- TFLITE_SO names it
-# inside DESTROOT, the wakeword modules then link to it, so an apk upgrade of
-# that package reaches them -- else voice/tflite/, built by
-# rootfs/voice/build-tflite.sh).
-# Not installed: soundcard (PulseAudio only; voice/shim/soundcard is an ALSA
-# stand-in on arecord), webrtc-noise-gain (ZL38051 does AEC/NR; LVA imports
-# it only with --mic-auto-gain/--mic-noise-suppression), types-protobuf.
-# aioesphomeapi asks for cryptography>=48 and zeroconf>=0.149.16; Alpine has
-# 47.0 and 0.147: LVA only uses the plaintext frame helper, the protobuf
-# messages and AsyncZeroconf (checked by the voice qemu test). The ESPHome
-# API encryption (HA_API_KEY) is the shim's own server side,
-# shim/tsx_panel/noise.py, on py3-cryptography's X25519/ChaCha20Poly1305
-# directly -- not aioesphomeapi's client-side noise helper.
+# Pinned sources (sha256 below):
+# - linux-voice-assistant v1.1.15 (GitHub tag).
+# - aioesphomeapi 45.3.1, the version that LVA pins (musllinux armv7 cp314 wheel).
+# - netifaces2 0.0.22 (musllinux armv7 abi3 wheel).
+# - getmac 0.9.5.
+# - websockets 12.0. LVA uses the legacy websockets.server API. Alpine has 16.
+# - noiseprotocol 0.3.1.
+# - chacha20poly1305-reuseable 0.13.2.
+# - async-interrupt 1.2.2.
+# - pymicro-features 2.0.2 (sdist). The build compiles its C++ extension here.
+# - pymicro-wakeword 2.5.0 and pyopen-wakeword 1.1.0 (sdists). Both bundle an
+#   x86-64 libtensorflowlite_c.so. The build replaces it with TensorFlow Lite C
+#   2.17.1 for Alpine armv7. That library comes from the tensorflow-lite-c
+#   package of the apk repository of this project (tsx-aports) when mkrootfs.sh
+#   installed the package. TFLITE_SO names it inside DESTROOT. The wakeword
+#   modules then link to it, so an apk upgrade of that package reaches them.
+#   Otherwise the library comes from voice/tflite/, which
+#   rootfs/voice/build-tflite.sh builds.
+# Not installed:
+# - soundcard. It supports PulseAudio only. voice/shim/soundcard is an ALSA
+#   stand-in on arecord.
+# - webrtc-noise-gain. The ZL38051 does AEC and NR. LVA imports the module only
+#   with --mic-auto-gain or --mic-noise-suppression.
+# - types-protobuf.
+# aioesphomeapi asks for cryptography>=48 and zeroconf>=0.149.16. Alpine has
+# 47.0 and 0.147. LVA uses only the plaintext frame helper, the protobuf
+# messages and AsyncZeroconf (the voice qemu test checks this). The ESPHome
+# API encryption (HA_API_KEY) is the server side of the shim itself,
+# shim/tsx_panel/noise.py. It uses X25519 and ChaCha20Poly1305 of
+# py3-cryptography directly. It does not use the client-side noise helper of
+# aioesphomeapi.
 set -eu
 DEST=${1:?usage: install-lva.sh DESTROOT}
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -71,8 +79,8 @@ fetch $PYPI/3b/93/9e8a000f8f8bda01ec53534bdf07c3413ffd659352a0117ac106f9beff7e/p
 	pymicro_wakeword-2.5.0.tar.gz 2355c1cb3fbfe4a59f4eccd6f17bd3eca260f7c6fb701fe3c44ccc98d49dd19e
 fetch $PYPI/52/3e/37c8601f87173acfed77a3133c69eb350d2563f41174d70129ff51e6b297/pyopen_wakeword-1.1.0.tar.gz \
 	pyopen_wakeword-1.1.0.tar.gz 080c0bda64d9aa4dd254413ba6fa417bd090c566c0610ebbb571d81f27851602
-# TensorFlow Lite C for Alpine armv7: the packaged one (TFLITE_SO, a path on
-# the target), else voice/tflite/ (rootfs/voice/build-tflite.sh)
+# TensorFlow Lite C for Alpine armv7. Use the packaged library (TFLITE_SO, a
+# path on the target). Otherwise use voice/tflite/ (rootfs/voice/build-tflite.sh).
 TFLITE_SO=${TFLITE_SO:-}
 if [ -n "$TFLITE_SO" ]; then
 	[ -s "$DEST$TFLITE_SO" ] || { echo "install-lva.sh: TFLITE_SO=$TFLITE_SO not in $DEST"; exit 1; }
@@ -92,7 +100,7 @@ pip install -q --no-deps --no-compile --no-build-isolation --disable-pip-version
 	"$W/noiseprotocol-0.3.1-py3-none-any.whl" "$W/chacha20poly1305_reuseable-0.13.2-py3-none-any.whl" \
 	"$W/async_interrupt-1.2.2-py3-none-any.whl" \
 	"$W/pymicro_features-2.0.2.tar.gz" "$W/pymicro_wakeword-2.5.0.tar.gz" "$W/pyopen_wakeword-1.1.0.tar.gz"
-# the sdists carry an x86-64 libtensorflowlite_c.so: replace it (one copy, one link)
+# The sdists carry an x86-64 libtensorflowlite_c.so. Replace it (one copy, one link).
 for m in pymicro_wakeword pyopen_wakeword; do rm -rf "$L/$m/lib"; mkdir -p "$L/$m/lib"; done
 if [ -n "$TFLITE_SO" ]; then
 	ln -s "$TFLITE_SO" "$L/pymicro_wakeword/lib/libtensorflowlite_c.so"
@@ -102,13 +110,13 @@ fi
 ln -s ../../pymicro_wakeword/lib/libtensorflowlite_c.so "$L/pyopen_wakeword/lib/libtensorflowlite_c.so"
 find "$L" -name '*.so' -newer "$W/pymicro_features-2.0.2.tar.gz" -path '*pymicro_features*' -exec strip {} + 2>/dev/null || true
 rm -rf "$L/bin" "$L"/*.dist-info/RECORD
-# the application: LVA looks for wakewords/, sounds/, version.txt next to its package
+# The application: LVA looks for wakewords/, sounds/ and version.txt next to its package.
 rm -rf "$W/src" && mkdir -p "$W/src" && tar -C "$W/src" -xzf "$W/linux-voice-assistant-$LVA.tar.gz"
 S=$W/src/linux-voice-assistant-$LVA
 cp -r "$S/linux_voice_assistant" "$S/wakewords" "$S/sounds" "$A/"
 echo "$LVA" > "$A/version.txt"
 cp "$S/LICENSE.md" "$A/"
-# TSX glue: ALSA soundcard stand-in, FIFO push-to-talk, hooks
+# TSX glue: the ALSA soundcard stand-in, the FIFO push-to-talk and the hooks.
 cp -r "$HERE/shim" "$O/shim"
 find "$O" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 cat > "$O/VERSION" <<V
@@ -119,7 +127,7 @@ V
 mkdir -p "$DEST/usr/local/bin"
 cat > "$DEST/usr/local/bin/linux-voice-assistant" <<'EOT'
 #!/bin/sh
-# linux-voice-assistant with the TSX glue (see /opt/lva/shim/tsx_lva/__init__.py)
+# Start linux-voice-assistant with the TSX glue (see /opt/lva/shim/tsx_lva/__init__.py).
 PYTHONPATH=/opt/lva/shim:/opt/lva/app:/opt/lva/lib${PYTHONPATH:+:$PYTHONPATH} exec python3 -m tsx_lva "$@"
 EOT
 chmod 755 "$DEST/usr/local/bin/linux-voice-assistant"

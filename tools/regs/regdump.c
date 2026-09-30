@@ -4,7 +4,7 @@
  *   regdump c|v|a FIRST [LAST]      read register(s) (register index, not byte addr)
  *   regdump -w c|v|a REG VALUE      write one register (used only for the
  *                                   cts_encl gate toggle test)
- * c = CBUS 0xc1100000, v = VCBUS 0xd0100000, a = AOBUS 0xc8100000; addr = base + reg*4
+ * c = CBUS 0xc1100000, v = VCBUS 0xd0100000, a = AOBUS 0xc8100000. Addr = base + reg*4
  */
 #include <stdio.h>
 #include <stdlib.h>

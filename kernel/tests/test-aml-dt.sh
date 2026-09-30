@@ -90,9 +90,8 @@ else
   ok "mkimage.sh rejects --dtb and --dtbs together"
 fi
 
-# --- Test 6: --board-dtbs (one boot image for the TSW-1060 and the TSW-760) ---
-# Two small valid FDT headers stand in for the board DTBs (aml-dt.py only reads
-# the FDT totalsize); the kernel is a dummy blob.
+# Two small valid FDT headers stand in for the board DTBs. aml-dt.py reads
+# only the FDT totalsize. The kernel is a dummy blob.
 python3 - "$TMP/board" <<'PYF'
 import os, struct, sys
 d = sys.argv[1]; os.makedirs(d, exist_ok=True)

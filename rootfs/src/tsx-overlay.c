@@ -2,33 +2,38 @@
  * tsx-overlay: local quick settings for the xx60 kiosk (sway session only).
  *
  * A wlr-layer-shell surface on the OVERLAY layer at the right edge of the
- * screen, next to the front-key strip (landscape; with the panel hung in
- * portrait it stays at the right edge, at most as high as on the 10-inch
- * landscape panel and centred: tsx-overlay-layout.h). Hidden (no surface at all) until
+ * screen, next to the front-key strip. In landscape it sits at the right
+ * edge. When the panel hangs in portrait, it stays at the right edge, at most
+ * as high as on the 10-inch landscape panel, and centered
+ * (tsx-overlay-layout.h). The surface stays hidden (no surface at all) until
  * tsx-buttons asks for it over /run/tsx/overlay.ctl:
  *   slider   compact brightness bar, shown while a finger slides along the
- *            key strip; hides OVERLAY_SLIDER_MS after the last step
- *   full     brightness slider + Auto brightness / Screen off / Reload page /
- *            Close; hides OVERLAY_FULL_MS after the last touch on it
+ *            key strip. It hides OVERLAY_SLIDER_MS after the last step.
+ *   full     brightness slider, Auto brightness, Screen off, Reload page and
+ *            Close. It hides OVERLAY_FULL_MS after the last touch on it.
  *   hide, toggle
- * Keyboard interactivity is NONE: the overlay never takes the keyboard focus
- * from Chromium (so the on-screen keyboard keeps working), and touches
- * outside the surface still go to the page.
+ * Keyboard interactivity is NONE. The overlay never takes the keyboard focus
+ * from Chromium, so the on-screen keyboard keeps working. Touches outside the
+ * surface still go to the page.
  *
- * It only shows state (tsx-idled's /run/tsx/brightness.state, tsx-als's
- * /run/tsx/als.state) and hands every action to tsx-panelctl (FIFO
- * /run/tsx/panelctl, group kiosk, a fixed command list): brightness-offset N
- * (the slider: the local manual setting is an offset on top of ALS / the
- * day/night schedule), als auto on|off, blank on, reload-page, setup (brings
- * the on-panel setup page back up for about 15 minutes even on an
- * already-configured panel, docs/rootfs.md "Setup page"). It runs as the
- * kiosk user, never as root.
+ * The overlay only shows state (/run/tsx/brightness.state from tsx-idled and
+ * /run/tsx/als.state from tsx-als). It hands every action to tsx-panelctl
+ * (FIFO /run/tsx/panelctl, group kiosk, a fixed command list):
+ *   brightness-offset N   the slider. The local manual setting is an offset
+ *                         on top of ALS or the day/night schedule.
+ *   als auto on|off
+ *   blank on
+ *   reload-page
+ *   setup                 brings the on-panel setup page back up for about
+ *                         15 minutes, even on an already-configured panel
+ *                         (docs/rootfs.md "Setup page").
+ * It runs as the kiosk user, never as root.
  *
- * Why C + cairo on wl_shm: it stays resident so the slider appears on the
- * first slide step (a GTK/Python client needs seconds to start on this CPU
- * and 40+ MB to stay resident); here the idle cost is one sleeping process of
- * a few MB and no wakeups while hidden. Touch and pointer input both work
- * (pointer: a mouse, or a virtual pointer in tests).
+ * Why C and cairo on wl_shm: the process stays resident, so the slider appears
+ * on the first slide step. A GTK or Python client needs seconds to start on
+ * this CPU and 40+ MB to stay resident. Here the idle cost is one sleeping
+ * process of a few MB and no wakeups while the overlay is hidden. Touch and
+ * pointer input both work (pointer: a mouse, or a virtual pointer in tests).
  *
  * Env (tests / tuning): TSX_RUN_DIR (/run/tsx), OVERLAY_SLIDER_MS (1500),
  * OVERLAY_FULL_MS (8000), TSX_OVERLAY_VERBOSE=1.
@@ -76,22 +81,22 @@ static volatile sig_atomic_t sig_term;
 
 static enum mode mode = HIDDEN, want_mode = HIDDEN;
 static int configured, surf_w, surf_h;
-static int cur_mv, out_h;                /* the surface's top/bottom margin; the output height */
+static int cur_mv, out_h;                /* the top and bottom margin of the surface, and the output height */
 static long long hide_at;
 
-/* shown state */
+/* the state on show */
 static int level = -1, base = -1, offset, override, maxlvl = 23, als_auto = -1;
 static int drag_level = -1;              /* level under the finger while dragging */
-static long long drag_hold;              /* ...shown until tsx-idled reports it (or this time) */
+static long long drag_hold;              /* ...shown until tsx-idled reports it (or until this time) */
 static int pressed = B_NONE, press_inside, touch_id = -1, ptr_down;
 static double ptr_x, ptr_y;
 
 /*
- * layout (surface coordinates, scale 1; tsx-overlay-layout.h). The surface
+ * Layout (surface coordinates, scale 1, see tsx-overlay-layout.h). The surface
  * spans the output height minus a top and a bottom margin, so it fits either
  * panel: 1280x800 (10-inch: slider 600, full 720 px high) and 1024x600
- * (7-inch: slider 400, full 520); on a portrait output the margins grow so
- * it is no higher than that.
+ * (7-inch: slider 400, full 520). On a portrait output the margins grow, so
+ * the surface is no higher than that.
  */
 static struct rect r_track, r_btn[NBTN];
 
@@ -133,7 +138,7 @@ static int ifield(const char *path, const char *key, int def)
 	return field(path, key, b, sizeof b) ? def : atoi(b);
 }
 
-/* returns 1 if anything shown changed */
+/* Return 1 if anything shown changed. */
 static int read_state(void)
 {
 	char b[32];
@@ -166,8 +171,8 @@ static void set_level(int l)
 	if (l > maxlvl) l = maxlvl;
 	if (l == drag_level) return;
 	drag_level = l;
-	/* offset relative to tsx-idled's base (ALS or schedule); without a base
-	 * (old tsx-idled) the current level stands in for it */
+	/* The offset is relative to the base of tsx-idled (ALS or schedule).
+	 * Without a base (an old tsx-idled), the current level replaces it. */
 	int b = base > 0 ? base : (level > 0 ? level - offset : l);
 	int off = l - b;
 	if (off > 31) off = 31;
@@ -248,8 +253,8 @@ static void draw(cairo_t *c, int w, int h)
 	} else snprintf(s, sizeof s, "-");
 	cairo_set_source_rgba(c, 1, 1, 1, 0.95);
 	text_center(c, s, cx, t.y + t.h + 32, 30, 1);
-	/* how the level comes about: auto (ALS) +- the manual offset, or a fixed
-	 * level from Home Assistant / a key action */
+	/* How the level came about: auto (ALS) plus or minus the manual offset,
+	 * or a fixed level from Home Assistant or a key action. */
 	if (override > 0) snprintf(s, sizeof s, "fixed");
 	else if (offset) snprintf(s, sizeof s, "%s %+d", als_auto == 1 ? "auto" : "sched", offset);
 	else snprintf(s, sizeof s, "%s", als_auto == 1 ? "auto" : "sched");
@@ -335,8 +340,8 @@ static void layer_configure(void *data, struct zwlr_layer_surface_v1 *l, uint32_
 	zwlr_layer_surface_v1_ack_configure(l, serial);
 	if (w) surf_w = w;
 	if (h) {
-		/* the output height (it changes when the screen is turned, too):
-		 * with another margin due, set it and wait for the next configure */
+		/* The output height. It also changes when the screen turns. If
+		 * another margin is due, set it and wait for the next configure. */
 		out_h = (int)h + 2 * cur_mv;
 		int mv = overlay_margin_v(mode == FULL, out_h);
 		if (mv != cur_mv) {
@@ -562,7 +567,7 @@ static void ctl_open(void)
 {
 	struct stat st;
 	if (ctl_fd >= 0) return;
-	/* read-write: never EOF when tsx-buttons closes its end; group kiosk */
+	/* Open it read-write, so it never gives EOF when tsx-buttons closes its end. Group kiosk. */
 	if ((ctl_fd = open(ctlpath, O_RDWR | O_NONBLOCK | O_CLOEXEC)) < 0) return;
 	if (fstat(ctl_fd, &st) || !S_ISFIFO(st.st_mode)) { close(ctl_fd); ctl_fd = -1; return; }
 	logm("listening on %s", ctlpath);
@@ -619,7 +624,7 @@ int main(void)
 		logm("compositor lacks %s", !layer_shell ? "wlr-layer-shell (cage?)" : "wl_compositor/wl_shm");
 		return 1;
 	}
-	/* load fonts now, not on the first slide step */
+	/* Load the fonts now, not on the first slide step. */
 	{
 		cairo_surface_t *cs = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
 		cairo_t *c = cairo_create(cs);
@@ -655,7 +660,7 @@ int main(void)
 		if (ctl_fd >= 0 && (pfd[1].revents & POLLIN)) ctl_read();
 		if (mode != HIDDEN && pressed == B_NONE) {
 			int ch = read_state();
-			/* the slider keeps the released value until tsx-idled has it */
+			/* The slider keeps the released value until tsx-idled has it. */
 			if (drag_level > 0 && (level == drag_level || now_ms() >= drag_hold)) { drag_level = -1; ch = 1; }
 			if (ch) redraw();
 		}

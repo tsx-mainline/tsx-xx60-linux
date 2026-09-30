@@ -1,7 +1,7 @@
-# Shared by install.sh / uninstall.sh (sourced; busybox ash).
-# Finds the Crestron boot disk (Android "mmcblk0", any mainline number) by its
-# MBR layout, verified against the Crestron MBR layout notes and the 2026-09-25 backup
-# (captures/tsw-1060/backup, sfdisk -d):
+# install.sh and uninstall.sh share this file and source it (busybox ash).
+# It finds the Crestron boot disk (Android "mmcblk0", any mainline number) by
+# its MBR layout. The Crestron MBR layout notes and the 2026-09-25 backup
+# (captures/tsw-1060/backup, sfdisk -d) confirm the layout:
 #   p1 81920+81920 FAT16 (golden boot.img)   p2 206849+1638400 ext4 system
 #   p3 2048+2048 U-Boot env copy             p4 1845249 extended
 #   p5 1847297+3055616 ext2 "sdcard"         p6 4904961+1024000 ext2 data
@@ -10,7 +10,7 @@
 TSX_LAYOUT="1:81920:81920 2:206849:1638400 3:2048:2048 4:1845249:- 5:1847297:3055616 6:4904961:1024000 7:5931009:204800 8:6137857:614400"
 TSX_P5_SECTORS=3055616
 
-tsx_find_disk() {  # prints e.g. mmcblk0; returns 1 if no disk matches exactly
+tsx_find_disk() {  # print the disk name (for example mmcblk0). Return 1 if no disk matches exactly.
 	local d n p e st sz ok
 	for d in ${TSX_DISK_GLOB:-/sys/block/mmcblk[0-9]*}; do
 		[ -e "$d" ] || continue

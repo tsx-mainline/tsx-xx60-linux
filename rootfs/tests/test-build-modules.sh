@@ -1,11 +1,12 @@
 #!/bin/bash
-# Host test: rootfs/build-rootfs.sh "modules" stages one flavor's tree
-# without removing the other flavor's (tools/build/README.md "Both kernel
-# flavors in one rootfs"). No kernel build, no docker: two fake kernel build
-# dirs (kernel.release, modules.order/builtin, one *.ko with a vermagic
-# string) and a stub `docker` first in PATH (the real one only strips the
-# copied *.ko). Works on a copy of rootfs/build-rootfs.sh, so the checkout's
-# own rootfs/modules/ is never touched.
+# Host test: the "modules" step of rootfs/build-rootfs.sh stages the tree of
+# one flavor. It does not remove the tree of the other flavor
+# (tools/build/README.md "Both kernel flavors in one rootfs"). The test needs
+# no kernel build and no docker. It uses two fake kernel build dirs
+# (kernel.release, modules.order/builtin, and one *.ko with a vermagic
+# string). A stub `docker` is first in PATH (the real one only strips the
+# copied *.ko). The test works on a copy of rootfs/build-rootfs.sh, so it
+# never touches rootfs/modules/ of the checkout.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT

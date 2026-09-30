@@ -7,13 +7,13 @@
 #   kiosk-set-token --show                 print the stored entry (token masked)
 #   kiosk-set-token --clear                remove it
 #
-# How: the kiosk service is stopped, Chromium is started headless on the same
-# profile with --remote-debugging-pipe, opens <origin>/manifest.json (a
-# same-origin page that runs no HA code), and sets localStorage["hassTokens"]
-# as the HA frontend stores it after a normal login. "expires" is set to 2100
-# so the frontend never tries to refresh (a long-lived token has no refresh
-# token). Environment: KIOSK_CONF (default /etc/kiosk.conf), NO_RESTART=1,
-# NO_SERVICE=1 (do not stop/start the kiosk service; used by its start_pre).
+# How: it stops the kiosk service and starts Chromium headless on the same
+# profile with --remote-debugging-pipe. Chromium opens <origin>/manifest.json
+# (a same-origin page that runs no HA code) and sets localStorage["hassTokens"]
+# as the HA frontend stores it after a normal login. "expires" is 2100, so the
+# frontend never tries to refresh (a long-lived token has no refresh token).
+# Environment: KIOSK_CONF (default /etc/kiosk.conf), NO_RESTART=1,
+# NO_SERVICE=1 (do not stop or start the kiosk service. Its start_pre uses it).
 set -eu
 CONF=${KIOSK_CONF:-/etc/kiosk.conf}
 . "$CONF"
@@ -44,12 +44,12 @@ was_running=0
 if [ "${NO_SERVICE:-0}" != 1 ] && [ -x /etc/init.d/kiosk ] && rc-service kiosk status >/dev/null 2>&1; then
 	was_running=1; rc-service kiosk stop >/dev/null 2>&1 || true
 fi
-# the profile must not be in use: wait for the kiosk browser to exit
+# Nothing may use the profile. Wait for the kiosk browser to exit.
 i=0; while pgrep -u "$KIOSK_USER" -x chromium >/dev/null && [ $i -lt 20 ]; do sleep 1; i=$((i + 1)); done
 pkill -9 -u "$KIOSK_USER" -x chromium 2>/dev/null || true
 T=$(mktemp -d); chmod 700 "$T"; chown "$KIOSK_USER" "$T" 2>/dev/null || chmod 777 "$T"
 cleanup() {
-	set +e   # (with -e, a failing last command of an && list would end the trap early)
+	set +e   # with -e, a failing last command of an && list would end the trap early
 	[ -n "${CPID:-}" ] && kill "$CPID" 2>/dev/null
 	[ -n "${RPID:-}" ] && kill "$RPID" 2>/dev/null
 	[ -n "${KIOSK_DEBUG:-}" ] && { echo "debug: responses:" >&2; cut -c1-300 "$T/resp" >&2; tail -20 "$T/chromium.log" >&2; }
@@ -87,7 +87,7 @@ tid=$(waitid $n 120 | sed -n 's/.*"targetId":"\([^"]*\)".*/\1/p')
 send "\"method\":\"Target.attachToTarget\",\"params\":{\"targetId\":\"$tid\",\"flatten\":true}"
 sid=$(waitid $n | sed -n 's/.*"sessionId":"\([^"]*\)".*/\1/p')
 [ -n "$sid" ] || { echo "attach failed" >&2; exit 1; }
-# evaluate JS in the page; result in $EV (runs in this shell so ids stay unique)
+# Evaluate JS in the page. The result is in $EV. It runs in this shell, so the ids stay unique.
 evaluate() { send "\"sessionId\":\"$sid\",\"method\":\"Runtime.evaluate\",\"params\":{\"expression\":\"$1\",\"returnByValue\":true}"
 	EV=$(waitid $n | value); }
 k=0; o=

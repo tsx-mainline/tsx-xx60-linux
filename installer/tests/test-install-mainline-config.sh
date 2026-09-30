@@ -1,16 +1,17 @@
 #!/bin/bash
 # Host test: the panel.conf side of tsx-install-mainline (docs/rootfs.md
-# "Panel configuration") -- no docker, no panel, no network beyond the
-# --dry-run argument-validation tsx-install-mainline already does on its own
-# (see test-install-mainline-dryrun.sh for that side).
-#   1. --dry-run --config FILE: uses the file, prompts are skipped, a missing
-#      file is refused up front.
-#   2. --dry-run --yes with no --config: prompts skipped, no panel.conf noted.
-#   3. installer/lib/tsx-config-prompt.sh's prompt flow itself, fed answers
-#      on stdin (a scripted/piped install, or this test): built with the
-#      panel's own tsx-config, so a value accepted here is guaranteed
-#      accepted by `tsx-config apply` on the panel; a bad answer is
-#      re-prompted, not just accepted.
+# "Panel configuration"). The test needs no docker, no panel and no network.
+# It only uses the --dry-run argument validation that tsx-install-mainline
+# already does on its own (test-install-mainline-dryrun.sh covers that side).
+#   1. --dry-run --config FILE: the script uses the file and skips the prompts.
+#      It refuses a missing file up front.
+#   2. --dry-run --yes with no --config: the script skips the prompts and
+#      notes no panel.conf.
+#   3. The prompt flow of installer/lib/tsx-config-prompt.sh, with answers on
+#      stdin (a scripted or piped install, or this test). It uses the tsx-config
+#      of the panel. So `tsx-config apply` on the panel accepts every value
+#      that this flow accepts. The flow asks again after a bad answer and does
+#      not accept it.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 DRIVER="$HERE/tsx-install-mainline"

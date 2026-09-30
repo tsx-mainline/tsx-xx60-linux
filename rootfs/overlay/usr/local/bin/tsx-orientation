@@ -1,17 +1,17 @@
 #!/bin/sh
 # tsx-orientation: the screen orientation of the panel (panel.conf ORIENTATION,
-# docs/rootfs.md "Orientation") -- the one table every consumer derives its
-# numbers from, and the live switch for the running kiosk.
+# docs/rootfs.md "Orientation"). It is the one table that all consumers take
+# their numbers from, and the live switch for the running kiosk.
 #
 # The names describe how the panel hangs on the wall, seen from the front:
 #   landscape          the native mode: the front keys right of the screen
 #   portrait           the panel turned 90 degrees clockwise: keys below
 #   landscape-flipped  turned 180 degrees: keys left of the screen
 #   portrait-flipped   turned 90 degrees counter-clockwise: keys above
-# ROTATE is the same thing seen from the glass: how many quarter turns
-# CLOCKWISE the picture is drawn on the native (landscape) LCD so that it is
-# upright for the viewer (portrait: the panel turns clockwise, so the picture
-# turns counter-clockwise on the glass = 3 quarter turns clockwise).
+# ROTATE is the same thing seen from the glass: the number of quarter turns
+# CLOCKWISE that the picture is drawn on the native (landscape) LCD, so that
+# it is upright for the viewer (portrait: the panel turns clockwise, so the
+# picture turns counter-clockwise on the glass = 3 quarter turns clockwise).
 #
 #   tsx-orientation [-f FILE] get          the configured name (landscape when
 #                                          FILE is missing, empty or invalid)
@@ -24,24 +24,24 @@
 #                       "input type:touch calibration_matrix"): the identity
 #                       in every orientation. sway maps the touchscreen to
 #                       the built-in output, and wlroots then turns every
-#                       touch by that output's transform itself (measured on
+#                       touch by the transform of that output (measured on
 #                       a TSS-10: a turned matrix on top of that turned the
-#                       touches twice). It is still sent, so a live change
-#                       resets a matrix set by hand or by an older build.
+#                       touches twice). The script still sends it, so a live
+#                       change resets a matrix set by hand or by an older build.
 #       FBCON_ROTATE    /sys/class/graphics/fbcon/rotate_all (1 = clockwise,
-#                       3 = counter-clockwise; the same number as ROTATE)
+#                       3 = counter-clockwise, the same number as ROTATE)
 #       SLIDE_INVERT    1 = tsx-buttons turns the key-strip slide around, so
 #                       sliding up or right is brighter in every orientation
 #   tsx-orientation [-f FILE] sway [NAME]  the sway config lines (kiosk-session)
 #   tsx-orientation [-f FILE] apply        (root or the kiosk user) turn the
 #                                          running kiosk (sway) to the configured
 #                                          orientation now: output transform and
-#                                          touch mapping; Chromium, the keyboard
+#                                          touch mapping. Chromium, the keyboard
 #                                          and the overlay follow the new size
 #
-# FILE (default /etc/tsx/orientation, env TSX_ORIENTATION_FILE) is kept by
-# `tsx-config apply` from panel.conf: on the root file system, so the
-# initramfs (which cannot read /data) finds it too; absent = landscape.
+# FILE (default /etc/tsx/orientation, env TSX_ORIENTATION_FILE) comes from
+# panel.conf. `tsx-config apply` keeps it on the root file system, so the
+# initramfs (which cannot read /data) finds it too. Absent = landscape.
 # Env for tests: TSX_SWAYMSG (swaymsg), TSX_RUN_USER_DIR (/run/user),
 # TSX_KIOSK_USER (kiosk).
 set -u
@@ -56,17 +56,17 @@ valid() {
 	return 1
 }
 
-# the configured name; anything unexpected in the file reads as landscape
+# The configured name. Anything unexpected in the file reads as landscape.
 configured() {
 	o=
 	[ -r "$FILE" ] && read -r o < "$FILE" 2>/dev/null
 	valid "${o:-}" && echo "$o" || echo landscape
 }
 
-# info NAME: the table. Only ROTATE is chosen per name; everything else
+# info NAME: the table. Only ROTATE is chosen per name. Everything else
 # follows from it. Checked on the panels (raw scanout dumps): sway transform
-# 270 and fbcon rotate 3 put the top of the picture at the native LCD's left
-# edge, i.e. upright on a panel turned clockwise (portrait).
+# 270 and fbcon rotate 3 put the top of the picture at the left edge of the
+# native LCD. That is upright on a panel turned clockwise (portrait).
 info() {
 	case "$1" in
 	landscape) r=0;;
@@ -75,8 +75,8 @@ info() {
 	portrait-flipped) r=1;;
 	*) return 1;;
 	esac
-	# picture turned r quarter turns clockwise on the LCD; the touch matrix
-	# stays the identity (wlroots turns touches by the output transform)
+	# The picture turns r quarter turns clockwise on the LCD. The touch matrix
+	# stays the identity (wlroots turns touches by the output transform).
 	m="1 0 0 0 1 0"
 	case $r in
 	0) t=normal inv=0;;
@@ -101,8 +101,8 @@ name_arg() {  # name_arg [NAME]: the argument (checked) or the configured name
 	fi
 }
 
-# apply: every sway IPC socket of the kiosk user (normally one; a stale one
-# from a crashed session just fails)
+# apply: use every sway IPC socket of the kiosk user (normally one). A stale
+# socket from a crashed session just fails.
 apply_live() {
 	eval "$(info "$(configured)")"
 	u=${TSX_KIOSK_USER:-kiosk}

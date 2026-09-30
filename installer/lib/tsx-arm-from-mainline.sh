@@ -1,36 +1,39 @@
 #!/bin/sh
 # tsx-arm-from-mainline.sh: arm ONE boot into the mainline rescue from a
-# RUNNING mainline system (the kiosk, any layout that keeps the U-Boot env on
-# the card at 1 MiB). Panel side, POSIX sh (busybox ash). Shared by the two
-# host drivers that must reach the rescue from the kiosk:
+# RUNNING mainline system (the kiosk, or any layout that keeps the U-Boot env
+# on the card at 1 MiB). It runs on the panel, in POSIX sh (busybox ash). Two
+# host drivers share it. Both must reach the rescue from the kiosk:
 #   - installer/tsx-restore-factory  (step 2: the golden rescue, p1:boot.img)
-#   - installer/tsx-install-mainline (reinstall/update: the payload's rescue.img)
-# Both push it over ssh (stdin -> a file under /run) and run it; nothing here
-# is installed on the panel. The Android path (steps/tsx-rescue-arm.sh) is a
-# different script: Android's fw_setenv and busybox differ.
+#   - installer/tsx-install-mainline (reinstall/update: the rescue.img of the payload)
+# Both push it over ssh (stdin -> a file under /run) and run it. Nothing here
+# is installed on the panel. The Android path (steps/tsx-rescue-arm.sh) uses a
+# different script, because the fw_setenv and busybox of Android differ.
 #
 #   sh tsx-arm-from-mainline.sh [--rescue FILE] [--no-reboot]
-#     --rescue FILE   the rescue image to boot (an Android v0 boot image);
-#                     default: p1:boot.img, the golden slot (already the rescue
-#                     on a panel installed by tsx-install-mainline)
-#     --no-reboot     arm only; do not reboot
+#     --rescue FILE   the rescue image to boot (an Android v0 boot image).
+#                     Default: p1:boot.img, the golden slot. On a panel that
+#                     tsx-install-mainline installed, it is already the rescue.
+#     --no-reboot     arm only. Do not reboot
 #
-# What it writes (docs/boot.md "The v2 env state machine"): p1:tsxboot.img
-# <- FILE (copy verified by sha256; replaced in place when p1 has no room for
-# a side copy), removes p1:tsxboot.off (the hook's off switch, set by
-# tsx-rescue-install), and, with the v2 `once` guard, tsx_once=1 (one
-# verified single-variable env write; U-Boot clears it before it boots the
-# rescue, so this arms exactly one rescue boot). With the older boot_retry
-# guard nothing in the env is written. It never touches U-Boot, the MBR, the
-# eMMC or p1:boot.img. It checks the hook (tsx_boot in switch_bootmode)
-# BEFORE writing anything: without it the reboot would not reach the rescue.
-# Output lines are parsed by the drivers: "REBOOTING" (or "ARMED" with
-# --no-reboot) on success; exit 1 with a reason otherwise.
+# What it writes (docs/boot.md "The v2 env state machine"):
+#   - p1:tsxboot.img <- FILE. The copy is verified by sha256. If p1 has no
+#     room for a side copy, the copy replaces the old file in place.
+#   - It removes p1:tsxboot.off (the off switch of the hook, set by
+#     tsx-rescue-install).
+#   - With the v2 `once` guard, it sets tsx_once=1 (one verified env write of a
+#     single variable). U-Boot clears it before it boots the rescue, so this
+#     arms exactly one rescue boot. With the older boot_retry guard, it writes
+#     nothing in the env.
+# It never touches U-Boot, the MBR, the eMMC or p1:boot.img. It checks the hook
+# (tsx_boot in switch_bootmode) BEFORE it writes anything. Without the hook,
+# the reboot would not reach the rescue.
+# The drivers parse the output lines. On success the last line is "REBOOTING"
+# (or "ARMED" with --no-reboot). Otherwise the script exits 1 with a reason.
 # Test hooks: TSX_P1 (vfat p1 device), TSX_ENV_CFG_LINE (fw_env.config line),
 # TSX_MNT (mount point), TSX_RUN (dir for the env config file).
-# TSX_FWENV_TIMEOUT bounds every fw_printenv/fw_setenv call below (default
-# 10s): u-boot-tools' fw_env.c read loop spins at 100% CPU forever on a
-# size/file mismatch instead of erroring out (docs/boot.md
+# TSX_FWENV_TIMEOUT puts a time limit on every fw_printenv and fw_setenv call
+# below (default 10 s). On a size or file mismatch, the read loop in fw_env.c
+# of u-boot-tools spins at 100% CPU forever instead of an error (docs/boot.md
 # "fw_printenv can hang").
 set -u
 FWTO=${TSX_FWENV_TIMEOUT:-10}
@@ -48,13 +51,13 @@ MOUNTED=0
 fail() { [ "$MOUNTED" = 1 ] && umount "$MNT" 2>/dev/null; echo "$*"; exit 1; }
 sha() { sha256sum < "$1" | cut -d' ' -f1; }
 
-# 1. the env and the hook, read only
+# 1. Read the env and the hook (read only).
 echo "${TSX_ENV_CFG_LINE:-/dev/mmcblk0 0x100000 0x10000}" > "$CFG" || fail "cannot write $CFG"
 sw=$($FWTO_CMD fw_printenv -c "$CFG" -l "$RUN" -n switch_bootmode 2>/dev/null) || fail "cannot read the U-Boot env (failed or timed out after ${FWTO}s)"
 case "$sw" in *tsx_boot*) ;; *) fail "the U-Boot hook (tsx_boot) is not installed: the reboot would not reach the rescue";; esac
 case "$sw" in *tsx_once*) GUARD=once;; *) GUARD=boot_retry;; esac
 
-# 2. p1:tsxboot.img <- the rescue
+# 2. Copy the rescue to p1:tsxboot.img.
 mkdir -p "$MNT"
 mount -t vfat "$P1" "$MNT" || fail "cannot mount $P1 (vfat) at $MNT"
 MOUNTED=1
@@ -84,7 +87,7 @@ fi
 if [ -f "$MNT/tsxboot.off" ]; then rm -f "$MNT/tsxboot.off"; echo "p1:tsxboot.off removed (hook re-enabled)"; fi
 sync
 
-# 3. arm: tsx_once=1 with the once guard (the boot_retry guard needs nothing)
+# 3. Arm. With the once guard, set tsx_once=1. The boot_retry guard needs nothing.
 if [ "$GUARD" = once ]; then
 	$FWTO_CMD fw_setenv -c "$CFG" -l "$RUN" tsx_once 1 || fail "fw_setenv tsx_once 1 failed or timed out after ${FWTO}s"
 	[ "$($FWTO_CMD fw_printenv -c "$CFG" -l "$RUN" -n tsx_once 2>/dev/null)" = 1 ] || fail "tsx_once=1 did not take"
@@ -98,8 +101,9 @@ ls -l "$MNT"
 umount "$MNT"; MOUNTED=0
 if [ "$REBOOT" = 1 ]; then
 	echo REBOOTING
-	# detached from the ssh session (stdin/out/err), so the host sees the
-	# output above and the session closes before the reboot drops it
+	# Detach the reboot from the ssh session (stdin, stdout, stderr). Then the
+	# host sees the output above, and the session closes before the reboot
+	# drops it.
 	(sleep 2; reboot) </dev/null >/dev/null 2>&1 &
 else
 	echo ARMED

@@ -1,57 +1,60 @@
 #!/bin/sh
 # tsx-autoupdate: automatic Alpine package updates for the xx60 kiosk.
 #
-# Daily: `apk update`, compute pending upgrades, decide whether Chromium's
-# ES2-patch pin should move. Installs only inside the night window
-# (/etc/tsx/autoupdate.conf WINDOW) and only while the screen is idle
-# (tsx-idled's state file); reboots only if the upgrade touched the kernel,
-# musl, openrc or busybox/the init system, and only inside the window.
+# Daily: run `apk update`, compute the pending upgrades, and decide whether
+# the ES2-patch pin of Chromium must move. It installs only inside the night
+# window (/etc/tsx/autoupdate.conf WINDOW) and only while the screen is idle
+# (the state file of tsx-idled). It reboots only if the upgrade changed the
+# kernel, musl, openrc or busybox or the init system, and only inside the
+# window.
 #
-# Chromium: with tsx-xx60-chromium installed (the project's apk repository,
-# tsx-aports: Alpine's build with the ES2 GPU patch already applied) it is
-# an ordinary package and upgrades with everything else. A rootfs built
-# without that repository pins Alpine's own "chromium=<ver>" in
-# /etc/apk/world instead and patches it in place (rootfs/src/chromium-es2/);
-# there, once tsx-xx60-chromium is offered by a configured repository, the
-# next install moves to it ("migrate": apk add tsx-xx60-chromium, drop the
-# pin). Until then: a newer build with no known patch signature is held
-# (logged "held since ..."); after HOLD_DAYS it is taken anyway, unpatched
-# (software rendering, logged clearly). A build WITH a known signature is
-# upgraded and re-patched right away, using the same patch-chromium.py +
-# sigs.json shipped alongside this script (/usr/local/share/tsx/chromium-es2/)
-# that mkrootfs.sh uses at build time.
+# Chromium: with tsx-xx60-chromium installed (the apk repository of this
+# project, tsx-aports: the Alpine build with the ES2 GPU patch already
+# applied), Chromium is an ordinary package and upgrades with everything
+# else. A rootfs built without that repository pins the own "chromium=<ver>"
+# of Alpine in /etc/apk/world instead, and patches it in place
+# (rootfs/src/chromium-es2/). There, once a configured repository offers
+# tsx-xx60-chromium, the next install moves to it ("migrate": apk add
+# tsx-xx60-chromium, drop the pin). Until then, the script holds a newer
+# build that has no known patch signature (logged "held since ..."). After
+# HOLD_DAYS, it installs that build anyway, unpatched (software rendering,
+# logged clearly). It upgrades and re-patches a build WITH a known signature
+# right away. For this it uses the same patch-chromium.py and sigs.json that
+# mkrootfs.sh uses at build time. They ship next to this script
+# (/usr/local/share/tsx/chromium-es2/).
 #
 # Repositories: apk refuses to upgrade anything while a listed repository is
-# unavailable. When only this project's own repositories (the tsx-aports
-# lines, <APK_URL>/<branch>/common and .../xx60) cannot be fetched -- the
-# host is down, or not public yet -- that is a WARNING in the status and the
-# HA entity, and Alpine's updates still install (--force-missing-repositories).
-# An unreachable Alpine repository blocks the install (check only).
+# unavailable. Sometimes only the own repositories of this project cannot be
+# fetched (the tsx-aports lines, <APK_URL>/<branch>/common and .../xx60),
+# because the host is down or not public yet. That is a WARNING in the status
+# and the HA entity, and the Alpine updates still install
+# (--force-missing-repositories). An unreachable Alpine repository blocks the
+# install (check only).
 #
 # Usage:
-#   tsx-autoupdate            the scheduled tick (cron): check, install if
-#                              the window+idle gate allows it
-#   tsx-autoupdate now         check + install right away (window still
+#   tsx-autoupdate            the scheduled tick (cron): check, and install if
+#                              the window and idle gate allows it
+#   tsx-autoupdate now         check + install right away (the window still
 #                              gates the reboot itself, never the install)
 #   tsx-autoupdate check       refresh the status only, never installs
 #   tsx-autoupdate status      print the current state
-#   tsx-autoupdate healthcheck post-reboot check (called by the init.d
-#                              script's background job; a no-op unless an
-#                              automatic update rebooted the panel)
+#   tsx-autoupdate healthcheck post-reboot check (the background job of the
+#                              init.d script calls it. It does nothing unless
+#                              an automatic update rebooted the panel)
 #
 # Status: $TSX_RUN_DIR/update.json (+ update-ha-state.json for tsx-mqtt),
-# refreshed every run; a persistent copy lives under $TSX_STATE_DIR
-# (default /var/lib/tsx/autoupdate, moved onto /data by tsx-data) so
-# "status"/the HA entity have something to show right after boot.
+# refreshed at every run. A persistent copy lives under $TSX_STATE_DIR
+# (default /var/lib/tsx/autoupdate, moved onto /data by tsx-data). So
+# "status" and the HA entity have something to show right after the boot.
 #
-# Env overrides (for host tests only; see rootfs/tests/test-autoupdate*.sh):
+# Env overrides (for host tests only. See rootfs/tests/test-autoupdate*.sh):
 #   TSX_AUTOUPDATE_CONF TSX_RUN_DIR TSX_STATE_DIR TSX_LOG TSX_IDLED_STATE
 #   TSX_KIOSK_CONF TSX_WORLD TSX_SIGS TSX_PATCH_TOOL TSX_ES2_MARKER
 #   TSX_CHROMIUM_BIN TSX_BUILD_ID_FILE
 #
-# __in_window / __needs_reboot / __chromium_decision / __write_status are
-# internal: they call the matching shell function directly and are used by
-# the host tests to check that logic without a real apk/date/reboot.
+# __in_window, __needs_reboot, __chromium_decision and __write_status are
+# internal. They call the matching shell function directly. The host tests
+# use them to check that logic without a real apk, date or reboot.
 set -u
 
 CONF=${TSX_AUTOUPDATE_CONF:-/etc/tsx/autoupdate.conf}
@@ -123,7 +126,7 @@ chromium_decision() {  # cand old sig(0/1) since(date|empty) hold_days today -> 
 	if [ "$elapsed" -ge "$days" ]; then echo unpatched; else echo "hold $elapsed"; fi
 }
 
-# ---- status file (flat key/value; both JSON files are generated from it) --
+# ---- status file (flat key/value. Both JSON files are generated from it) --
 
 get_field() { sed -n "s/^$2 //p" "$1" 2>/dev/null | head -1; }
 
@@ -224,12 +227,12 @@ pinned_chromium_ver() { sed -n 's/^chromium=//p' "$WORLD" 2>/dev/null | head -1;
 tsx_chromium_installed() { apk info -e tsx-xx60-chromium >/dev/null 2>&1; }
 tsx_chromium_offered() { [ -n "$(apk list -a tsx-xx60-chromium 2>/dev/null | head -1)" ]; }
 
-# classify_repos APK_UPDATE_OUTPUT: every repository apk could not fetch
-# ("WARNING: updating and opening <repo>/<arch>/APKINDEX.tar.gz: <why>").
-# Sets REPO_WARNING (text for the status/HA, empty = all fine), REPO_BLOCKED
-# (1 = an Alpine/other repository is unavailable: do not install) and
-# APK_FORCE (--force-missing-repositories when any is unavailable, so a
-# check still sees what the others offer).
+# classify_repos APK_UPDATE_OUTPUT: find every repository that apk could not
+# fetch ("WARNING: updating and opening <repo>/<arch>/APKINDEX.tar.gz: <why>").
+# It sets REPO_WARNING (text for the status and HA, empty = all fine),
+# REPO_BLOCKED (1 = an Alpine or other repository is unavailable: do not
+# install) and APK_FORCE (--force-missing-repositories when any repository is
+# unavailable, so a check still sees what the others offer).
 classify_repos() {
 	REPO_WARNING= REPO_BLOCKED=0 APK_FORCE= ours= others=
 	for u in $(printf '%s\n' "$1" | sed -nE 's#^(WARNING|ERROR): .* ([a-z]+://[^ ]*|/[^ ]*)/[^/ ]+/APKINDEX\.tar\.gz: .*#\2#p' | sort -u); do
@@ -281,14 +284,14 @@ is_idle() {
 chromium_migrate() {  # Alpine chromium (pinned, patched in place) -> tsx-xx60-chromium
 	command -v rc-service >/dev/null 2>&1 && rc-service kiosk stop >>"$LOG" 2>&1
 	if apk add ${APK_FORCE:-} tsx-xx60-chromium >>"$LOG" 2>&1; then
-		# drops only the "chromium=<ver>" world pin: tsx-xx60-chromium provides chromium
+		# This drops only the "chromium=<ver>" world pin. tsx-xx60-chromium provides chromium.
 		apk del ${APK_FORCE:-} chromium >>"$LOG" 2>&1
-		# the in-place patch's sidecar was not package-owned: take the package's copy
+		# No package owned the sidecar of the in-place patch. Take the copy of the package.
 		[ -e "$ES2_MARKER.apk-new" ] && mv -f "$ES2_MARKER.apk-new" "$ES2_MARKER"
 		rm -f "$STATE/chromium-hold"
-		log "chromium: now tsx-xx60-chromium (ES2 patch built in; upgrades with the other packages)"
+		log "chromium: now tsx-xx60-chromium (ES2 patch built in, upgrades with the other packages)"
 	else
-		log "chromium: switching to tsx-xx60-chromium FAILED; keeping the pinned Alpine chromium"
+		log "chromium: switching to tsx-xx60-chromium FAILED, keeping the pinned Alpine chromium"
 	fi
 	command -v rc-service >/dev/null 2>&1 && rc-service kiosk start >>"$LOG" 2>&1
 }
@@ -307,18 +310,18 @@ chromium_upgrade() {  # chromium_upgrade CANDVER patch|unpatched
 				if python3 "$PATCH_TOOL" "$CHROMIUM_BIN" --sidecar "$ES2_MARKER" --target-path "$CHROMIUM_BIN" >>"$LOG" 2>&1; then
 					log "chromium $cand: ES2 patch applied"
 				else
-					log "chromium $cand: ES2 patch NOT applied (signature mismatch); software rendering"
+					log "chromium $cand: ES2 patch NOT applied (signature mismatch), software rendering"
 				fi
 			else
-				log "chromium $cand: patch tool or python3 missing; software rendering"
+				log "chromium $cand: patch tool or python3 missing, software rendering"
 			fi
 		else
-			log "chromium $cand: taking the update with no known ES2 signature after the hold period; software rendering"
+			log "chromium $cand: taking the update with no known ES2 signature after the hold period. Software rendering"
 			command -v tsx-chromium-es2 >/dev/null 2>&1 && tsx-chromium-es2 check >>"$LOG" 2>&1
 		fi
 		rm -f "$STATE/chromium-hold"
 	else
-		log "chromium upgrade to $cand FAILED (rc=$rc); re-pinning $old"
+		log "chromium upgrade to $cand FAILED (rc=$rc), re-pinning $old"
 		sed -i "s/^chromium\$/chromium=$old/" "$WORLD" 2>/dev/null
 	fi
 	command -v rc-service >/dev/null 2>&1 && rc-service kiosk start >>"$LOG" 2>&1
@@ -342,8 +345,8 @@ do_check() {
 	oldver=$(pinned_chromium_ver)
 	since=
 	if tsx_chromium_installed || [ -z "$oldver" ]; then
-		# tsx-xx60-chromium (or no pin at all): an ordinary package, its
-		# upgrades are in the list above already
+		# tsx-xx60-chromium (or no pin at all) is an ordinary package. Its
+		# upgrades are in the list above already.
 		tsx_chromium_installed && oldver=tsx-xx60-chromium
 		candver= decision=none
 		rm -f "$STATE/chromium-hold"
@@ -352,7 +355,7 @@ do_check() {
 		rm -f "$STATE/chromium-hold"
 	else
 		candver=$(candidate_chromium_ver)
-		# a hold only exists while the candidate differs from the pinned build
+		# A hold exists only while the candidate differs from the pinned build.
 		if [ -n "$candver" ] && [ "$candver" != "$oldver" ]; then since=$(chromium_hold_since "$candver")
 		else rm -f "$STATE/chromium-hold"; fi
 		sig=0; [ -n "$candver" ] && sig_known_for "$candver" && sig=1
@@ -395,7 +398,7 @@ do_install() {
 		log "install: not installing: $(get_field "$f" repo_warning)"
 		return 0
 	fi
-	# only this project's repositories unavailable: install what the others offer
+	# If only the repositories of this project are unavailable, install what the others offer.
 	[ -n "$(get_field "$f" repo_warning)" ] && APK_FORCE=--force-missing-repositories
 	set_fields "$f" in_progress=1; write_update_json; write_ha_json
 	log "installing (pending=$pcount reboot_needed=$rb chromium=$decision)"
@@ -415,7 +418,7 @@ do_install() {
 		sync
 		reboot
 	elif [ "$rb" = 1 ]; then
-		log "reboot needed but outside the window (or REBOOT=never): staying up"
+		log "reboot needed but outside the window (or REBOOT=never), staying up"
 	fi
 }
 
@@ -440,7 +443,7 @@ cmd_status() {
 	pl=$(get_field "$f" pending_list); [ -n "$pl" ] && echo "  $pl"
 	rb=$(get_field "$f" reboot_pending); echo "reboot pending: $([ "$rb" = 1 ] && echo yes || echo no)"
 	if [ "$(get_field "$f" chromium_pinned)" = tsx-xx60-chromium ]; then
-		echo "chromium:       tsx-xx60-chromium (ES2 patch built in; upgrades with the other packages)"
+		echo "chromium:       tsx-xx60-chromium (ES2 patch built in. Upgrades with the other packages)"
 	else
 		echo "chromium:       pinned $(get_field "$f" chromium_pinned), candidate $(get_field "$f" chromium_candidate), decision $(get_field "$f" chromium_decision)"
 	fi
@@ -461,8 +464,8 @@ cmd_healthcheck() {
 		rc-service kiosk status >/dev/null 2>&1 || { ok=0; msg="kiosk service not running"; }
 	fi
 	url=; [ -r "$KIOSK_CONF" ] && . "$KIOSK_CONF" 2>/dev/null
-	# panel.conf's KIOSK_URL override (`tsx-config apply`) wins, same
-	# precedence as kiosk-session -- docs/rootfs.md "Panel configuration"
+	# The KIOSK_URL override of panel.conf (`tsx-config apply`) wins, with the
+	# same precedence as in kiosk-session -- docs/rootfs.md "Panel configuration"
 	[ -r "$RUN/kiosk.conf" ] && . "$RUN/kiosk.conf" 2>/dev/null
 	url=${KIOSK_URL:-$url}
 	if [ -n "$url" ] && command -v curl >/dev/null 2>&1; then

@@ -1,73 +1,82 @@
 #!/bin/sh
-# tsx-config: read/write the panel's one configuration file and apply it to
-# the running services. Same script on the panel, in host-side installer
-# tooling (TSX_CONF pointed at a build-time file) and the on-panel setup page
-# (tsx-setupd, docs/rootfs.md "Setup page") can drive it -- busybox ash and
-# plain POSIX sh only (`busybox sh -n`), no bash-only syntax.
+# tsx-config: read and write the one configuration file of the panel, and
+# apply it to the running services. The same script runs on the panel, in
+# host-side installer tooling (TSX_CONF pointed at a build-time file), and
+# in the on-panel setup page (tsx-setupd, docs/rootfs.md "Setup page"). It
+# uses busybox ash and plain POSIX sh only (`busybox sh -n`), no bash syntax.
 #
 #   tsx-config get KEY            print the value (empty + exit 1 if unset)
 #   tsx-config set KEY VALUE      validate + write (creates the file/dir)
 #   tsx-config validate KEY VALUE same checks as set, exit status only, never
-#                                  writes (the setup page validates a field
-#                                  before it is ever submitted; a stray/
-#                                  unknown key is also "invalid", never dies)
+#                                  writes. The setup page validates a field
+#                                  before it submits it. A stray or unknown
+#                                  key is also "invalid" and never dies.
 #   tsx-config unset KEY          remove a key
 #   tsx-config show               print every set key (secrets masked)
 #   tsx-config apply              (panel, root) regenerate the small
-#                                  /run/tsx/*.conf overrides the services
+#                                  /run/tsx/*.conf overrides that the services
 #                                  read after their own defaults, and act on
-#                                  the settings that are not just a file
+#                                  the settings that are not only a file
 #                                  (hostname, root password, ssh key, voice
-#                                  enable/disable). Run by the tsx-config
-#                                  OpenRC service early at boot.
+#                                  enable/disable). The tsx-config OpenRC
+#                                  service runs it early at boot.
 #   tsx-config setup               (panel, root) show the on-panel setup page
 #                                  for one ~15 min window even if KIOSK_URL is
-#                                  already set (touches /run/tsx/setup-open;
-#                                  restarts the kiosk service if it is up).
+#                                  already set. It touches /run/tsx/setup-open
+#                                  and restarts the kiosk service if it is up.
 #
-# File: $TSX_CONF (default /data/tsx/panel.conf) -- KEY="value" lines, one
-# setting per line, '#' comments, blank lines. It is NEVER `.` sourced by a
-# service (this parser only ever reads literal text after the first '=';
-# nothing in the file is executed) and is mode 600 because several keys are
-# secrets (HA_TOKEN, HA_API_KEY, MQTT_PASSWORD, ROOT_PASSWORD_HASH,
+# File: $TSX_CONF (default /data/tsx/panel.conf). It has KEY="value" lines,
+# one setting per line, '#' comments and blank lines. No service ever `.`
+# sources it. The parser reads only literal text after the first '=', and
+# nothing in the file is executed. The file has mode 600, because several
+# keys are secrets (HA_TOKEN, HA_API_KEY, MQTT_PASSWORD, ROOT_PASSWORD_HASH,
 # SSH_AUTHORIZED_KEY).
 #
-# Keys: PANEL_NAME, KIOSK_URL, HA_LOGIN_METHOD (token|trusted), HA_TOKEN,
-# TZ_NAME, VOICE (on|off), WAKE_WORD, HA_TRANSPORT (esphome|mqtt|both;
-# PLAN.md section 18: esphome = one zero-config Home Assistant device over
-# the ESPHome native API, no broker -- tsx-esphome, or the voice satellite
-# itself when VOICE=on; mqtt = the tsx-mqtt bridge only, needs MQTT_HOST;
-# both = run whichever of the two are configured), HA_API_KEY (the ESPHome
-# API encryption key: 32 random bytes, base64, like ESPHome's `api:
-# encryption: key:`; the same text goes into Home Assistant; empty =
-# plaintext, the zero-config default -- docs/ha.md "Security"),
-# HA_ALLOW_FROM (comma list of IPv4/IPv6 addresses or CIDRs allowed to use
-# the ESPHome API; empty = allow any, the zero-config default), MQTT_HOST,
-# MQTT_PORT, MQTT_USER, MQTT_PASSWORD, KERNEL_FLAVOR (lts|stable),
-# APK_URL (base URL of this project's apk repositories, tsx-aports: apply
-# rewrites the two lines <APK_URL>/<alpine-branch>/common and .../xx60 at the
-# top of /etc/apk/repositories; unset = the build default in
-# /etc/tsx/apk-url.default; "off" = leave them out), BLANK_TIMEOUT (seconds
-# without input before the screen goes dark, 0 = never; replaces kiosk.conf's
-# BLANK_TIMEOUT through /run/tsx/blank-timeout, which tsx-idled watches -- the
-# Home Assistant "Blank timeout" number), BOOT_VERBOSE (1 = kernel and boot
-# text on the LCD instead of the boot splash, from the next boot on; apply
-# keeps the flag file /etc/tsx/boot-verbose on the root file system, which the
-# initramfs reads -- it cannot read /data), ORIENTATION (landscape |
-# portrait | landscape-flipped | portrait-flipped: how the panel hangs, see
-# tsx-orientation; apply keeps /etc/tsx/orientation on the root file system
-# for the initramfs, the splash, the kiosk and tsx-buttons, and turns the
-# running kiosk at once), ROOT_PASSWORD_HASH, SSH_AUTHORIZED_KEY. See installer/panel.conf.example
-# and docs/rootfs.md "Panel configuration" for what each one does.
+# Keys:
+# PANEL_NAME, KIOSK_URL, HA_LOGIN_METHOD (token|trusted), HA_TOKEN, TZ_NAME,
+# VOICE (on|off), WAKE_WORD.
+# HA_TRANSPORT (esphome|mqtt|both), see PLAN.md section 18:
+#   esphome = one zero-config Home Assistant device over the ESPHome native
+#             API, with no broker. It is tsx-esphome, or the voice satellite
+#             itself when VOICE=on.
+#   mqtt    = the tsx-mqtt bridge only. It needs MQTT_HOST.
+#   both    = run whichever of the two are configured.
+# HA_API_KEY: the ESPHome API encryption key. It is 32 random bytes, base64,
+#   like `api: encryption: key:` of ESPHome. The same text goes into Home
+#   Assistant. Empty = plaintext, the zero-config default -- docs/ha.md
+#   "Security".
+# HA_ALLOW_FROM: comma list of IPv4/IPv6 addresses or CIDRs that can use the
+#   ESPHome API. Empty = allow any, the zero-config default.
+# MQTT_HOST, MQTT_PORT, MQTT_USER, MQTT_PASSWORD, KERNEL_FLAVOR (lts|stable).
+# APK_URL: base URL of the apk repositories of this project (tsx-aports).
+#   apply rewrites the two lines <APK_URL>/<alpine-branch>/common and
+#   .../xx60 at the top of /etc/apk/repositories. Unset = the build default
+#   in /etc/tsx/apk-url.default. "off" = leave them out.
+# BLANK_TIMEOUT: seconds without input before the screen goes dark, 0 =
+#   never. It replaces BLANK_TIMEOUT of kiosk.conf through
+#   /run/tsx/blank-timeout, which tsx-idled watches. It is the Home
+#   Assistant "Blank timeout" number.
+# BOOT_VERBOSE: 1 = kernel and boot text on the LCD instead of the boot
+#   splash, from the next boot on. Apply keeps the flag file
+#   /etc/tsx/boot-verbose on the root file system. The initramfs reads it,
+#   because it cannot read /data.
+# ORIENTATION (landscape | portrait | landscape-flipped | portrait-flipped):
+#   how the panel hangs, see tsx-orientation. Apply keeps
+#   /etc/tsx/orientation on the root file system for the initramfs, the
+#   splash, the kiosk and tsx-buttons, and turns the running kiosk at once.
+# ROOT_PASSWORD_HASH, SSH_AUTHORIZED_KEY.
+# See installer/panel.conf.example and docs/rootfs.md "Panel configuration"
+# for what each key does.
 set -eu
 TSX_CONF=${TSX_CONF:-/data/tsx/panel.conf}
 RUN=${TSX_RUN:-/run}/tsx
 STATE=${TSX_STATE_DIR:-/var/lib/tsx}
 SEED=${TSX_CONF_SEED:-/etc/tsx/panel.conf.seed}
-# PREFIX: host-test hook only (rootfs/tests/, ci/). Every real system path
-# `apply` touches outside $TSX_CONF/$RUN/$STATE/$SEED (already overridable
-# above) is written as "$PREFIX/etc/shadow" etc., so a test can point a whole
-# fixture tree at it; empty (the panel default) leaves the paths absolute.
+# PREFIX: hook for host tests only (rootfs/tests/, ci/). `apply` writes every
+# real system path outside $TSX_CONF/$RUN/$STATE/$SEED (already overridable
+# above) as "$PREFIX/etc/shadow" and so on. So a test can point a whole
+# fixture tree at it. If PREFIX is empty (the panel default), the paths stay
+# absolute.
 PREFIX=${TSX_APPLY_PREFIX:-}
 
 KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT BOOT_VERBOSE ORIENTATION ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
@@ -86,26 +95,27 @@ is_secret() {
 	return 1
 }
 
-# escape a value for our OWN panel.conf storage (reversed by unquote()
-# below): backslash and double quote only. panel.conf is never `.` sourced,
-# so `$`/backtick need no special handling here.
+# Escape a value for the OWN panel.conf storage of this script (unquote()
+# below reverses it). Escape only the backslash and the double quote. No
+# service ever `.` sources panel.conf, so `$` and backtick need no special
+# handling here.
 store_esc() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
-# escape a value for embedding in double quotes in a file we generate and
-# WILL later `.` source ourselves (the run/tsx/*.conf overrides, apply()
-# below): backslash, double quote, `$` and backtick are the four characters
-# special inside POSIX double quotes.
+# Escape a value for embedding in double quotes in a file that this script
+# generates and WILL later `.` source itself (the run/tsx/*.conf overrides,
+# apply() below). Backslash, double quote, `$` and backtick are the four
+# characters that are special inside POSIX double quotes.
 shq() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\$/\\$/g; s/`/\\`/g'
 }
 
 val_ok() {
 	k=$1; v=$2
-	# a literal embedded newline (command substitution would strip a
-	# trailing one, so this is a real newline written into the script,
-	# not $(printf '\n')): reject a value that contains one.
+	# Reject a value that contains a literal embedded newline. Command
+	# substitution would strip a trailing one, so this is a real newline
+	# written into the script, not $(printf '\n').
 	nl='
 '
 	case "$v" in *"$nl"*) return 1;; esac
@@ -118,14 +128,14 @@ val_ok() {
 	VOICE) case "$v" in on|off) return 0;; esac; return 1;;
 	WAKE_WORD) printf '%s' "$v" | grep -Eq '^[a-z0-9_]{1,32}$';;
 	HA_TRANSPORT) case "$v" in esphome|mqtt|both) return 0;; esac; return 1;;
-	# canonical base64 of exactly 32 bytes (44 characters, one '='); the
-	# last data character carries only 2 bits, so only 16 values are valid
+	# Canonical base64 of exactly 32 bytes (44 characters, one '='). The last
+	# data character carries only 2 bits, so only 16 values are valid.
 	HA_API_KEY) [ -z "$v" ] && return 0; printf '%s' "$v" | grep -Eq '^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$';;
 	HA_ALLOW_FROM)
 		[ -z "$v" ] && return 0   # empty = allow any (zero-config default)
-		# Peeled apart with parameter expansion, not `set -- $v` / IFS field
-		# splitting: an unquoted `set --` here would also pathname-expand
-		# any glob metacharacter in a comma-separated item.
+		# Peel the list apart with parameter expansion, not with `set -- $v`
+		# or IFS field splitting. An unquoted `set --` here would also
+		# pathname-expand any glob metacharacter in a comma-separated item.
 		rest=$v
 		while [ -n "$rest" ]; do
 			case "$rest" in *,*) item=${rest%%,*}; rest=${rest#*,};; *) item=$rest; rest=;; esac
@@ -154,7 +164,7 @@ val_ok() {
 	MQTT_USER) [ -z "$v" ] && return 0; printf '%s' "$v" | grep -Eq '^[A-Za-z0-9_.@-]+$';;
 	MQTT_PASSWORD) return 0;;
 	KERNEL_FLAVOR) case "$v" in lts|stable) return 0;; esac; return 1;;
-	# an http(s) mirror, a local directory (a LAN copy on a USB stick), or off
+	# An http(s) mirror, a local directory (a LAN copy on a USB stick), or off
 	APK_URL) [ "$v" = off ] && return 0; printf '%s' "$v" | grep -Eq '^(https?://[A-Za-z0-9.:@_~%+-]+(/[^[:space:]]*)?|/[^[:space:]]*)$';;
 	# seconds, 0 = never, at most a day
 	BLANK_TIMEOUT) printf '%s' "$v" | grep -Eq '^[0-9]{1,5}$' && [ "$v" -le 86400 ];;
@@ -166,8 +176,9 @@ val_ok() {
 	esac
 }
 
-# strip one layer of surrounding quotes (double: unescape \" and \\; single:
-# literal, no escapes) from an already-trimmed value.
+# Strip one layer of surrounding quotes from an already-trimmed value. For
+# double quotes, unescape \" and \\. For single quotes, keep the text
+# literal, with no escapes.
 unquote() {
 	v=$1
 	case "$v" in
@@ -178,10 +189,10 @@ unquote() {
 }
 trim() { printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr -d '\r'; }
 
-# cfg_get KEY: print the value on stdout, exit 1 (nothing printed) if the
-# file is missing or the key is not set. Tolerant of stray/unknown lines
-# elsewhere in the file (a newer panel.conf read by an older tsx-config)
-# and of blank lines / comments; only ever reads text after the first '=',
+# cfg_get KEY: print the value on stdout. Exit 1 (nothing printed) if the
+# file is missing or the key is not set. It tolerates stray or unknown lines
+# elsewhere in the file (an older tsx-config can read a newer panel.conf),
+# and blank lines and comments. It reads only text after the first '=', and
 # never executes anything in the file.
 cfg_get() {
 	k=$1
@@ -235,10 +246,10 @@ cfg_unset() {
 }
 
 cfg_show() {
-	# always exits 0: the last known key not being set must not leak through
-	# as this function's (and so `tsx-config show`'s) exit status -- a caller
-	# piping the output (e.g. `tsx-config show | grep ...`) must see grep's
-	# exit status, not an unrelated "last key was unset".
+	# Always exit 0. If the last known key is not set, that must not leak
+	# through as the exit status of this function (and of `tsx-config show`).
+	# A caller that pipes the output (for example `tsx-config show | grep ...`)
+	# must see the exit status of grep, not an unrelated "last key was unset".
 	for k in $KNOWN_KEYS; do
 		v=$(cfg_get "$k") || continue
 		is_secret "$k" && v="********"
@@ -249,8 +260,8 @@ cfg_show() {
 	return 0
 }
 
-# the clock's NTP state, for people (stderr, like the warning below; the
-# panel has no RTC: until chrony has synced, the time is the last saved one)
+# The NTP state of the clock, for people (stderr, like the warning below).
+# The panel has no RTC. Until chrony has synced, the time is the last saved one.
 clock_status() {
 	command -v "${TSX_CHRONYC:-chronyc}" >/dev/null 2>&1 || return 0
 	now=$(date '+%F %T %Z')
@@ -259,21 +270,21 @@ clock_status() {
 		ref=$(echo "$t" | sed -n 's/^Reference ID *: [0-9A-Fa-f]* (\(.*\))$/\1/p')
 		echo "# clock: $now, NTP synced (${ref:-?})" >&2
 	else
-		echo "# clock: $now, NOT synced yet (NTP; the time is the last saved one)" >&2
+		echo "# clock: $now, NOT synced yet (the time is the last saved one)" >&2
 	fi
 }
 
-# the ESPHome API with neither a key nor an allow-list: anyone on the LAN
-# may use it (docs/ha.md "Security").
+# Warn when the ESPHome API has neither a key nor an allow-list. Then anyone
+# on the LAN can use it (docs/ha.md "Security").
 warn_open_api() {
 	key=$(cfg_get HA_API_KEY) || key=
 	allow=$(cfg_get HA_ALLOW_FROM) || allow=
 	[ -z "$key" ] && [ -z "$allow" ] || return 0
 	echo "# WARNING: the ESPHome API (port 6053) is open: no HA_API_KEY and" >&2
 	echo "#   HA_ALLOW_FROM is empty, so any host on the LAN can reboot this panel" >&2
-	echo "#   or change its kiosk URL. Set HA_API_KEY (encryption; generate one with" >&2
-	echo "#   head -c 32 /dev/urandom | base64) and/or HA_ALLOW_FROM (your Home" >&2
-	echo "#   Assistant host's address) -- docs/ha.md \"Security\"." >&2
+	echo "#   or change its kiosk URL. Set HA_API_KEY (encryption key, made with" >&2
+	echo "#   head -c 32 /dev/urandom | base64) and/or HA_ALLOW_FROM (the address" >&2
+	echo "#   of your Home Assistant host) -- docs/ha.md \"Security\"." >&2
 }
 
 # ---- apply: boot-time materialisation (panel only) -------------------------
@@ -293,11 +304,12 @@ seed_promote() {
 		&& log "promoted $SEED to $TSX_CONF (installer-provided config, first boot with /data available)"
 }
 
-# APK_URL: this project's two apk repositories (tsx-aports common + xx60),
-# always listed FIRST in /etc/apk/repositories (tsx-xx60-chromium must win
-# the tie with Alpine's own chromium, tsx-aports README "Which chromium
-# wins"). Only the marked block is rewritten, and only when it changes; the
-# Alpine lines and anything else a user added stay as they are.
+# APK_URL: the two apk repositories of this project (tsx-aports common +
+# xx60). They are always listed FIRST in /etc/apk/repositories, because
+# tsx-xx60-chromium must win the tie with the own chromium of Alpine (see
+# "Which chromium wins" in the tsx-aports README). The script rewrites only
+# the marked block, and only when it changes. The Alpine lines and anything
+# else that a user added stay as they are.
 APK_MARK="# tsx-aports (tsx-config apply; panel.conf APK_URL)"
 apk_repos() {
 	repos=$PREFIX/etc/apk/repositories
@@ -306,7 +318,7 @@ apk_repos() {
 	[ -n "$url" ] || url=$(head -n 1 "$PREFIX/etc/tsx/apk-url.default" 2>/dev/null) || url=
 	[ -n "$url" ] || url=https://tsx-aports.unexceptional.net
 	url=${url%/}
-	# Alpine branch from the Alpine main line (v3.24, edge), else alpine-release
+	# Take the Alpine branch from the Alpine main line (v3.24, edge), else from alpine-release.
 	br=$(sed -nE 's#^[[:space:]]*[^#].*/(v[0-9][0-9.]*|edge)/main/*[[:space:]]*$#\1#p' "$repos" | head -n 1)
 	[ -n "$br" ] || br=v$(cut -d. -f1-2 "$PREFIX/etc/alpine-release" 2>/dev/null)
 	[ "$br" != v ] || { log "WARNING: APK_URL: cannot tell the Alpine branch; $repos left as it is"; return 0; }
@@ -319,12 +331,12 @@ apk_repos() {
 			echo "$url/$br/common"
 			echo "$url/$br/xx60"
 		fi
-		# everything else, minus an earlier block and any other copy of our
-		# two repositories (/<branch>/common, /<branch>/xx60)
+		# Everything else, minus an earlier block and any other copy of the
+		# two repositories of this project (/<branch>/common, /<branch>/xx60)
 		grep -vE '^# tsx-aports |^#   APK_URL=off|/(v[0-9][0-9.]*|edge)/(common|xx60)/*[[:space:]]*$' "$repos"
 	} > "$tmp"
 	if cmp -s "$tmp" "$repos"; then rm -f "$tmp"; return 0; fi
-	chmod 644 "$tmp" && mv "$tmp" "$repos" && log "apk repositories: tsx-aports at $url ($br); the next apk update / tsx-autoupdate check uses it"
+	chmod 644 "$tmp" && mv "$tmp" "$repos" && log "apk repositories: tsx-aports at $url ($br). The next apk update / tsx-autoupdate check uses it"
 }
 
 apply() {
@@ -345,9 +357,9 @@ apply() {
 
 	{ [ -n "$name" ] && printf 'SENDSPIN_NAME="%s"\n' "$(shq "$name")"; } | write_override "$RUN/sendspin.conf"
 
-	# BLANK_TIMEOUT: a plain number for tsx-idled (inotify: applies at once);
-	# unset = kiosk.conf's BLANK_TIMEOUT again. Only rewritten when it
-	# changed: every write wakes tsx-idled.
+	# BLANK_TIMEOUT: a plain number for tsx-idled (inotify, so it applies at
+	# once). Unset = BLANK_TIMEOUT of kiosk.conf again. The script rewrites it
+	# only when it changed, because every write wakes tsx-idled.
 	bt=$(cfg_get BLANK_TIMEOUT) || bt=
 	if [ -n "$bt" ]; then
 		[ "$(cat "$RUN/blank-timeout" 2>/dev/null)" = "$bt" ] || printf '%s\n' "$bt" | write_override "$RUN/blank-timeout" 644
@@ -380,11 +392,12 @@ apply() {
 		esac
 	fi
 
-	# HA_API_KEY: /run/tsx/esphome.key, mode 640 group kiosk -- tsx-esphome
-	# (root) and the voice satellite (user kiosk) read it at start; if the
+	# HA_API_KEY: /run/tsx/esphome.key, mode 640 group kiosk. tsx-esphome
+	# (root) and the voice satellite (user kiosk) read it at start. If the
 	# file exists but cannot be read, both refuse to start rather than
-	# serve plaintext (rootfs/voice/shim/tsx_panel/security.py). Written
-	# under umask 077 first: never world-readable, not even briefly.
+	# serve plaintext (rootfs/voice/shim/tsx_panel/security.py). The script
+	# writes it under umask 077 first, so it is never world-readable, not
+	# even briefly.
 	key=$(cfg_get HA_API_KEY) || key=
 	keysum=
 	if [ -n "$key" ]; then
@@ -399,12 +412,12 @@ apply() {
 		rm -f "$RUN/esphome.key"
 	fi
 
-	# HA_TRANSPORT/HA_ALLOW_FROM: world-readable (no secret in either,
-	# unlike the other overrides above) because the voice satellite's own
-	# ESPHome plugin (rootfs/voice/shim/tsx_lva) reads this file directly --
-	# it runs as kiosk:audio and cannot read $TSX_CONF (mode 600).
-	# tsx-esphome (root) reads the same file too, for one code path instead
-	# of two (see rootfs/voice/shim/tsx_panel/security.py).
+	# HA_TRANSPORT/HA_ALLOW_FROM: world-readable (neither has a secret,
+	# unlike the other overrides above). The own ESPHome plugin of the voice
+	# satellite (rootfs/voice/shim/tsx_lva) reads this file directly. It runs
+	# as kiosk:audio and cannot read $TSX_CONF (mode 600). tsx-esphome (root)
+	# reads the same file too, so there is one code path instead of two (see
+	# rootfs/voice/shim/tsx_panel/security.py).
 	transport=$(cfg_get HA_TRANSPORT) || transport=esphome
 	allow=$(cfg_get HA_ALLOW_FROM) || allow=
 	tmp="$RUN/esphome.conf.tmp.$$"
@@ -412,30 +425,31 @@ apply() {
 		printf 'TRANSPORT="%s"\n' "$(shq "$transport")"
 		printf 'ALLOW_FROM="%s"\n' "$(shq "$allow")"
 	} > "$tmp" && mv "$tmp" "$RUN/esphome.conf" && chmod 644 "$RUN/esphome.conf"
-	# same warning as `show` (docs/ha.md "Security"); not with HA_TRANSPORT=mqtt
+	# The same warning as `show` (docs/ha.md "Security"). Not with HA_TRANSPORT=mqtt.
 	[ "$transport" = mqtt ] || warn_open_api
 
-	# HA_TRANSPORT/VOICE together decide whether tsx-esphome (the standalone
-	# ESPHome device, PLAN.md section 18) should be running -- see its own
-	# start() for the same check. It is always in the default runlevel (like
-	# tsx-mqtt), so only restart it if it is already up; at boot time this
-	# apply() runs before tsx-esphome's own runlevel entry starts it, so
-	# there is nothing to restart yet and this is a no-op.
-	# Restart it only when something it reads changed (esphome.conf, the
-	# panel name, VOICE, the API key): tsx-esphome itself runs `tsx-config apply` for its
-	# Kiosk URL entity, and an unconditional restart killed it in the middle
-	# of that command (and dropped Home Assistant's connection each time).
+	# HA_TRANSPORT and VOICE together decide whether tsx-esphome (the
+	# standalone ESPHome device, PLAN.md section 18) must run. Its own start()
+	# makes the same check. It is always in the default runlevel (like
+	# tsx-mqtt), so restart it only if it is already up. At boot, this
+	# apply() runs before the runlevel entry of tsx-esphome starts it. Then
+	# there is nothing to restart yet, and the restart does nothing.
+	# Restart it only when something that it reads changed (esphome.conf, the
+	# panel name, VOICE, the API key). tsx-esphome itself runs `tsx-config
+	# apply` for its Kiosk URL entity. An unconditional restart killed it in
+	# the middle of that command (and dropped the connection of Home Assistant
+	# each time).
 	sig="$(cat "$RUN/esphome.conf" 2>/dev/null)|$name|$voice|$keysum"
 	oldsig=; [ -r "$RUN/.esphome-sig" ] && oldsig=$(cat "$RUN/.esphome-sig")
 	printf '%s\n' "$sig" > "$RUN/.esphome-sig"
 	if [ "$sig" != "$oldsig" ] && command -v rc-service >/dev/null 2>&1 && rc-service tsx-esphome status >/dev/null 2>&1; then
 		rc-service tsx-esphome restart >/dev/null 2>&1 || true
 	fi
-	# The voice satellite reads the panel name (device name) and the API key
-	# at start too: restart it when either changed and it is running. Not on
-	# the first apply after boot (no signature yet): that runs before
-	# tsx-voice starts. Its kiosk URL entity runs `apply` through
-	# tsx-panelctl, which changes neither, so that never restarts it.
+	# The voice satellite also reads the panel name (device name) and the API
+	# key at start. Restart it when either changed and it is running. Do not
+	# restart it on the first apply after boot (no signature yet), because that
+	# apply runs before tsx-voice starts. Its kiosk URL entity runs `apply`
+	# through tsx-panelctl, which changes neither, so that never restarts it.
 	vsig="$name|$keysum"
 	oldvsig=; [ -r "$RUN/.voice-sig" ] && oldvsig=$(cat "$RUN/.voice-sig")
 	printf '%s\n' "$vsig" > "$RUN/.voice-sig"
@@ -444,9 +458,10 @@ apply() {
 		rc-service tsx-voice restart >/dev/null 2>&1 || true
 	fi
 	# tsx-buttons reads the kiosk URL (front-key "home", its HA origin) from
-	# kiosk.conf + this override only at start/reload: reload it when the
-	# override changed (e.g. the setup page's first save), not on the first
-	# apply after boot (no signature yet: it has not started).
+	# kiosk.conf + this override only at start and reload. Reload it when the
+	# override changed (for example at the first save of the setup page). Do
+	# not reload it on the first apply after boot (no signature yet, and
+	# tsx-buttons has not started).
 	ksig=$(cat "$RUN/kiosk.conf" 2>/dev/null) || ksig=   # no override (no KIOSK_URL/TZ_NAME): set -e
 	kfirst=1; oldksig=; [ -e "$RUN/.kiosk-sig" ] && { kfirst=0; oldksig=$(cat "$RUN/.kiosk-sig"); }
 	printf '%s\n' "$ksig" > "$RUN/.kiosk-sig"
@@ -458,7 +473,7 @@ apply() {
 	apk_repos
 
 	# BOOT_VERBOSE=1: boot text on the LCD instead of the splash, from the
-	# next boot on (rootfs/initramfs/overlay/init reads the flag file)
+	# next boot on (rootfs/initramfs/overlay/init reads the flag file).
 	bv=$(cfg_get BOOT_VERBOSE) || bv=
 	if [ "$bv" = 1 ]; then
 		if [ ! -e "$PREFIX/etc/tsx/boot-verbose" ]; then
@@ -470,8 +485,8 @@ apply() {
 	fi
 
 	# ORIENTATION: /etc/tsx/orientation on the root file system (read by the
-	# initramfs, tsx-splash, kiosk-session and tsx-buttons; absent =
-	# landscape). Only written when it changes; a change turns the running
+	# initramfs, tsx-splash, kiosk-session and tsx-buttons. Absent =
+	# landscape). Only written when it changes. A change turns the running
 	# kiosk at once (tsx-orientation apply: sway transform + touch mapping).
 	or=$(cfg_get ORIENTATION) || or=
 	[ "$or" = landscape ] && or=
@@ -521,24 +536,25 @@ apply() {
 		if ! grep -qxF "$key" "$PREFIX/root/.ssh/authorized_keys" 2>/dev/null; then
 			printf '%s\n' "$key" >> "$PREFIX/root/.ssh/authorized_keys"
 			chmod 600 "$PREFIX/root/.ssh/authorized_keys"
-			log "SSH_AUTHORIZED_KEY added to $PREFIX/root/.ssh/authorized_keys (existing keys are kept; panel.conf never removes a key)"
+			log "SSH_AUTHORIZED_KEY added to $PREFIX/root/.ssh/authorized_keys (existing keys are kept. panel.conf never removes a key)"
 		fi
 	fi
 	log "apply done"
 }
 
-# setup: force the on-panel setup page (tsx-setupd) up for one ~15 min window
-# even if the panel is already configured -- the CLI form of the "Setup"
-# overlay entry (tsx-panelctl's "setup" command, PLAN.md section 16 item 3).
-# Only touches a runtime flag (kiosk-session/tsx-kiosk-url and tsx-setupd all
-# read its age); never edits panel.conf.
+# setup: show the on-panel setup page (tsx-setupd) for one ~15 min window,
+# even if the panel is already configured. This is the CLI form of the
+# "Setup" overlay entry (the "setup" command of tsx-panelctl, PLAN.md
+# section 16 item 3). It touches only a runtime flag. kiosk-session,
+# tsx-kiosk-url and tsx-setupd all read the age of the flag. It never edits
+# panel.conf.
 #
-# Monotonic (seconds since boot, /proc/uptime), NOT date +%s: the panel has
-# no RTC, so it boots with a stale clock that NTP steps by months once
-# chrony syncs (docs/boot.md); a wall-clock timestamp written just before
-# that step would read as instantly expired or good for months, either way
-# wrong. /run is tmpfs, so a reboot (a new boot, a new uptime epoch) always
-# clears this file anyway.
+# The flag holds monotonic time (seconds since boot, /proc/uptime), NOT
+# date +%s. The panel has no RTC, so it boots with a stale clock, and NTP
+# steps that clock by months once chrony syncs (docs/boot.md). A wall-clock
+# timestamp written just before that step would read as expired at once, or
+# as good for months. Both are wrong. /run is tmpfs, so a reboot (a new boot,
+# a new uptime epoch) always clears this file anyway.
 setup() {
 	[ "${TSX_APPLY_ALLOW_NONROOT:-0}" = 1 ] || [ "$(id -u)" = 0 ] || die "setup must run as root"
 	mkdir -p "$RUN"
@@ -547,7 +563,7 @@ setup() {
 	if command -v rc-service >/dev/null 2>&1 && rc-service kiosk status >/dev/null 2>&1; then
 		rc-service kiosk restart >/dev/null 2>&1 \
 			&& log "kiosk restarted: showing it now" \
-			|| log "kiosk restart failed; it will show at the next kiosk (re)start"
+			|| log "kiosk restart failed. It will show at the next kiosk (re)start"
 	fi
 }
 

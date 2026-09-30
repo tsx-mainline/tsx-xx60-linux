@@ -1,12 +1,12 @@
 #!/bin/bash
-# Host test for tsx-panelctl (rootfs/overlay/usr/local/sbin/tsx-panelctl):
-# the FIFO's writer is the "kiosk" user, which also runs Chromium
-# unsandboxed, so every line must be validated as hostile input, not just
-# parsed. Checks that the documented, exact command forms run the expected
-# fake CLI with the expected arguments, and that malformed/hostile lines
-# (a glob, a leading-dash "option", wrong arg count, an out-of-range number,
-# an overlong numeric string, a bare shell metacharacter) are rejected --
-# logged, never executed -- without killing the daemon.
+# Host test for tsx-panelctl (rootfs/overlay/usr/local/sbin/tsx-panelctl).
+# The "kiosk" user writes to the FIFO and also runs Chromium unsandboxed. So
+# tsx-panelctl must validate every line as hostile input and not only parse it.
+# The test checks two things. The documented, exact command forms must run the
+# expected fake CLI with the expected arguments. Malformed or hostile lines
+# must be rejected, logged and never executed, and must not kill the daemon.
+# Such lines are a glob, a leading-dash "option", a wrong argument count, an
+# out-of-range number, an overlong numeric string and a bare shell metacharacter.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 SCRIPT="$HERE/../overlay/usr/local/sbin/tsx-panelctl"
@@ -39,11 +39,11 @@ echo "reboot" >> "$T/cmds.log"
 EOF
 chmod +x "$T/bin/reboot"
 
-# TSX_REBOOT_BIN as an absolute path, not PATH alone: busybox ash's "reboot"
-# is one of its own built-in applets and short-circuits a bare name before
-# PATH is ever searched, so a $T/bin/reboot fixture on PATH would silently
-# never run (harmless on the panel, where busybox's own reboot IS what we
-# want -- but it defeats overriding it for this test).
+# TSX_REBOOT_BIN is an absolute path and not a name in PATH. The "reboot" of
+# busybox ash is a built-in applet. It catches a bare name before the shell
+# searches PATH. So a $T/bin/reboot fixture on PATH would silently never run.
+# This is harmless on the panel, where the reboot of busybox is what we want,
+# but it defeats the override in this test.
 PATH="$T/bin:$PATH" TSX_RUN_DIR="$T/run" TSX_REBOOT_BIN="$T/bin/reboot" \
 	busybox sh "$SCRIPT" > "$T/panelctl.log" 2>&1 &
 PID=$!

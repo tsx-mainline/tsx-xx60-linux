@@ -18,7 +18,7 @@ wait_for() {  # wait_for FILE PATTERN SECONDS
 }
 
 echo "== 1. tsx_reboot_detached: the job outlives a killed ssh session (process group SIGKILLed)"
-# the 'session': its own process group; it arms the reboot, then the whole
+# the 'session': its own process group. It arms the reboot, then the whole
 # group is killed, as a session teardown that kills every process of the
 # session's group would do
 setsid bash -c "BB=$BB TSX_REBOOT_CMD=false TSX_SYSRQ_DIR=$W/proc; . '$HERE/android/tsx-lib.sh'; tsx_reboot_detached '$W/trace' 1; echo \$\$ > '$W/sess.pid'; sleep 30" &

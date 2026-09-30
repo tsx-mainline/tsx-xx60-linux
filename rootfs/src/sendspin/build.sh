@@ -5,11 +5,11 @@
 #   rootfs/src/sendspin/build.sh             -> rootfs/src/sendspin/out/sendspin-cli
 # Deps (Alpine): build-base cmake git linux-headers alsa-lib-dev avahi-compat-libdns_sd avahi-dev
 # Runtime on the panel: alsa-lib, avahi, avahi-compat-libdns_sd, dbus (avahi-daemon).
-# Everything else (ArduinoJson, micro-flac, micro-opus, IXWebSocket) is fetched by
-# CMake FetchContent at pinned tags and linked statically.
+# CMake FetchContent fetches everything else (ArduinoJson, micro-flac,
+# micro-opus, IXWebSocket) at pinned tags and links it statically.
 #
-# BUILD_HOST (optional, no default): run the qemu-user build on that host
-# over ssh instead of here (e.g. a faster machine); unset = build locally.
+# BUILD_HOST (optional, no default): run the qemu-user build over ssh on that
+# host instead of here (for example a faster machine). If unset, build locally.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 TAG=${SENDSPIN_CLI_TAG:-v0.3.0}

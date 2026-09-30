@@ -1,20 +1,22 @@
 #!/bin/bash
-# Host: run a command as root on a stock-Android xx60 through Crestron's own
-# sshd, which needs the patched /system/bin/sshShell.sh (out/sshShell.sh: a "rootsh"
-# command drops into /system/bin/bash -l). sshd wants a tty, so the input is echoed;
-# the echo line and CRs are stripped. Exit status of the remote command is printed
-# on the last line as "rc=N" and returned.
-# Two "exit" lines: some patched sshShell.sh variants (e.g. the one the no-UART
-# enabler writes) start /system/bin/sh after the root bash returns; the second exit
-# ends that shell, and where the session already closed it is never read.
-#   steps/rootsh HOST 'command ...'   (user $TSX_ADMIN_USER, default admin;
-#                                       password: required, $TSX_ADMIN_PW)
+# Host: run a command as root on a stock-Android xx60 through the Crestron
+# sshd. This needs the patched /system/bin/sshShell.sh (out/sshShell.sh: a
+# "rootsh" command drops into /system/bin/bash -l). The sshd wants a tty, so it
+# echoes the input. The script strips the echo line and the CRs. It prints the
+# exit status of the remote command on the last line as "rc=N" and returns it.
+# The script sends two "exit" lines. Some patched sshShell.sh variants (e.g. the
+# one that the no-UART enabler writes) start /system/bin/sh after the root bash
+# returns. The second exit ends that shell. If the session already closed, the
+# session never reads it.
+#   steps/rootsh HOST 'command ...'   (user $TSX_ADMIN_USER, default admin.
+#                                       Password: required, $TSX_ADMIN_PW)
 set -uo pipefail
 H=${1:?HOST}; C=${2:?command}
 U=${TSX_ADMIN_USER:-admin}
 PW=${TSX_ADMIN_PW:?set TSX_ADMIN_PW to the Crestron console admin password}
-# The output is framed by markers built with printf %s, so the tty echo of the input
-# (which shows the format strings, not the markers) and the bash prompts are dropped.
+# The command output sits between markers that printf %s builds. So the script
+# drops the tty echo of the input (it shows the format strings, not the markers)
+# and the bash prompts.
 C=${C%"${C##*[![:space:];]}"}; case "$C" in *'&') SEP=' ';; *) SEP='; ';; esac   # "cmd &; x" is a syntax error
 out=$(printf '%s\n' "printf '\\n__RS_%s__\\n' BEGIN; $C${SEP}printf '\\n__RS_END=%d__\\n' \$?" exit exit | timeout "${TSX_SSH_TIMEOUT:-900}" sshpass -p "$PW" ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR "$U@$H" rootsh 2>/dev/null | tr -d '\r')
 printf '%s\n' "$out" | awk '/^__RS_BEGIN__$/ {on=1; n=0; next} on && /^__RS_END=[0-9]+__$/ {exit} on {buf[++n]=$0} END {if (n && buf[n] == "") n--; for (i = 1; i <= n; i++) print buf[i]}'

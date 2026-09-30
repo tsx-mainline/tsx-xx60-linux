@@ -1,7 +1,8 @@
 #!/bin/sh
-# Extract the vendor climax_hostsw (NXP TFA host tool, Android 4.4 bionic) and the
-# libraries it needs from the unit A backup (read-only), into vendor-bin/ (this directory).
-# Proprietary Crestron/NXP binaries: keep local, do not publish.
+# Extract the vendor climax_hostsw (NXP TFA host tool, Android 4.4 bionic) and
+# the libraries that it needs. The source is the backup of unit A (read only).
+# The target is vendor-bin/ in this directory.
+# These are proprietary Crestron and NXP binaries: keep them local, do not publish.
 set -e
 P=$(cd "$(dirname "$0")/.." && pwd)
 IMG=$P/../../captures/tsw-1060/backup/tsw1060-mmcblk0.img

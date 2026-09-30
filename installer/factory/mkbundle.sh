@@ -1,64 +1,67 @@
 #!/bin/bash
-# Build the FULL factory-restore bundle for one xx60 unit: the SD
-# card part (puf-tool.sh (installer/factory) bundle: Crestron table, golden boot.img,
-# system.img for p2, empty p5..p8, the unit's env with the mainline hook removed)
-# plus the eMMC part (the eMMC-boot migration puts mainline on the eMMC; stock
-# Android needs its boot/system/recovery/cache/data/misc regions back):
+# Build the FULL factory-restore bundle for one xx60 unit. The card part comes from
+# puf-tool.sh (installer/factory) bundle: the Crestron table, the golden boot.img,
+# system.img for p2, empty p5..p8, and the env of the unit with the mainline hook
+# removed. The eMMC part is needed because the eMMC-boot migration puts mainline
+# on the eMMC. Stock Android needs its boot, system, recovery, cache, data and
+# misc regions back:
 #   boot.img, logo.img, system.img      from the .puf (what crestronLocalUpgrade.sh
 #                                       writes: boot <- boot.img, logo <- logo.img,
-#                                       system <- system.img; nothing else)
+#                                       system <- system.img. Nothing else)
 #   recovery/cache/data/misc            NOT in the .puf. With a backup (--emmc-raw): the
-#                                       unit's own regions (gzipped; misc = zeros).
+#                                       own regions of the unit (gzipped. Misc = zeros).
 #                                       WITHOUT a backup (default): stock Android uses none
 #                                       of them (fstab.amlogic mounts only /system from the
-#                                       eMMC; the env has no recovery command), so recovery,
-#                                       misc, data and the alignment gaps are zeroed, cache
-#                                       gets an EMPTY ext4 with the factory parameters (Amlogic
-#                                       "dig" may use /dev/block/cache), logo is checked on
-#                                       the size of logo.img only (head:)
-#   u-boot.bin                          NEVER written; compared with the unit's boot0
-#                                       backup -> uboot-check.txt (finding, no action);
-#                                       without --boot0 the manifest says boot0_sha256=any and
-#                                       tsx-emmc-restore checks boot0 is unchanged by the run
+#                                       eMMC, and the env has no recovery command). So the
+#                                       script zeroes recovery, misc, data and the alignment
+#                                       gaps, and gives cache an EMPTY ext4 with the factory
+#                                       parameters (Amlogic "dig" may use /dev/block/cache).
+#                                       The check of logo covers only its size (head:)
+#   u-boot.bin                          NEVER written. The script compares it with the boot0
+#                                       backup (result in uboot-check.txt: a finding, no
+#                                       action). Without --boot0 the manifest says
+#                                       boot0_sha256=any, and tsx-emmc-restore checks that
+#                                       the run leaves boot0 unchanged
 #
 #   mkbundle.sh --puf FILE --env SRC --out DIR [--emmc-raw FILE --boot0 FILE]
 #               [--puf-sha256 HEX] [--emmc-sha256 HEX] [--boot0-sha256 HEX]
 #               [--sshshell FILE | --stock-sshshell]
 #
-#   --puf       the Crestron package (pristine: sha256 96438108...; the copy at the
+#   --puf       the Crestron package (pristine: sha256 96438108.... The copy at the
 #               project root, b027097c..., has a modified system.img)
-#   --env       the unit's env: a 64 KiB block (dd of mmcblk0 at 1 MiB; tsx-restore-factory
-#               reads it live from the card), p1:tsxenv.bak, or a full card image
-#               (tsx-env.py reads it at 0x100000). Carries the unit's identity (MAC, tsid,
-#               model); the mainline hook is removed (tsx-env.py unhook)
-#   --emmc-raw  optional: the unit's raw eMMC image (zcat of captures/tsw-1060-unitB/emmc/*.img.gz)
-#   --boot0     optional (with --emmc-raw): the unit's mmcblk1boot0 image
-# Root over ssh (DEFAULT): /system/bin/sshShell.sh inside the .puf's own system.img
-#               gets a `rootsh` branch: the interactive (tty) branch's single line
+#   --env       the env of the unit: a 64 KiB block (dd of mmcblk0 at 1 MiB, which
+#               tsx-restore-factory reads live from the card), p1:tsxenv.bak, or a full
+#               card image (tsx-env.py reads it at 0x100000). It carries the identity of
+#               the unit (MAC, tsid, model). The script removes the mainline hook (tsx-env.py unhook)
+#   --emmc-raw  optional: the raw eMMC image of the unit (zcat of captures/tsw-1060-unitB/emmc/*.img.gz)
+#   --boot0     optional (with --emmc-raw): the mmcblk1boot0 image of the unit
+# Root over ssh (DEFAULT): /system/bin/sshShell.sh inside the system.img of the .puf
+#               gets a `rootsh` branch. The single line of the interactive (tty) branch
 #                 /system/bin/telnetSSHProxy SSH $1
 #               becomes
 #                 if [ "$command" == "rootsh" ]; then /system/bin/bash -l;
 #                 else /system/bin/telnetSSHProxy SSH $1; fi
-#               (5 lines, same indentation); the rest of the file is unchanged and this is
-#               verified (diff against the stock file). A firmware whose sshShell.sh does not
-#               have that line right after `if [ -t $fd ]; then` is refused (unknown or
-#               already modified image: use the pristine .puf, --sshshell or --stock-sshshell).
-#               Nothing from the firmware is kept in this repo: the patch is the awk recipe
-#               below. `ssh -tt $TSX_ADMIN_USER@panel rootsh` then gets root right after the
-#               restore, no UART (installer/steps/rootsh); the Crestron console is unchanged.
-#   --sshshell  optional: put FILE (your own sshShell.sh) in as is instead of patching the
-#               image's copy. (Old forms `--root-ssh` / `--root-ssh FILE` still work.)
-#   --stock-sshshell  optional: leave system.img byte-identical to the .puf (no rootsh; root
+#               (5 lines, same indentation). The rest of the file does not change (the
+#               script verifies this with a diff against the stock file). The script refuses
+#               a firmware whose sshShell.sh does not have that line right after
+#               `if [ -t $fd ]; then` (an unknown or already modified image: use the
+#               pristine .puf, --sshshell or --stock-sshshell). This repo keeps nothing
+#               from the firmware, because the patch is the awk recipe below.
+#               `ssh -tt $TSX_ADMIN_USER@panel rootsh` then gets root right after the
+#               restore, with no UART (installer/steps/rootsh). The Crestron console is unchanged.
+#   --sshshell  optional: put FILE (your own sshShell.sh) in as it is, instead of patching the
+#               copy in the image. (The old forms `--root-ssh` and `--root-ssh FILE` still work.)
+#   --stock-sshshell  optional: leave system.img byte-identical to the .puf (no rootsh. Root
 #               over ssh after the restore then needs the UART)
-#               Either way a new file goes into system.img with debugfs -w (no mount, no root
-#               needed on the host); the original inode's mode/uid/gid and all extended
-#               attributes (security.selinux) are read first and put back on the new inode,
-#               then verified (e2fsck -fn, byte compare, stat, ea_list). system.img is used both
-#               for the eMMC "system" region and for card p2 (golden /system): the patch is in both.
-# Output DIR: everything tsx-factory-restore (card) and tsx-emmc-restore (eMMC)
-# need, plus factory.manifest (card, puf-tool format; rootsh patch: system.img's file line
-# reflects the patched image, plus a harmless system_patch= line), emmc.manifest (ditto),
-# uboot-check.txt, env-identity.txt, puf.info, SHA256SUMS. Nothing here touches a panel.
+#               Either way the script puts a new file into system.img with debugfs -w (no
+#               mount, no root needed on the host). It keeps the mode, uid, gid and extended
+#               attributes (security.selinux) of the original inode and verifies them (e2fsck
+#               -fn, byte compare, stat, ea_list). system.img serves the eMMC "system" region
+#               and card p2 (golden /system), so the patch is in both.
+# Output DIR: everything that tsx-factory-restore (card) and tsx-emmc-restore (eMMC) need,
+# plus factory.manifest (card, puf-tool format. With the rootsh patch, the file line of
+# system.img reflects the patched image, plus a harmless system_patch= line), emmc.manifest
+# (ditto), uboot-check.txt, env-identity.txt, puf.info, SHA256SUMS. Nothing here touches a panel.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); WORK=$(cd "$HERE/.." && pwd)
 ENVPY="python3 $WORK/sdcard/tsx-env.py"
@@ -77,7 +80,7 @@ while [ $# -gt 0 ]; do case $1 in
 for f in "$PUF" "$ENVSRC" $RAW $BOOT0 $SSHSHELL; do [ -f "$f" ] || die "$f: no such file"; done
 sha() { sha256sum < "$1" | cut -d' ' -f1; }
 M=1048576
-# eMMC layout as U-Boot prints it (the eMMC-migration notes): name offset_MiB length_MiB
+# The eMMC layout as U-Boot prints it (see the eMMC-migration notes): name offset_MiB length_MiB
 EMMC_MIB=3728; EMMC_SECTORS=$((EMMC_MIB * 2048))
 REG_CACHE="108 512" REG_LOGO="628 48" REG_RECOVERY="684 32" REG_MISC="716 32" REG_BOOT="764 32" REG_SYSTEM="804 1024" REG_DATA="1836 1892"
 UBOOT_LEN=441504
@@ -102,7 +105,7 @@ UNIT=$(sed -n 's/^unit=//p' "$OUT/factory.manifest")
 
 ROOTSSH_NOTE=
 if [ -n "$ROOTSSH" ]; then
-say "2/7 rootsh patch of sshShell.sh in system.img (debugfs -w: no mount, no root; lands on card p2 too)"
+say "2/7 rootsh patch of sshShell.sh in system.img (debugfs -w: no mount, no root. Lands on card p2 too)"
 command -v debugfs >/dev/null || die "debugfs (e2fsprogs) missing (rootsh patch; --stock-sshshell skips it)"
 SIMG=$OUT/system.img; SPATH=/bin/sshShell.sh
 stat_field() { sed -n "s/.*$2: *\\([0-9]\\{1,7\\}\\).*/\\1/p" <<<"$1" | head -n1; }   # $1=stat output $2=field name
@@ -112,7 +115,7 @@ STOCK_SHA=$(sha "$STOCKF")
 if [ -n "$SSHSHELL" ]; then
 	cp "$SSHSHELL" "$NEWF"; NEWSRC="$SSHSHELL (--sshshell, used as is)"
 else
-	# the image's own file + the rootsh branch (see "Root over ssh" above)
+	# The own file of the image plus the rootsh branch (see "Root over ssh" above)
 	grep -qF 'command=${2%%" "*}' "$STOCKF" || die "$SPATH in system.img does not set \$command the stock way: unknown firmware (use --sshshell FILE)"
 	grep -qF '"rootsh"' "$STOCKF" && die "$SPATH in system.img already mentions rootsh: already modified image (use the pristine .puf, or --sshshell FILE)"
 	debugfs -R "stat /bin/bash" "$SIMG" 2>/dev/null | grep -q 'Type: regular' || die "system.img has no /system/bin/bash for the rootsh branch"
@@ -123,7 +126,7 @@ else
 			print i "  /system/bin/telnetSSHProxy SSH $1"; print i "fi"; n++; tty = 0; next }
 		{ tty = ($0 ~ /^if \[ -t [$]fd \]; then[ \t]*$/); print }
 		END { exit(n == 1 ? 0 : 3) }' "$STOCKF" > "$NEWF" || die "$SPATH in system.img has no single '/system/bin/telnetSSHProxy SSH \$1' line right after 'if [ -t \$fd ]; then': unknown or already modified firmware (use the pristine .puf, or --sshshell FILE)"
-	# verify: exactly that one line replaced by the 5-line block, nothing else changed
+	# Verify that exactly that one line became the 5-line block and nothing else changed.
 	D=$(diff "$STOCKF" "$NEWF" || true); IND=$(grep -m1 '^[[:space:]]*/system/bin/telnetSSHProxy SSH \$1[[:space:]]*$' "$STOCKF" | sed 's|/system/bin/telnetSSHProxy.*||')
 	EXP=$(printf '< %s\n---\n> %s\n> %s\n> %s\n> %s\n> %s' "$(grep -m1 '^[[:space:]]*/system/bin/telnetSSHProxy SSH \$1[[:space:]]*$' "$STOCKF")" \
 		"${IND}if [ \"\$command\" == \"rootsh\" ]; then" "${IND}  /system/bin/bash -l" "${IND}else" "${IND}  /system/bin/telnetSSHProxy SSH \$1" "${IND}fi")
@@ -155,15 +158,15 @@ NMODE=$(stat_field "$ST2" Mode); NUID=$(stat_field "$ST2" User); NGID=$(stat_fie
 NEANAMES=$(debugfs -R "ea_list $SPATH" "$SIMG" 2>&1 | sed -n 's/^[[:space:]]*\([A-Za-z0-9_.]*\) (.*/\1/p')
 [ "$NEANAMES" = "$EANAMES" ] || die "xattrs of $SPATH changed by the patch (was [$EANAMES], now [$NEANAMES])"
 NEWFILE_SHA=$(sha "$NEWF"); rm -f "$STOCKF" "$NEWF"
-say "  patched $SPATH: sha256=$NEWFILE_SHA (from $NEWSRC); mode/uid/gid/xattrs unchanged, e2fsck -fn clean, content verified byte-for-byte"
-# factory.manifest's 'file system.img ...' line was written by puf-tool.sh from the
-# stock image (size is unchanged, only content); fix it up so tsx-factory-restore's
-# bundle-file sha256 check still passes
+say "  patched $SPATH: sha256=$NEWFILE_SHA (from $NEWSRC). mode/uid/gid/xattrs unchanged, e2fsck -fn clean, content verified byte-for-byte"
+# puf-tool.sh wrote the line 'file system.img ...' of factory.manifest from the
+# stock image (the size is unchanged, only the content). Fix it up, so the
+# bundle-file sha256 check of tsx-factory-restore still passes.
 sed -i "s|^file system\\.img .*|file system.img $(stat -c %s "$SIMG") $(sha "$SIMG")|" "$OUT/factory.manifest"
 ROOTSSH_NOTE="system_patch=root-ssh sshShell.sh $NEWFILE_SHA stock=$STOCK_SHA"
 echo "$ROOTSSH_NOTE" >> "$OUT/factory.manifest"
 else
-say "2/7 --stock-sshshell: system.img is stock (byte-identical to the .puf) (root over ssh after the restore needs the UART; see installer/steps/rootsh)"
+say "2/7 --stock-sshshell: system.img is stock (byte-identical to the .puf) (root over ssh after the restore needs the UART. See installer/steps/rootsh)"
 fi
 
 say "3/7 env identity check (unhook must change state only)"
@@ -187,7 +190,7 @@ say "4/7 U-Boot check (never written): .puf u-boot.bin vs boot0 backup vs eMMC b
 	if cmp -s -n $UBOOT_LEN "$OUT/u-boot.bin" "$BOOT0"; then echo "uboot_bin_matches_boot0=yes"; else
 		echo "uboot_bin_matches_boot0=no first_diff_byte=$(cmp -n $UBOOT_LEN "$OUT/u-boot.bin" "$BOOT0" | sed -n 's/.*byte \([0-9]*\),.*/\1/p') differing_bytes=$(cmp -l -n $UBOOT_LEN "$OUT/u-boot.bin" "$BOOT0" | wc -l)"; fi
 	if cmp -s -n $UBOOT_LEN "$BOOT0" "$RAW"; then echo "boot0_matches_emmc_bootloader_area=yes"; else echo "boot0_matches_emmc_bootloader_area=no"; fi
-	else echo "boot0: no backup given; tsx-emmc-restore hashes boot0 before and after the run (must not change)"; fi
+	else echo "boot0: no backup given. tsx-emmc-restore hashes boot0 before and after the run (must not change)"; fi
 	echo "uboot_version_puf=$(sed -n 's/^uboot_version=//p' "$OUT/puf.info")"
 	echo "uboot_version_env=$($ENVPY show "$OUT/env.bin" crestron_uboot_version | sed -n 's/^crestron_uboot_version=//p')"
 	echo "# crestronLocalUpgrade.sh writes u-boot.bin only when crestronUbootVersion.txt != env crestron_uboot_version"
@@ -201,7 +204,7 @@ BOOT_REG_SHA=$( { cat "$OUT/boot.img"; head -c $(( $2 * M - BOOT_LEN )) /dev/zer
 set -- $REG_SYSTEM; SYS_LEN=$(stat -c %s "$OUT/system.img")
 SYS_REG_SHA=$( { cat "$OUT/system.img"; head -c $(( $2 * M - SYS_LEN )) /dev/zero; } | sha256sum | cut -d' ' -f1)
 if [ $BACKUP = 1 ]; then
-say "5/7 eMMC regions from the backup (recovery, cache, data gzipped; misc must be zero)"
+say "5/7 eMMC regions from the backup (recovery, cache, data gzipped. Misc must be zero)"
 reg() { dd if="$RAW" bs=$M skip=$1 count=$2 status=none; }
 set -- $REG_MISC; MISC_SHA=$(reg $1 $2 | sha256sum | cut -d' ' -f1)
 [ "$MISC_SHA" = "$ZERO32_SHA" ] || die "the backup's misc region is not all zeros ($MISC_SHA): update the recipe"
@@ -218,9 +221,10 @@ set -- $REG_BOOT
 
 else
 	say "5/7 eMMC regions without a backup: recovery/misc/data/gaps zero, cache = empty factory ext4, logo head"
-	# cache: the factory ext4 parameters (Jabil's mke2fs, read from unit B's region: 512 MiB,
-	# 4 KiB blocks, 32768 inodes of 256 bytes, 0 reserved, no flex_bg/metadata_csum: the
-	# 3.10 kernel mounts it), fixed UUID/hash seed/time so the image is reproducible
+	# cache: use the factory ext4 parameters. They come from the mke2fs of Jabil,
+	# read from the region of unit B: 512 MiB, 4 KiB blocks, 32768 inodes of 256
+	# bytes, 0 reserved, no flex_bg or metadata_csum. The 3.10 kernel mounts it
+	# that way. Use a fixed UUID, hash seed and time, so the image is reproducible.
 	command -v mke2fs >/dev/null || die "mke2fs (e2fsprogs) missing"
 	set -- $REG_CACHE; rm -f "$OUT/.cache.img"; truncate -s $(( $2 * M )) "$OUT/.cache.img"
 	E2FSPROGS_FAKE_TIME=1446500000 mke2fs -q -F -T default -t ext4 -b 4096 -I 256 -N 32768 -m 0 \
@@ -262,8 +266,9 @@ cp "$HERE/tsx-emmc-restore" "$OUT/tsx-emmc-restore"; cp "$HERE/tsx-factory-resto
 	fi
 	set -- $REG_SYSTEM;   echo "region system $1 $2 system.img+zero $SYS_REG_SHA"
 	set -- $REG_BOOT;     echo "region boot $1 $2 boot.img+zero $BOOT_REG_SHA"
-	# alignment gaps between U-Boot's partitions (zero on the factory unit; the eMMC-boot migration's
-	# root started at 796M = right after boot, so its ext4 head sat in the 796M gap)
+	# Alignment gaps between the U-Boot partitions. They are zero on the factory unit.
+	# The root of the eMMC-boot migration started at 796M, right after boot, so its
+	# ext4 head sat in the 796M gap.
 	for g in "100 8" "620 8" "676 8" "748 16" "796 8" "1828 8"; do set -- $g
 		[ $BACKUP = 0 ] || [ "$(reg $1 $2 | tr -d '\0' | wc -c)" = 0 ] || die "the backup's gap ${1}M+${2}M is not zero: update the recipe"
 		echo "region gap$1 $1 $2 zero $(ZERO_SHA $2)"
