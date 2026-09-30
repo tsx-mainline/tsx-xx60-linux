@@ -23,7 +23,9 @@ set -eu
 SHARE=${TSX_SHARE:-/usr/share/tsx}
 . "$SHARE/tsx-lib.sh"
 RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
-say() { echo "tsx-factory-restore: $*" >&2; }
+# the rescue screen (tsx-rescue-status) shows the latest line of a "run" as the current step
+say_state() { [ "${CMD:-}" = run ] || return 0; echo "$$ factory restore" > "$RUN/tsx-op" 2>/dev/null; printf '%s\n' "$*" > "$RUN/tsx-install-state" 2>/dev/null; return 0; }
+say() { echo "tsx-factory-restore: $*" >&2; say_state "$*"; }
 die() { say "ERROR: $*"; exit 1; }
 MiB=1048576
 

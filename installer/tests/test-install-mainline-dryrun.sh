@@ -70,7 +70,23 @@ echo "$OUT" | grep -q "tsx-arm-from-mainline" && bad "Android plan mentions the 
 echo "$OUT" | grep -q -- "--keep-data" && bad "the Android path passes --keep-data" || ok "the Android path formats /data (no --keep-data)"
 echo "$OUT" | grep -q "card fold + tsxdata mkfs" && ok "the Android plan folds + formats" || bad "Android plan does not fold + format"
 
-echo "== 6. --help exits 0 with no payload at all"
+echo "== 6. TFA9890 DSP files: the panel first, the .puf download as the fallback (--tfa-source)"
+OUT=$(TSX_PANEL_KIND=android "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run 2>&1)
+echo "$OUT" | grep -q "tfa-source=auto" && ok "default --tfa-source is auto" || bad "default tfa-source not auto: $OUT"
+echo "$OUT" | grep -q "tsx-rescue-install tfa /tmp/b (read-only: the current root on eMMC p8, then stock Android's boot image on eMMC p7" && ok "auto: the panel is searched first" || bad "auto plan does not search the panel: $OUT"
+echo "$OUT" | grep -q "only if that finds no valid set: rootfs/vendor-fetch.sh" && ok "auto: the .puf download only as the fallback" || bad "auto plan has no .puf fallback"
+echo "$OUT" | grep -q "tsx-tfa.sh" && ok "the bundle carries lib/tsx-tfa.sh" || bad "tsx-tfa.sh not in the bundle"
+OUT=$(TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run --tfa-source puf 2>&1)
+echo "$OUT" | grep -q "(--tfa-source puf): rootfs/vendor-fetch.sh here" && ok "puf: the download only" || bad "puf plan wrong: $OUT"
+echo "$OUT" | grep -q "tsx-rescue-install tfa" && bad "puf still searches the panel" || ok "puf: the panel is not searched"
+OUT=$("$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run --tfa-source panel 2>&1)
+echo "$OUT" | grep -q "no .puf download" && ok "panel: no .puf download" || bad "panel plan wrong: $OUT"
+OUT=$("$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run --tfa-source none 2>&1)
+echo "$OUT" | grep -q "(--tfa-source none): none" && ok "none: no DSP files" || bad "none plan wrong: $OUT"
+"$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --dry-run --tfa-source cloud >"$W/o6.txt" 2>&1 && bad "--tfa-source cloud accepted" || ok "--tfa-source cloud refused"
+grep -q "tfa-source must be auto, panel, puf, or none" "$W/o6.txt" && ok "error names the valid values" || bad "no useful error: $(cat "$W/o6.txt")"
+
+echo "== 7. --help exits 0 with no payload at all"
 "$DRIVER" --help >/dev/null 2>&1 && ok "--help exits 0"
 
 echo "== $N ok, $F failed"

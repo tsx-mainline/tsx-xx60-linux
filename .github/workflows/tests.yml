@@ -26,8 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: install build deps (gcc for the fake-sysfs tests, libmpv for test-esphome.sh)
-        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends gcc libmpv2
+      - name: install build deps (gcc for the fake-sysfs tests, libmpv for test-esphome.sh, busybox + cpio for test-tsx-tfa.sh)
+        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends gcc libmpv2 busybox cpio
       - name: kernel/tests/test-aml-dt.sh
         run: kernel/tests/test-aml-dt.sh
       - name: rootfs/tests/test-idled.sh
@@ -54,6 +54,8 @@ jobs:
         run: sh rootfs/tests/test-splash.sh
       - name: rootfs/tests/test-confont.sh - console font by screen size, TSX - LINUX banners
         run: sh rootfs/tests/test-confont.sh
+      - name: rootfs/tests/test-rescue-screen.sh - rescue screen (idle, operation, widths, Enter for a shell)
+        run: sh rootfs/tests/test-rescue-screen.sh
       - name: rootfs/tests/test-orientation.sh - screen orientation (table, sway/touch, turned splash, overlay layout)
         run: sh rootfs/tests/test-orientation.sh
       - name: rootfs/tests/test-tsx-config.sh
@@ -86,6 +88,10 @@ jobs:
         run: installer/tests/test-install-mainline-config.sh
       - name: installer/tests/test-install-mainline-dryrun.sh
         run: installer/tests/test-install-mainline-dryrun.sh
+      - name: installer/lib/tests/test-tsx-tfa.sh - TFA9890 DSP files from the panel itself (synthetic boot images/containers)
+        run: installer/lib/tests/test-tsx-tfa.sh
+      - name: installer/tests/test-arm-reboot.sh - the arm step's detached reboot on stock Android, and the host's check
+        run: installer/tests/test-arm-reboot.sh
       - name: installer/tests/test-tsxdata-keep.sh - keep /data on a reinstall (file-backed ext4)
         run: installer/tests/test-tsxdata-keep.sh
       - name: installer/tests/test-boot-ok.sh - docker --privileged, loop device

@@ -31,6 +31,7 @@ for f in ter-116b ter-118b ter-120b ter-122b ter-124b ter-128b ter-132b; do
   zcat /usr/share/consolefonts/$f.psf.gz > $R/usr/share/tsx/consolefonts/$f.psf
 done
 [ -x $R/usr/sbin/tsx-confont ] || { echo "tsx-confont missing in the overlay"; exit 1; }
+[ -x $R/usr/sbin/tsx-rescue-status ] || { echo "tsx-rescue-status missing in the overlay"; exit 1; }
 # the orientation table (panel.conf ORIENTATION): the same script as on the
 # rootfs, so the initramfs and the kiosk never disagree about a name
 install -m 755 "$HERE/../overlay/usr/local/bin/tsx-orientation" $R/usr/sbin/tsx-orientation

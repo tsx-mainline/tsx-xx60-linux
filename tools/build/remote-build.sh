@@ -238,6 +238,8 @@ rootfs)
 	# TSX_APK_LOCAL (a local tsx-aports published tree): mirrored next to the
 	# rootfs sources on the host and used from there
 	apkenv="TSX_APK_URL=${TSX_APK_URL:-https://tsx-aports.unexceptional.net}"
+	# TFA_VENDOR_FETCH=no: no Crestron file in the image (as CI and release.yml)
+	[ -z "${TFA_VENDOR_FETCH:-}" ] || apkenv="$apkenv TFA_VENDOR_FETCH=$TFA_VENDOR_FETCH"
 	if [ -n "${TSX_APK_LOCAL:-}" ]; then
 		say "tsx-aports tree $TSX_APK_LOCAL -> $BUILD_DIR/rootfs/aports-local"
 		rsh "mkdir -p $BUILD_DIR/rootfs/aports-local"

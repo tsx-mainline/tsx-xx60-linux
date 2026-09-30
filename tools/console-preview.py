@@ -15,7 +15,7 @@ like the console does after setfont.
   like the panel shows it) and report the console size in cells.
 
 Example (the rescue banner, as the rescue screen prints it):
-  sh -c "$(sed -n '/^splash() {/,/^}/p' installer/rescue-v2/overlay/usr/sbin/tsx-rescue-status); splash" |
+  sh -c "$(sed -n '/^splash() {/,/^}/p' rootfs/initramfs/overlay/usr/sbin/tsx-rescue-status); splash" |
     tools/console-preview.py /path/to/linux 8x16 rescue-8x16.png
 """
 import gzip

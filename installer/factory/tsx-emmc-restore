@@ -23,7 +23,9 @@
 # TSX_EMMC_SECTORS (skip the sysfs size check), TSX_RUN.
 set -eu
 RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
-say() { echo "tsx-emmc-restore: $(date +%T) $*" >&2; }
+# the rescue screen (tsx-rescue-status) shows the latest line of a "run" as the current step
+say_state() { [ "${CMD:-}" = run ] || return 0; case $1 in DONE*) return 0;; esac; echo "$$ factory restore" > "$RUN/tsx-op" 2>/dev/null; printf '%s\n' "$*" > "$RUN/tsx-install-state" 2>/dev/null; return 0; }
+say() { echo "tsx-emmc-restore: $(date +%T) $*" >&2; say_state "$*"; }
 die() { say "ERROR: $*"; exit 1; }
 CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,20p' "$0"; exit 2; }
 YES=0

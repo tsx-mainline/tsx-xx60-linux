@@ -73,9 +73,17 @@ wait_android_stable() { local timeout=$1 waited=0 poll=20 fw ls raw bc
 		sleep "$poll"
 	done
 }
-wait_android_stable_net() { local timeout=$1 waited=0 poll=20 fw ls bc mounted
+wait_android_stable_net() { local timeout=$1 waited=0 poll=20 fw ls bc mounted admin_tried=0
 	log "  waiting for stock Android to settle (network-only, tolerates one self-reboot, timeout ${timeout}s)"
 	while :; do
+		# network-only, every check below needs rootsh, and rootsh needs a Crestron
+		# account: a factory-fresh unit (e.g. right after tsx-restore-factory) has
+		# none, so create it first (once) instead of waiting for the timeout
+		if [ "$admin_tried" = 0 ] && ! rootsh_ok && [ "$("$CRESTRONADMIN" --status "$PANEL" 2>/dev/null)" = none ]; then
+			admin_tried=1
+			log "  no Crestron account yet (factory-fresh /data): creating it now (steps/crestron-admin); root over ssh needs it"
+			"$CRESTRONADMIN" "$PANEL" >>"$RESULTS" 2>&1 || log "  crestron-admin did not confirm console login yet (root is tried again on the next poll)"
+		fi
 		if rootsh_ok; then
 			fw=$("$ROOTSH" "$PANEL" 'fw_printenv fwUpgrade' 2>/dev/null) || fw=
 			ls=$("$ROOTSH" "$PANEL" 'ls /mnt/sdcard/ROMDISK/romdisk/user/system/image' 2>/dev/null) || true

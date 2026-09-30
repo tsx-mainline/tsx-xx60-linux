@@ -16,7 +16,7 @@
 #      own IP first, then a MAC sweep -- the panel's MAC is recorded in step 2,
 #      before the reboot loses the Android eth0 state) and drive it: push the
 #      eMMC boot+root images (installer/steps/tsx-rescue-install, streamed
-#      progress) and the TFA9890 DSP files, fold the card (p5..p8 -> p4
+#      progress) and the TFA9890 DSP files (below), fold the card (p5..p8 -> p4
 #      tsxdata), write the final env (tsx-usb-recovery enabled, p1:tsxboot.off);
 #      reboot.
 #   4. wait for the mainline kiosk's ssh, verify root is eMMC p8, print a summary.
@@ -37,6 +37,7 @@
 #   tsx-install-mainline PANEL_IP --payload DIR --kernel lts|stable
 #                        [--uart auto|yes|no] [--kiosk-url URL] [--sshshell FILE]
 #                        [--config FILE] [--wipe-data] [--yes] [--dry-run]
+#                        [--tfa-source auto|panel|puf|none]
 #
 # PANEL CONFIGURATION (docs/rootfs.md "Panel configuration"): without
 # --config, and unless --yes is also given, this prompts for panel.conf
@@ -55,25 +56,35 @@
 # installer/emmc/mk-v2-bundle.sh, and installer/rescue-v2/mkrescue-v2.sh):
 #   rescue.img (+.sha256)          the v2 rescue image (golden slot / one-shot target)
 #   <flavor>/manifest,root.img,boot.img,SHA256SUMS   per kernel flavor (lts, stable)
-# TFA9890 DSP files are fetched fresh on THIS machine each run
-# (rootfs/vendor-fetch.sh, same as the old driver's steps/tsx-deploy-tfa.sh);
-# a failed fetch is a warning, not a failure (the panel works without vendor
-# EQ/volume presets either way).
+# TFA9890 DSP FILES (docs/install.md "TFA9890 speaker DSP tuning"), step 3,
+# --tfa-source (default auto): the rescue first looks for them on the panel
+# itself, read-only and before anything is written (installer/lib/tsx-tfa.sh):
+# the current mainline root (a reinstall), then stock Android's boot image on
+# the eMMC. Those files never leave the panel. If the panel has no valid set,
+# rootfs/vendor-fetch.sh downloads Crestron's firmware package (.puf, 357 MB)
+# on THIS machine and the files are pushed to the rescue. panel = the panel
+# only, puf = the download only, none = no DSP files. Nothing here stops the
+# install: the speakers work without the vendor EQ/volume presets.
 # Needs: $TSX_ADMIN_PW (Crestron console/web-UI admin password; user
-# $TSX_ADMIN_USER, default admin) for step 1 (not for a reinstall). Panel
+# $TSX_ADMIN_USER, default admin) for step 1 (not for a reinstall). Host tools:
+# sshpass ssh python3 curl sha256sum ip; unzip only if the .puf download is
+# used (without it the panel is installed without the vendor speaker tuning
+# when the panel itself has no DSP files). The panel must be
+# able to connect back to this host (HTTP on ports 8079 and 8081). Panel
 # logins: rescue root/tsx, mainline kiosk root/$TSX_MAINLINE_PW (default tsx).
 # Test hook: TSX_PANEL_KIND=android|mainline|rescue|unreachable skips the
 # network probe that picks the path.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/lib/tsx-rescue.sh"
+. "$HERE/lib/tsx-tfa.sh"   # tsx_tfa_plan (the rest of it runs in the rescue)
 
-usage() { sed -n '2,52p' "$0" >&2; }
-PANEL= PAYLOAD=$HERE/out/payload KERNEL= UART_OPT=auto URL= SSHSHELL= CONFIG= YES=0 DRYRUN=0 RESULTS= WIPE_DATA=0
+usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' >&2; }   # the whole header comment
+PANEL= PAYLOAD=$HERE/out/payload KERNEL= UART_OPT=auto URL= SSHSHELL= CONFIG= YES=0 DRYRUN=0 RESULTS= WIPE_DATA=0 TFA_SOURCE=auto
 while [ $# -gt 0 ]; do case "$1" in
 	--payload) PAYLOAD=$2; shift 2;; --kernel) KERNEL=$2; shift 2;; --uart) UART_OPT=$2; shift 2;;
 	--kiosk-url) URL=$2; shift 2;; --sshshell) SSHSHELL=$2; shift 2;; --results) RESULTS=$2; shift 2;;
-	--config) CONFIG=$2; shift 2;; --wipe-data) WIPE_DATA=1; shift;;
+	--config) CONFIG=$2; shift 2;; --wipe-data) WIPE_DATA=1; shift;; --tfa-source) TFA_SOURCE=$2; shift 2;;
 	--yes) YES=1; shift;; --dry-run) DRYRUN=1; shift;; -h|--help) usage; exit 0;;
 	--*) echo "unknown option $1" >&2; usage; exit 2;;
 	*) [ -z "$PANEL" ] || { echo "extra argument $1" >&2; exit 2; }; PANEL=$1; shift;;
@@ -81,6 +92,7 @@ esac; done
 [ -n "$PANEL" ] || { usage; exit 2; }
 case "$KERNEL" in lts|stable) ;; *) echo "tsx-install-mainline: --kernel lts|stable is required" >&2; exit 2;; esac
 case "$UART_OPT" in auto|yes|no) ;; *) echo "--uart must be auto, yes, or no" >&2; exit 2;; esac
+case "$TFA_SOURCE" in auto|panel|puf|none) ;; *) echo "--tfa-source must be auto, panel, puf, or none" >&2; exit 2;; esac
 [ -z "$CONFIG" ] || [ -f "$CONFIG" ] || { echo "tsx-install-mainline: --config file not found: $CONFIG" >&2; exit 2; }
 TSX_CONFIG_BIN=$(cd "$HERE/../rootfs/overlay/usr/local/sbin" && pwd -P)/tsx-config
 [ -n "$RESULTS" ] || RESULTS="$HERE/results/tsx-install-mainline-$(date +%Y%m%d-%H%M).txt"
@@ -96,7 +108,7 @@ for f in "$RESCUE_IMG" "$FLAVOR_DIR/manifest" "$FLAVOR_DIR/root.img" "$FLAVOR_DI
 done
 (cd "$FLAVOR_DIR" && sha256sum -c --quiet SHA256SUMS) || die "$FLAVOR_DIR/SHA256SUMS mismatch"
 [ ! -f "$RESCUE_IMG.sha256" ] || { GOT=$(sha256sum < "$RESCUE_IMG" | cut -d' ' -f1); WANT=$(awk '{print $1}' "$RESCUE_IMG.sha256"); [ "$GOT" = "$WANT" ] || die "$RESCUE_IMG sha256 mismatch"; }
-log "== tsx-install-mainline v2: PANEL=$PANEL PAYLOAD=$PAYLOAD KERNEL=$KERNEL uart=$UART_OPT dry-run=$DRYRUN"
+log "== tsx-install-mainline v2: PANEL=$PANEL PAYLOAD=$PAYLOAD KERNEL=$KERNEL uart=$UART_OPT tfa-source=$TFA_SOURCE dry-run=$DRYRUN"
 
 MPW=${TSX_MAINLINE_PW:-tsx}
 RPW=tsx   # the rescue's documented default (docs/recovery.md); never overridden here
@@ -110,7 +122,7 @@ run_stream_at() {  # SSHCMD REMOTECMD: like tsx-restore-factory's run_stream, pa
 	return $rc
 }
 WSIP_FOR() { ip route get "$1" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}'; }
-STAGE1= STAGE2=
+STAGE1= STAGE2= RESCUE_WAIT_S=300
 cleanup() {
 	# "|| true": under set -e a failed kill (server already stopped) would end
 	# cleanup early and leave the next server running
@@ -150,12 +162,18 @@ fi
 if [ "$DRYRUN" = 1 ] && [ "$KIND" = mainline ]; then
 	log "[dry-run] 1: skipped: the kiosk's own ssh (root/\$TSX_MAINLINE_PW) replaces Android root"
 	log "[dry-run] 2: record eth0 MAC over ssh; copy rescue.img to the kiosk's /tmp over ssh (sha256 checked); run lib/tsx-arm-from-mainline.sh --rescue there (p1:tsxboot.img <- rescue, rm p1:tsxboot.off, tsx_once=1 verified; reboots)"
-	log "[dry-run] 3: find the rescue (kiosk IP first, then a MAC sweep); copy it into the golden slot p1:boot.img (verified); fetch TFA9890 files; push the $KERNEL bundle (as the Android path)"
+	log "[dry-run] 3: find the rescue (kiosk IP first, then a MAC sweep); copy it into the golden slot p1:boot.img (verified); push the $KERNEL bundle and get the TFA9890 files (as the Android path)"
 fi
 if [ "$DRYRUN" = 1 ]; then
 	[ "$KIND" = mainline ] || log "[dry-run] 1: steps/tsx-ensure-root $PANEL --uart $UART_OPT (settle + root over steps/rootsh)"
 	[ "$KIND" = mainline ] || log "[dry-run] 2: record eth0 MAC over rootsh; push steps/tsx-rescue-arm.sh + android/tsx-lib.sh + lib/tsx-rescue.sh + rescue.img over HTTP+wget; run 'preflight' then 'install --yes' over rootsh (reboots the panel)"
-	[ "$KIND" = mainline ] || log "[dry-run] 3: wait_for_rescue (kiosk IP first, then a MAC sweep, installer/lib/tsx-rescue.sh); fetch TFA9890 files (rootfs/vendor-fetch.sh, non-fatal); push a bundle ($KERNEL manifest+boot.img, root-url.txt: root.img is streamed onto p8 in step 4, tsx-rescue.sh, tsx-usb-recovery, tsx-rescue-install, tfa/, kiosk-url.txt, panel.conf if --config or prompts were used) over HTTP+wget+sha256sum -c"
+	[ "$KIND" = mainline ] || log "[dry-run] 3: wait_for_rescue (kiosk IP first, then a MAC sweep, installer/lib/tsx-rescue.sh); push a bundle ($KERNEL manifest+boot.img, root-url.txt: root.img is streamed onto p8 in step 4, tsx-rescue.sh, tsx-tfa.sh, tsx-usb-recovery, tsx-rescue-install, kiosk-url.txt, panel.conf if --config or prompts were used) over HTTP+wget+sha256sum -c"
+	case "$TFA_SOURCE" in
+	auto) log "[dry-run] 3: TFA9890 DSP files (--tfa-source auto): tsx-rescue-install tfa /tmp/b (read-only: the current root on eMMC p8, then stock Android's boot image on eMMC p7; the files stay on the panel); only if that finds no valid set: rootfs/vendor-fetch.sh here (the .puf download) and push its files; never fatal";;
+	panel) log "[dry-run] 3: TFA9890 DSP files (--tfa-source panel): tsx-rescue-install tfa /tmp/b only (current root, then stock Android's boot image); no .puf download";;
+	puf) log "[dry-run] 3: TFA9890 DSP files (--tfa-source puf): rootfs/vendor-fetch.sh here (the .puf download), push its files to the rescue; the panel is not searched";;
+	none) log "[dry-run] 3: TFA9890 DSP files (--tfa-source none): none; the speakers run without the vendor tuning";;
+	esac
 	if [ -n "$CONFIG" ]; then log "[dry-run] panel configuration: --config $CONFIG (prompts would be skipped)"
 	elif [ "$YES" = 1 ] && [ "$KIND" = mainline ] && [ "$KEEP_DATA" = 1 ]; then log "[dry-run] panel configuration: --yes with no --config on a reinstall: the panel's own /data/tsx/panel.conf would be kept in place on the kept tsxdata (only KERNEL_FLAVOR updated)"
 	elif [ "$YES" = 1 ] && [ "$KIND" = mainline ]; then log "[dry-run] panel configuration: --yes with no --config on a reinstall: the panel's own /data/tsx/panel.conf would be kept (copied onto the new tsxdata, if it has one)"
@@ -279,13 +297,23 @@ INSTOUT=$(timeout 120 "$HERE/steps/rootsh" "$PANEL" 'bash /data/tsx-inst/steps/t
 logblock "install" "$INSTOUT"
 grep -q "DONE\." <<<"$INSTOUT" || die "arm install did not report DONE."
 log "  ok: rescue armed, panel is rebooting"
+# did it really go down? (on 2026-09-29 one stock-Android unit printed
+# "rebooting in 3 s" and stayed up; the arm step now leaves a trace on /data)
+if android_went_down "$PANEL" 90; then log "  ok: stock Android went down"
+else
+	TRACEF=$(sed -n 's/.*reboot trace: //p' <<<"$INSTOUT" | tail -n 1)
+	TR=$("$HERE/steps/rootsh" "$PANEL" "echo uptime \$(cut -d' ' -f1 /proc/uptime) s; cat ${TRACEF:-/dev/null}; ps 2>/dev/null | grep -e 'tsx-reboot' -e 'sleep' | grep -v grep" 2>&1) || true
+	logblock "stock Android is still up 90 s after the arm step (reboot trace ${TRACEF:-unknown})" "$TR"
+	log "  WARNING: the panel did not reboot by itself. It is armed for exactly one rescue boot: power-cycle it once now; this command keeps looking for the rescue for $((RESCUE_WAIT_S + 600)) s"
+	RESCUE_WAIT_S=$((RESCUE_WAIT_S + 600))
+fi
 fi
 
 # ------------------------------------------------------- step 3: discover --
 log "== step 3: find the rescue on the network"
 WSIP=$(WSIP_FOR "$PANEL"); [ -n "$WSIP" ] || die "no workstation IP towards $PANEL"
 if [ "$RESUME" = 1 ]; then RIP=$PANEL
-else RIP=$(wait_for_rescue "$PANEL" "$MAC" "$WSIP" "$RPW" 300) || die "could not find the rescue's IP within 300s (MAC $MAC; ssh at $PANEL, sweep of ${PANEL%.*}.0/24 only when on-link)"
+else RIP=$(wait_for_rescue "$PANEL" "$MAC" "$WSIP" "$RPW" "$RESCUE_WAIT_S") || die "could not find the rescue's IP within ${RESCUE_WAIT_S}s (MAC $MAC; ssh at $PANEL, sweep of ${PANEL%.*}.0/24 only when on-link)"
 fi
 log "  rescue reachable at $RIP"
 RSSH="sshpass -p $RPW ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=6 root@$RIP"
@@ -313,18 +341,7 @@ if [ "$KIND" = mainline ]; then
 		sync; umount $m; exit $rc' || log "  WARNING: could not update the golden slot (p1:boot.img); the install continues (restore-factory would use the older rescue there)"
 fi
 
-log "  fetching TFA9890 DSP files (rootfs/vendor-fetch.sh; non-fatal)"
 STAGE2=$(mktemp -d "$RESULTS.bundle.XXXXXX")
-FETCH="$HERE/../rootfs/vendor-fetch.sh"
-if [ -x "$FETCH" ] && "$FETCH" >>"$RESULTS" 2>&1; then
-	LOCAL=${TFA_VENDOR_LOCAL:-"$HERE/../rootfs/vendor-local/tfa9890"}
-	for v in settings_yushan settings_yushan_2nd settings_yushan_3rd; do
-		[ -f "$LOCAL/$v/stereo.cnt" ] && { mkdir -p "$STAGE2/tfa/$v"; cp "$LOCAL/$v/stereo.cnt" "$STAGE2/tfa/$v/"; }
-	done
-	log "  TFA9890 files fetched: $(cd "$STAGE2/tfa" 2>/dev/null && find . -name stereo.cnt | wc -l || echo 0)"
-else
-	log "  WARNING: TFA9890 fetch failed or unavailable; the panel will run without DSP tuning (retry later: steps/tsx-deploy-tfa.sh $PANEL)"
-fi
 [ -n "$URL" ] && printf '%s\n' "$URL" > "$STAGE2/kiosk-url.txt"
 [ -n "$CONFIG" ] && { install -m 600 "$CONFIG" "$STAGE2/panel.conf"; log "  panel.conf included in the install bundle ($(TSX_CONF="$CONFIG" "$TSX_CONFIG_BIN" show | wc -l) keys set)"; }
 PORT2=8081
@@ -335,7 +352,7 @@ BASEURL2="http://$WSIP:$PORT2"
 cp "$FLAVOR_DIR/manifest" "$FLAVOR_DIR/boot.img" "$STAGE2/"
 mkdir -p "$STAGE2/stream"; ln -s "$(cd "$FLAVOR_DIR" && pwd)/root.img" "$STAGE2/stream/root.img"
 printf '%s\n' "$BASEURL2/stream/root.img" > "$STAGE2/root-url.txt"
-cp "$HERE/lib/tsx-rescue.sh" "$HERE/emmc/tsx-usb-recovery" "$HERE/steps/tsx-rescue-install" "$STAGE2/"
+cp "$HERE/lib/tsx-rescue.sh" "$HERE/lib/tsx-tfa.sh" "$HERE/emmc/tsx-usb-recovery" "$HERE/steps/tsx-rescue-install" "$STAGE2/"
 (cd "$STAGE2" && find . -path ./stream -prune -o -type f ! -name 'SHA256SUMS*' -print | sort | xargs sha256sum > SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS)
 nohup python3 -m http.server "$PORT2" --bind 0.0.0.0 --directory "$STAGE2" >/dev/null 2>&1 &
 echo $! > "$STAGE2/.http.pid"
@@ -344,6 +361,64 @@ FILES="$(cd "$STAGE2" && find . -path ./stream -prune -o -type f ! -name SHA256S
 log "  pushing the install bundle to the rescue ($RIP): $FILES"
 run_stream_at "$RSSH" "set -e; mkdir -p /tmp/b; cd /tmp/b; for f in $FILES; do mkdir -p \"\$(dirname \"\$f\")\"; wget -q -O \"\$f\" $BASEURL2/\$f && echo \"fetched \$f\" || { echo \"wget \$f FAILED\"; exit 1; }; done; sha256sum -c SHA256SUMS >/tmp/b/sumcheck.txt 2>&1 && echo 'all files OK' || { cat /tmp/b/sumcheck.txt; exit 1; }; chmod +x tsx-rescue-install tsx-usb-recovery" \
 	|| die "pushing the bundle failed (see above)"
+
+# ------------------------------------------ step 3: TFA9890 DSP files -------
+# --tfa-source (see the header): the panel first (the rescue reads the current
+# root, then stock Android's boot image; the files stay on the panel), the
+# .puf download on this host as the fallback. Never fatal.
+tfa_puf() {  # rootfs/vendor-fetch.sh here, then push the files into /tmp/b/tfa
+	local fetch="$HERE/../rootfs/vendor-fetch.sh" local_dir v n=0
+	local_dir=${TFA_VENDOR_LOCAL:-"$HERE/../rootfs/vendor-local/tfa9890"}
+	log "  TFA9890: rootfs/vendor-fetch.sh on this host (Crestron's .puf, 357 MB, downloaded once and cached; log in $RESULTS)"
+	command -v unzip >/dev/null || log "  WARNING: no unzip on this host: vendor-fetch.sh will fail unless its files are already cached"
+	[ -x "$fetch" ] && "$fetch" >>"$RESULTS" 2>&1 || { log "  WARNING: rootfs/vendor-fetch.sh failed (see $RESULTS)"; return 1; }
+	rm -rf "$STAGE2/tfa"; mkdir -p "$STAGE2/tfa"
+	for v in $TSX_TFA_VARIANTS; do
+		[ -f "$local_dir/$v/stereo.cnt" ] || continue
+		mkdir -p "$STAGE2/tfa/$v"; cp "$local_dir/$v/stereo.cnt" "$STAGE2/tfa/$v/"; n=$((n + 1))
+	done
+	[ $n -gt 0 ] || { log "  WARNING: vendor-fetch.sh left no stereo.cnt in $local_dir"; return 1; }
+	{ echo "source=puf"; echo "firmware=$(basename "${TFA_PUF_URL:-tsw-xx60_3.002.1061.001.puf}") (rootfs/vendor-fetch.sh, pinned sha256)"
+	  for v in $TSX_TFA_VARIANTS; do [ -f "$STAGE2/tfa/$v/stereo.cnt" ] && echo "$v=$(sha256sum < "$STAGE2/tfa/$v/stereo.cnt" | cut -d' ' -f1) pinned"; done; } > "$STAGE2/tfa/SOURCE"
+	(cd "$STAGE2/tfa" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | sort | xargs sha256sum > SHA256SUMS)
+	local files; files=$(cd "$STAGE2/tfa" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | tr '\n' ' ')
+	run_stream_at "$RSSH" "set -e; rm -rf /tmp/b/tfa.new; mkdir -p /tmp/b/tfa.new; cd /tmp/b/tfa.new; for f in $files SHA256SUMS; do mkdir -p \"\$(dirname \"\$f\")\"; wget -q -O \"\$f\" $BASEURL2/tfa/\$f; done; sha256sum -c SHA256SUMS >/dev/null; rm SHA256SUMS; cd /tmp/b; rm -rf tfa; mv tfa.new tfa; echo \"tfa: \$(ls -d tfa/settings_* | wc -l) variant(s) in /tmp/b/tfa, sha256 checked\"" \
+		|| { log "  WARNING: pushing the .puf's DSP files to the rescue failed"; return 1; }
+	TFA_USED="puf (rootfs/vendor-fetch.sh), $n of 3 variants"
+}
+TFA_USED=none PANEL_N=- PANEL_SRC=
+if [ "$TFA_SOURCE" = auto ] || [ "$TFA_SOURCE" = panel ]; then
+	log "== step 3: TFA9890 DSP files (--tfa-source $TFA_SOURCE): looking on the panel first (read-only; the files stay on the panel)"
+	if run_stream_at "$RSSH" "sh /tmp/b/tsx-rescue-install tfa /tmp/b 2>&1"; then
+		PANEL_RES=$(printf '%s\n' "$RS_OUT" | sed -n 's/^TFA-RESULT //p' | tail -n 1)
+		PANEL_N=$(printf '%s\n' "$PANEL_RES" | sed -n 's/.*count=\([0-9]*\).*/\1/p')
+		PANEL_SRC=$(printf '%s\n' "$PANEL_RES" | sed -n 's/.*source=\([^ ]*\).*/\1/p')
+		[ -n "$PANEL_N" ] || PANEL_N=-
+	else
+		log "  WARNING: tsx-rescue-install tfa failed (see above)"
+	fi
+else
+	log "== step 3: TFA9890 DSP files (--tfa-source $TFA_SOURCE): the panel is not searched"
+fi
+TFA_ACTION=$(tsx_tfa_plan "$TFA_SOURCE" "$PANEL_N") || true
+use_panel_set() {
+	run_stream_at "$RSSH" "rm -rf /tmp/b/tfa && mv /tmp/b/tfa-panel /tmp/b/tfa && echo 'tfa: the panel set is in /tmp/b/tfa'" \
+		&& TFA_USED="panel: $PANEL_SRC ($PANEL_N of 3 variants; no .puf download)" \
+		|| log "  WARNING: could not move the panel's DSP files into place"
+}
+case "$TFA_ACTION" in
+use-panel) use_panel_set;;
+puf) tfa_puf || true;;
+puf-or-panel)
+	log "  the panel has only $PANEL_N of 3 variants: trying the .puf download for a full set"
+	tfa_puf || { log "  using the panel's partial set instead"; use_panel_set; };;
+none) run_stream_at "$RSSH" "rm -rf /tmp/b/tfa /tmp/b/tfa-panel" || true;;
+esac
+if [ "$TFA_USED" = none ]; then
+	log "  TFA9890: no DSP files will be installed: the speakers work, without the vendor EQ/volume presets (later: installer/steps/tsx-deploy-tfa.sh $PANEL)"
+else
+	log "  TFA9890 source used: $TFA_USED"
+fi
 
 # --------------------------------------------------------- step 4: install --
 log "== step 4: install (rescue: eMMC boot+root, card fold, final env)"
@@ -361,7 +436,13 @@ kill "$(cat "$STAGE2/.http.pid")" 2>/dev/null || true
 # --------------------------------------------------------- step 5: verify ---
 log "== step 5: wait for the mainline kiosk"
 w=0; while $RSSH true >/dev/null 2>&1 && [ $w -lt 60 ]; do sleep 5; w=$((w + 5)); done
-w=0; until is_mainline_kiosk; do sleep 10; w=$((w + 10)); [ $((w % 30)) -eq 0 ] && log "  still waiting for mainline ssh (root=/dev/mmcblk1p8) on $PANEL: ${w}/420 s"; [ $w -lt 420 ] || die "the kiosk never came up on $PANEL within 420s after the install (mainline ssh: root/\$TSX_MAINLINE_PW)"; done
+# wall-clock seconds (each probe's own ssh timeout counts too), a heartbeat about every 30 s
+t0=$(date +%s); hb=0
+until is_mainline_kiosk; do
+	sleep 10; w=$(( $(date +%s) - t0 ))
+	[ $w -ge $((hb + 30)) ] && { hb=$w; log "  still waiting for mainline ssh (root=/dev/mmcblk1p8) on $PANEL: ${w}/420 s"; }
+	[ $w -lt 420 ] || die "the kiosk never came up on $PANEL within 420 s after the install (mainline ssh: root/\$TSX_MAINLINE_PW). The eMMC writes were verified before the reboot, so it has most likely booted but got another DHCP address (on the first boot some images used a random eth0 MAC): power-cycle the panel once, or find it in your DHCP server's leases, then check it with ssh root@<its-ip>"
+done
 KIOSK_UP=$($MSSH 'pgrep -f chromium >/dev/null && echo yes || echo no' 2>/dev/null) || KIOSK_UP=unknown
 log "  ok: root=/dev/mmcblk1p8, kiosk running=$KIOSK_UP"
 log "== DONE. $PANEL is now the mainline kiosk on the eMMC ($KERNEL kernel). ssh root@$PANEL (password \$TSX_MAINLINE_PW, default tsx)."

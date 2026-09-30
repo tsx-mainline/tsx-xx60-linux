@@ -29,7 +29,8 @@ mkenv() {  # mkenv FILE [ETHADDR-LINE]
 }
 
 # run_setup MMCBLK MACFILE: source tsx-setup under busybox sh (openrc
-# helpers stubbed out; harmless since select_eth0_mac only calls einfo) and
+# helpers stubbed; einfo prints to stdout as OpenRC's does, so a message that
+# leaks into select_eth0_mac's answer fails the test) and
 # call ONLY select_eth0_mac -- never start(), which also touches zram swap
 # and the real /sys cpufreq governor and has no business running against a
 # shared test host. Prints "MAC=<value>" and leaves MACFILE as the function
@@ -37,7 +38,7 @@ mkenv() {  # mkenv FILE [ETHADDR-LINE]
 run_setup() {
 	local mmcblk=$1 macf=$2
 	TSX_MMCBLK0="$mmcblk" TSX_ETH0_MAC_FILE="$macf" busybox sh -c '
-		einfo() { :; }
+		einfo() { echo " * $*"; }   # like OpenRC: einfo writes to STDOUT
 		. "'"$SCRIPT"'"
 		echo "MAC=$(select_eth0_mac)"
 	' 2>/dev/null

@@ -104,6 +104,7 @@ rootfs() {
 	docker run --rm --platform linux/arm/v7 -v "$HERE:/w" "${mnt[@]}" "${apk[@]}" \
 		-e ALPINE="$ALPINE" -e KVER="$KVER" -e OUT=/w/out -e UIDGID="$UIDGID" -e IMG_MB="$IMG_MB" -e CHROMIUM_ES2_PATCH="${CHROMIUM_ES2_PATCH:-1}" \
 		-e TSX_APK_URL="${TSX_APK_URL:-https://tsx-aports.unexceptional.net}" \
+		-e TFA_VENDOR_FETCH="${TFA_VENDOR_FETCH:-yes}" \
 		"$IMAGE" /w/mkrootfs.sh
 }
 

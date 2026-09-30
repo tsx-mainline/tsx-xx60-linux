@@ -8,12 +8,12 @@
 #     tsx-rescue-status) and the initramfs build ships the fonts;
 #   - the rescue screen banner and /etc/motd: Tux + figlet smslant
 #     "TSX - LINUX" (spaces around the dash), at most 80 columns, the same art
-#     in both; a whole rescue frame fits 80x25.
+#     in both (the whole screen: test-rescue-screen.sh).
 # busybox/dash sh, no compiler. figlet (optional) re-checks the art itself.
 set -eu
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
 CF=$HERE/rootfs/initramfs/overlay/usr/sbin/tsx-confont
-RS=$HERE/installer/rescue-v2/overlay/usr/sbin/tsx-rescue-status
+RS=$HERE/rootfs/initramfs/overlay/usr/sbin/tsx-rescue-status
 MOTD=$HERE/rootfs/overlay/etc/motd
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 N=0 F=0
@@ -78,7 +78,7 @@ grep -q '^rescue() {' "$HERE/rootfs/initramfs/overlay/init" && sed -n '/^rescue(
 for f in "$HERE/installer/initramfs/tsx-autoinstall" "$HERE/rootfs/initramfs/overlay/usr/sbin/tsx-autoinstall"; do
 	grep -q 'tsx-splash console.*/usr/sbin/tsx-confont' "$f" && ok "${f#"$HERE"/}" || bad "${f#"$HERE"/} binds the console without tsx-confont"
 done
-grep -q '^loop) .*lcd_font' "$RS" && ok "tsx-rescue-status loop" || bad "tsx-rescue-status loop does not load the font"
+sed -n '/^loop)/,/;;/p' "$RS" | grep -q 'lcd_font' && ok "tsx-rescue-status loop" || bad "tsx-rescue-status loop does not load the font"
 MK=$HERE/rootfs/initramfs/mkinitramfs-switchroot.sh
 for f in ter-124b ter-132b; do
 	grep -q "for f in .*$f" "$MK" && ok "initramfs ships $f" || bad "initramfs does not ship $f"
@@ -104,27 +104,7 @@ else
 	echo "  skip: figlet smslant not installed"
 fi
 
-echo "== a whole rescue frame fits 80x25 =="
-mkdir -p "$T/run" "$T/sbin"
-printf '#!/bin/sh\necho "2: eth0    inet 192.0.2.10/24 brd 192.0.2.255 scope global eth0"\n' > "$T/sbin/ip"
-printf '#!/bin/sh\necho 7.2.8-00116-gb5862166389d\n' > "$T/sbin/uname"
-chmod 755 "$T/sbin/ip" "$T/sbin/uname"
-echo "00:10:7f:00:00:01" > "$T/mac"
-echo "v2 2026-09-28T21:30:00-06:00 flavor=stable" > "$T/rver"
-printf 'tsx_find_disk() { WHOLE=/dev/null; }\ntsx_pick_fwenv() { :; }\ntsx_env() { echo TSW-1060; }\ntsx_unit_id() { echo 0123456789AB; }\n' > "$T/lib.sh"
-echo "rescue image active" > "$T/run/rescue-reason"
-echo uboot > "$T/run/tsx-eth0-mac-src"
-echo "writing eMMC root (p8)" > "$T/run/tsx-install-state"
-echo "314572800 0 838860800 eMMC root" > "$T/run/tsx-progress"
-sed -e "s|/usr/share/tsx/tsx-lib.sh|$T/lib.sh|; s|^VERFILE=.*|VERFILE=$T/rver|" \
-    -e "s|ip -4 -o addr show eth0|$T/sbin/ip|; s|uname -r|$T/sbin/uname|; s|/sys/class/net/eth0/address|$T/mac|" \
-    -e 's|> /dev/kmsg|> /dev/null|' "$RS" > "$T/rs.sh"
-TSX_RUN=$T/run TSX_STATUS_TTY=$T/frame.raw sh "$T/rs.sh" once
-sed 's/\x1b\[[0-9?;]*[A-Za-z]//g' "$T/frame.raw" > "$T/frame"
-rows=$(wc -l < "$T/frame"); cols=$(awk '{ if (length > m) m = length } END { print m + 0 }' "$T/frame")
-[ "$rows" -le 24 ] && ok "frame: $rows rows (+ the cursor row <= 25)" || bad "frame: $rows rows"
-[ "$cols" -le 80 ] && ok "frame: $cols columns" || bad "frame: $cols columns"
-grep -q '^kernel            : 7.2.8-00116-gb5862166389d$' "$T/frame" && ok "frame shows the kernel" || bad "no kernel line in the frame"
+# the whole rescue screen (idle, install running, both console widths): rootfs/tests/test-rescue-screen.sh
 
 echo "$N ok, $F failed"
 [ "$F" -eq 0 ]

@@ -8,7 +8,15 @@
 # env state machine"). Never touches U-Boot itself; only the env at 1 MiB.
 #
 #   tsx-rescue-install check BUNDLE_DIR [--keep-data]
+#   tsx-rescue-install tfa   BUNDLE_DIR
 #   tsx-rescue-install run   BUNDLE_DIR [--yes] [--keep-data]
+#
+# tfa (read-only, before run): look for the TFA9890 DSP files on the panel
+# itself -- the current mainline root on eMMC p8 (a reinstall), then stock
+# Android's boot image on eMMC p7 -- validate them and put the result in
+# BUNDLE_DIR/tfa-panel/ (installer/lib/tsx-tfa.sh, docs/install.md "TFA9890
+# speaker DSP tuning"). The host moves it to BUNDLE_DIR/tfa/ if it takes it.
+# The files stay on the panel.
 #
 # --keep-data (a mainline -> mainline reinstall, docs/install.md "Reinstalling
 # or updating a mainline panel"): if the card is already folded and p4 is a
@@ -35,7 +43,11 @@
 #   boot.img              the eMMC boot image (kernel+DTB+initramfs), <= 32 MiB
 #   tsx-rescue.sh          installer/lib/tsx-rescue.sh (pr_dd, tsx_env_apply, tsx_mbr_fold, tsx_mkfs_tsxdata)
 #   tsx-usb-recovery       installer/emmc/tsx-usb-recovery (copied verbatim, runs standalone)
-#   tfa/<variant>/stereo.cnt   (optional) TFA9890 DSP tuning files
+#   tsx-tfa.sh             installer/lib/tsx-tfa.sh (the tfa command)
+#   tfa/<variant>/stereo.cnt   (optional) TFA9890 DSP tuning files, put there
+#                          by the host: from the panel (tfa-panel/, above) or
+#                          pushed from rootfs/vendor-fetch.sh; tfa/SOURCE says
+#                          where they came from and is deployed with them
 #   kiosk-url.txt          (optional) one line: the KIOSK_URL to set
 #   panel.conf             (optional) installer/panel.conf.example built by
 #                          tsx-install-mainline's prompts or --config FILE;
@@ -52,16 +64,19 @@ set -eu
 RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
 say() { echo "tsx-rescue-install: $(date +%T 2>/dev/null) $*" >&2; }
 die() { say "ERROR: $*"; set_state "failed: $*"; exit 1; }
-CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,50p' "$0"; exit 2; }
+CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,62p' "$0"; exit 2; }
 YES=0 KEEP_DATA=0
 while [ $# -gt 0 ]; do case "$1" in --yes) YES=1;; --keep-data) KEEP_DATA=1;; *) die "unknown option $1";; esac; shift; done
-case "$CMD" in check|run) ;; *) sed -n '2,50p' "$0"; exit 2;; esac
+case "$CMD" in check|run|tfa) ;; *) sed -n '2,62p' "$0"; exit 2;; esac
 [ -f "$B/manifest" ] && grep -q '^format=tsx-rescue-install-1$' "$B/manifest" || die "$B is not a v2 install bundle (no manifest)"
 . "$B/tsx-rescue.sh"
 . /usr/share/tsx/tsx-lib.sh   # tsx_find_disk, TSX_MBR_P4_TYPE_OFFSET, TSX_ENV_OFFSET/SIZE (already on the rescue image)
 
 STATUS=${TSX_STATUS:-/run/tsx-install-state}
 set_state() { printf '%s\n' "$1" > "$STATUS" 2>/dev/null || true; }
+# the rescue screen (tsx-rescue-status) shows the state and the pr_dd progress
+# of the tool named here, while its pid lives (a "check" writes nothing to disks)
+echo "$$ install" > "$RUN/tsx-op" 2>/dev/null || true
 set_state "starting ($CMD)"
 
 conf() { sed -n "s/^$1=//p" "$B/manifest" | tail -n 1; }
@@ -104,6 +119,17 @@ if [ -n "$ROOT_MINPART" ]; then
 	[ "$GOT_ROOT_BYTES" -ge "$ROOT_MINPART" ] || die "$EROOT is $GOT_ROOT_BYTES bytes, smaller than the expected partition minimum (manifest root_partition_min_bytes=$ROOT_MINPART): wrong device?"
 fi
 grep -q "^$EBOOT \| $EBOOT \|^$EROOT \| $EROOT " /proc/mounts && die "$EBOOT or $EROOT is mounted: refusing to write the eMMC"
+
+# ---- tfa: the DSP files from the panel itself (read-only, before any write) --
+if [ "$CMD" = tfa ]; then
+	[ -f "$B/tsx-tfa.sh" ] || die "$B/tsx-tfa.sh missing (bundle too old for the tfa command)"
+	. "$B/tsx-tfa.sh"
+	set_state "looking for the speaker DSP files"
+	say "looking for the TFA9890 DSP files on this panel (read-only: $EROOT, then $EBOOT)"
+	tsx_tfa_collect "$B/tfa-panel" "$EBOOT" "$EROOT" "$B/tfa"
+	set_state "checked OK"
+	exit 0
+fi
 
 # ---- the card (SD): tsx_find_disk from tsx-lib.sh --------------------------
 tsx_find_disk || die "no card with the Crestron/card-stage partition layout found"
@@ -197,15 +223,25 @@ mount -t ext4 -o rw "$EROOT" "$MNT" || die "cannot mount $EROOT"
 # steering the next kernel package upgrade onto the wrong flavor.
 tsx_rootinfo_set_flavor "$MNT/etc/tsx/emmc-root.info" "$FLAVOR"
 say "  emmc-root.info: kernel_flavor=${FLAVOR:-unchanged}"
+# (never fatal: the speakers work without the DSP files)
+TFADIR=$MNT/usr/local/share/tsx/tfa9890
 if [ -d "$B/tfa" ]; then
 	for v in "$B"/tfa/*/; do
-		[ -d "$v" ] || continue
+		[ -f "$v/stereo.cnt" ] || continue
 		variant=$(basename "$v")
-		mkdir -p "$MNT/usr/local/share/tsx/tfa9890/$variant"
-		cp "$v/stereo.cnt" "$MNT/usr/local/share/tsx/tfa9890/$variant/stereo.cnt" 2>/dev/null \
-			&& say "  tfa: $variant/stereo.cnt deployed" \
-			|| say "  WARNING: tfa: $variant/stereo.cnt copy failed (non-fatal, see docs/install.md)"
+		want=$(sha256sum < "$v/stereo.cnt" | cut -d' ' -f1)
+		mkdir -p "$TFADIR/$variant"
+		if cp "$v/stereo.cnt" "$TFADIR/$variant/stereo.cnt" 2>/dev/null \
+			&& [ "$(sha256sum < "$TFADIR/$variant/stereo.cnt" | cut -d' ' -f1)" = "$want" ]; then
+			say "  tfa: $variant/stereo.cnt deployed ($want)"
+		else
+			say "  WARNING: tfa: $variant/stereo.cnt copy failed (non-fatal, see docs/install.md)"
+		fi
 	done
+	[ -f "$B/tfa/SOURCE" ] && cp "$B/tfa/SOURCE" "$TFADIR/SOURCE" 2>/dev/null \
+		&& say "  tfa: source: $(sed -n 's/^source=//p' "$B/tfa/SOURCE"), firmware: $(sed -n 's/^firmware=//p' "$B/tfa/SOURCE")"
+else
+	say "  tfa: no TFA9890 DSP files in the bundle: the speakers run without the vendor tuning"
 fi
 if [ -f "$B/kiosk-url.txt" ] && [ -f "$MNT/etc/kiosk.conf" ]; then
 	URL=$(head -n 1 "$B/kiosk-url.txt")

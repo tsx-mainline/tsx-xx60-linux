@@ -1,19 +1,14 @@
 #!/bin/bash
-# Layer the v2 splash/status screen onto an already-built rescue image
-# (installer/rescue/mkrescue.sh's own output, UNCHANGED -- this script does
-# not modify or re-implement anything under installer/rescue/, it only adds
-# one more cpio archive on top, the same layering trick mkrescue.sh itself
-# uses for the rescue overlay: the kernel unpacks concatenated cpio archives
-# in order, so a later file wins).
+# Stamp a built rescue image (installer/rescue/mkrescue.sh's own output, UNCHANGED
+# -- this script does not modify anything under installer/rescue/) with its version
+# line, by appending one more cpio archive on top, the same layering trick
+# mkrescue.sh itself uses for the rescue overlay: the kernel unpacks concatenated
+# cpio archives in order, so a later file wins.
 #
-# Adds:
-#   /usr/sbin/tsx-rescue-status   splash + live status screen (see its own header)
-#   /etc/tsx/rescue-version       "v2 <date> <flavor>", shown on the screen
-#   /etc/inittab                  BASE rescue's inittab, with the one-shot
-#                                 "tsx-rescue banner" line replaced by a
-#                                 respawning "tsx-rescue-status loop" (same
-#                                 banner information, redrawn live instead of
-#                                 printed once)
+# The rescue screen itself (/usr/sbin/tsx-rescue-status, started by the base
+# initramfs's inittab on tty1) now ships in the base initramfs, so the
+# initramfs's own rescue shows it too. This adds only:
+#   /etc/tsx/rescue-version   "built <date>, kernel <flavor>", shown on the screen
 #
 #   installer/rescue-v2/mkrescue-v2.sh --base RESCUE_IMG [--flavor lts|stable] [--out IMG]
 set -euo pipefail
@@ -33,23 +28,13 @@ open(sys.argv[2], 'wb').write(d[ps + pad(ks): ps + pad(ks) + rs])
 PY
 # NOTE: BASE (a rescue image) is itself two concatenated cpio archives (the
 # kiosk switch_root initramfs + the rescue overlay, see installer/rescue/mkrescue.sh);
-# a plain `cpio -id` from userspace only unpacks the FIRST one it finds (it stops
-# at that archive's own TRAILER entry) -- only the KERNEL's own initramfs unpacker
-# walks past a trailer to the next embedded archive. So this extracts the
-# kiosk's plain inittab (sysinit/rcS + gettys + ctrlaltdel + shutdown, no
-# rescue-specific lines at all), which is exactly the right starting point here:
-# our own archive is appended LAST and therefore wins wholesale at boot, so its
-# inittab is the ONLY one that matters for the final result, and it should
-# start from the plain base, not try to reconstruct the rescue overlay's own
-# (independently correct) version of it.
-mkdir -p "$W/base"; (cd "$W/base" && zcat "$W/base-rd.gz" | cpio -id --quiet etc/inittab 2>/dev/null) || true
-[ -f "$W/base/etc/inittab" ] || { echo "mkrescue-v2.sh: $BASE's initramfs has no etc/inittab (not a rescue image built by mkrescue.sh?)"; exit 1; }
+# a plain `cpio -id` from userspace only unpacks the FIRST one it finds -- that
+# is the base initramfs, which must carry the screen.
+mkdir -p "$W/base"; (cd "$W/base" && zcat "$W/base-rd.gz" | cpio -id --quiet etc/inittab usr/sbin/tsx-rescue-status 2>/dev/null) || true
+[ -x "$W/base/usr/sbin/tsx-rescue-status" ] && grep -q 'tsx-rescue-status loop' "$W/base/etc/inittab" || { echo "mkrescue-v2.sh: $BASE's initramfs has no rescue screen (usr/sbin/tsx-rescue-status + its inittab line): rebuild the initramfs"; exit 1; }
 
-R=$W/ov; mkdir -p "$R/usr/sbin" "$R/etc/tsx"
-install -D -m 755 "$HERE/overlay/usr/sbin/tsx-rescue-status" "$R/usr/sbin/tsx-rescue-status"
-echo "v2 $(date -Iseconds 2>/dev/null || date) flavor=$FLAVOR" > "$R/etc/tsx/rescue-version"
-cp "$W/base/etc/inittab" "$R/etc/inittab"
-echo "::respawn:/usr/sbin/tsx-rescue-status loop" >> "$R/etc/inittab"
+R=$W/ov; mkdir -p "$R/etc/tsx"
+echo "built $(date +%F 2>/dev/null), kernel flavor $FLAVOR" > "$R/etc/tsx/rescue-version"
 
 (cd "$R" && find . -mindepth 1 | sort | cpio -o -H newc -R 0:0 --quiet | gzip -9n) > "$W/ov.gz"
 python3 - "$BASE" "$W/ov.gz" "$W/rd-extra.gz" <<'PY'

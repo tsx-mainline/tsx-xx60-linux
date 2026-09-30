@@ -227,6 +227,20 @@ is_crestron_sshd() {
 	case "$(ssh_server_id "$1")" in *CrestronSSH*) return 0;; *) return 1;; esac
 }
 
+# android_went_down HOST SECONDS: true once HOST stops answering as stock
+# Android's Crestron sshd (it is rebooting), false if it still does after
+# SECONDS. No login is attempted. Test hook: TSX_POLL_S (default 5).
+android_went_down() {
+	local t0 now
+	t0=$(date +%s)
+	while is_crestron_sshd "$1"; do
+		now=$(date +%s)
+		[ $((now - t0)) -lt "$2" ] || return 1
+		sleep "${TSX_POLL_S:-5}"
+	done
+	return 0
+}
+
 # ssh_test_rescue HOST PW: true if HOST answers ssh as the rescue (no login
 # attempt when HOST is Crestron's sshd, see is_crestron_sshd)
 ssh_test_rescue() {

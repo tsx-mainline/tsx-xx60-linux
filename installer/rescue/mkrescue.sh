@@ -6,7 +6,8 @@
 # (rootfs switch_root initramfs with installer stage 2) + a second cpio archive
 # appended (the kernel unpacks concatenated archives in order) that adds:
 #   /etc/tsx/rescue-image      flag: /init goes straight to the rescue system
-#   /usr/sbin/tsx-rescue       status / done / banner (IP on the screen)
+#   /usr/sbin/tsx-rescue       status / done / banner (IP in /etc/motd; the LCD screen is
+#                              tsx-rescue-status, from BASE)
 #   /usr/local/sbin/tsx-boot-ok + /etc/tsx/uboot-env.conf   (from work/rootfs overlay)
 #   /etc/inittab               BASE's + "::once:/usr/sbin/tsx-rescue banner"
 #   rescue/mkrescue.sh [--base IMG] [--model tsw1060] [--out IMG]
@@ -22,8 +23,9 @@ d = open(sys.argv[1], 'rb').read(); h = struct.unpack_from('<8s10I', d, 0); asse
 ks, rs, ps = h[1], h[3], h[8]; pad = lambda n: (n + ps - 1) // ps * ps
 open(sys.argv[2], 'wb').write(d[ps + pad(ks): ps + pad(ks) + rs])
 PY
-mkdir -p "$W/base"; (cd "$W/base" && zcat "$W/base-rd.gz" | cpio -id --quiet init etc/inittab etc/init.d/rcS usr/sbin/tsx-autoinstall 2>/dev/null) || true
+mkdir -p "$W/base"; (cd "$W/base" && zcat "$W/base-rd.gz" | cpio -id --quiet init etc/inittab etc/init.d/rcS usr/sbin/tsx-autoinstall usr/sbin/tsx-rescue-status 2>/dev/null) || true
 grep -q '/etc/tsx/rescue-image' "$W/base/init" || { echo "BASE's /init has no rescue-image check: rebuild the initramfs after integrate.sh"; exit 1; }
+[ -x "$W/base/usr/sbin/tsx-rescue-status" ] || { echo "BASE's initramfs has no rescue screen (tsx-rescue-status): rebuild the initramfs"; exit 1; }
 grep -q 'ethaddr' "$W/base/etc/init.d/rcS" 2>/dev/null || { echo "BASE's rcS does not set the eth0 MAC from the U-Boot env: rebuild the initramfs"; exit 1; }
 R=$W/ov; mkdir -p "$R"; cp -a "$HERE/overlay/." "$R/"
 install -D -m 755 "$ROOTFS_DIR/overlay/usr/local/sbin/tsx-boot-ok" "$R/usr/local/sbin/tsx-boot-ok"

@@ -11,7 +11,7 @@
 #   3. installer/initramfs/repack-bootimg.py   -> installer/out/tsxboot-audio-autoinstall.img
 #      (same kernel + DTB as step 1, stage-2 initramfs swapped in)
 #   4. installer/rescue/mkrescue.sh            -> installer/rescue/out/tsx-rescue-tsw1060.img
-#   5. installer/rescue-v2/mkrescue-v2.sh       -> OUT (the v2 status screen layered on top)
+#   5. installer/rescue-v2/mkrescue-v2.sh       -> OUT (stamps the version; the rescue screen itself is in the base initramfs)
 #
 #   ci/build-rescue.sh --kdir OUT_DIR --out RESCUE.img [--flavor NAME]
 #     --kdir OUT_DIR   a kbuild.sh "image" step's OUT_DIR (zImage + board DTB +

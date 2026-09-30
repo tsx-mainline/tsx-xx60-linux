@@ -207,5 +207,33 @@ tsx_find_stick() {
 }
 # tsx_size FILE: size in bytes (the stock Android busybox stat has no -c; wc -c works everywhere)
 tsx_size() { wc -c < "$1" | tr -d ' '; }
+
+# tsx_reboot_detached TRACE [DELAY]: reboot after DELAY (3) seconds, from a
+# job that does not depend on the ssh session this runs in: its own session
+# (busybox setsid, when there is one), SIGHUP ignored, no tty on any fd.
+# Every step is appended to TRACE (put it on /data: it survives the reboot,
+# and if the reboot never happens the host can read why). After
+# `busybox reboot -f` it waits 5 s and falls back to sysrq b. Returns at once.
+# Needs $BB (tsx_pick_bb). Test hooks: TSX_REBOOT_CMD (instead of
+# "$BB reboot -f"), TSX_SYSRQ_DIR (instead of /proc).
+tsx_reboot_detached() {
+	local trace=$1 delay=${2:-3} setsid=
+	"$BB" setsid true </dev/null >/dev/null 2>&1 && setsid="$BB setsid"
+	echo "$("$BB" date '+%F %T' 2>/dev/null) arming a detached reboot in ${delay}s (setsid: ${setsid:-no}; parent pid $$)" >> "$trace"
+	$setsid "$BB" sh -c '
+		BB=$1 T=$2 D=$3 R=$4 Q=$5
+		trap "" HUP
+		now() { "$BB" date "+%F %T" 2>/dev/null; }
+		echo "$(now) reboot job pid $$, sid $("$BB" cut -d" " -f6 /proc/$$/stat 2>/dev/null): sleeping ${D}s" >> "$T"
+		"$BB" sleep "$D"
+		"$BB" sync
+		echo "$(now) running: $R" >> "$T"
+		$R; echo "$(now) $R returned rc=$? (still up)" >> "$T"
+		"$BB" sleep 5
+		echo 1 > "$Q/sys/kernel/sysrq"; echo b > "$Q/sysrq-trigger"
+		echo "$(now) sysrq b written rc=$? (still up)" >> "$T"
+	' tsx-reboot "$BB" "$trace" "$delay" "${TSX_REBOOT_CMD:-$BB reboot -f}" "${TSX_SYSRQ_DIR:-/proc}" \
+		</dev/null >/dev/null 2>&1 &
+}
 # tsx_conf KEY FILE: value of KEY=... in a plain key=value file (no shell evaluation)
 tsx_conf() { sed -n "s/^$1=//p" "$2" | tail -n 1 | sed 's/^"\(.*\)"$/\1/'; }

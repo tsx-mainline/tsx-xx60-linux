@@ -35,7 +35,10 @@ select_eth0_mac() {
 		[ -s "$macf" ] && cur=$(head -1 "$macf")
 		if [ "$cur" != "$mac" ]; then
 			mkdir -p "$(dirname "$macf")" && echo "$mac" > "$macf"
-			einfo "eth0 MAC $mac (from U-Boot env; $macf was '${cur:-unset}', now back in sync)"
+			# stderr: stdout is this function's answer (OpenRC's einfo prints
+			# to stdout; on a fresh install this line made mac= two lines and
+			# `ip link set` failed, leaving the random MAC)
+			einfo "eth0 MAC $mac (from U-Boot env; $macf was '${cur:-unset}', now back in sync)" >&2
 		fi
 	else
 		[ -s "$macf" ] && mac=$(head -1 "$macf")
@@ -59,7 +62,8 @@ start() {
 		echo "$TZ_NAME" > /etc/timezone
 	fi
 	mac=$(select_eth0_mac)
-	ip link set dev eth0 address "$mac" 2>/dev/null && einfo "eth0 MAC $mac"
+	if ip link set dev eth0 address "$mac" 2>/dev/null; then einfo "eth0 MAC $mac"
+	else ewarn "eth0 MAC '$mac' could not be set: eth0 keeps $(cat /sys/class/net/eth0/address 2>/dev/null)"; fi
 	# compressed swap in RAM (needs CONFIG_ZRAM; the panel kernel lacks it today)
 	if [ ! -e /sys/block/zram0 ]; then modprobe zram num_devices=1 2>/dev/null || true; fi
 	if [ -e /sys/block/zram0/disksize ] && ! grep -q zram0 /proc/swaps; then

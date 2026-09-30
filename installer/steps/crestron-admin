@@ -1,7 +1,12 @@
 #!/bin/bash
 # Host: make sure a stock-Android xx60 has a Crestron admin account, the
-# way the web UI's first-run page does it. A factory-fresh /data has none: every
-# page of https://PANEL/ then redirects to /createUser.html, whose form posts
+# way the web UI's first-run page does it. A factory-fresh /data has none:
+# GET /Device/Authentication then says AuthenticationState.IsEnabled=false and
+# lists no LocalUsers. On a unit with forced authentication (env
+# forced_auth_mode=true, e.g. the TSS-10 tested) every page of https://PANEL/
+# also redirects to /createUser.html; a unit without it (e.g. a TSW-760 as
+# shipped) serves its pages with authentication off and no redirect. Either
+# way the account is created with the call the first-run form makes:
 #   POST /Device/Authentication
 #   {"Device":{"Authentication":{"AuthenticationState":{"AdminUsername":U,"AdminPassword":P,"IsEnabled":true}}}}
 # (answer: StatusId 0, "Authentication enabled successfully"; done on unit B
@@ -10,23 +15,52 @@
 #
 #   steps/crestron-admin PANEL     (user $TSX_ADMIN_USER, default admin;
 #                                      password: required, $TSX_ADMIN_PW)
-# Exit 0 = the console answers with that login; 1 = it does not; 2 = usage.
+#   steps/crestron-admin --status PANEL
+#                                  print "none" (no account yet) or "exists";
+#                                  no login, no change, no password needed
+# Exit 0 = the console answers with that login (--status: state printed);
+# 1 = it does not (--status: web UI does not answer); 2 = usage.
 set -uo pipefail
+STATUS=0; [ "${1:-}" = --status ] && { STATUS=1; shift; }
 H=${1:?PANEL}; U=${TSX_ADMIN_USER:-admin}
-PW=${TSX_ADMIN_PW:?set TSX_ADMIN_PW to the Crestron console/web-UI admin password to use}
 say() { echo "crestron-admin: $*" >&2; }
 JAR=$(mktemp); trap 'rm -f "$JAR"' EXIT
-loc=$(curl -sk -m 15 -c "$JAR" -b "$JAR" -o /dev/null -w '%{redirect_url}' "https://$H/index_device.html") || { say "web UI https://$H/ does not answer"; exit 1; }
-case "$loc" in
-*createUser.html)
-	say "no Crestron account yet (web UI first-run page): creating '$U'"
+# account_state: "none" | "exists" | "" (web UI does not answer)
+account_state() {
+	local js loc
+	js=$(curl -sk -m 15 -c "$JAR" -b "$JAR" -H 'X-Requested-With: XMLHttpRequest' "https://$H/Device/Authentication" 2>/dev/null)
+	case "$(printf '%s' "$js" | python3 -c '
+import json, sys
+try:
+    a = json.load(sys.stdin)["Device"]["Authentication"]
+except Exception:
+    sys.exit(0)
+print("none" if not a.get("AuthenticationState", {}).get("IsEnabled") and not a.get("LocalUsers") else "exists")' 2>/dev/null)" in
+	none) echo none; return;; exists) echo exists; return;; esac
+	# fallback: the first-run redirect of a unit with forced authentication
+	loc=$(curl -sk -m 15 -c "$JAR" -b "$JAR" -o /dev/null -w '%{redirect_url}' "https://$H/index_device.html") || return 0
+	case "$loc" in *createUser.html) echo none;; *) echo exists;; esac
+}
+st=$(account_state)
+if [ "$STATUS" = 1 ]; then [ -n "$st" ] || { say "web UI https://$H/ does not answer"; exit 1; }; echo "$st"; exit 0; fi
+PW=${TSX_ADMIN_PW:?set TSX_ADMIN_PW to the Crestron console/web-UI admin password to use}
+case "$st" in
+none)
+	say "no Crestron account yet (authentication off, no users): creating '$U'"
 	body=$(printf '{"Device":{"Authentication":{"AuthenticationState":{"AdminUsername":"%s","AdminPassword":"%s","IsEnabled":true}}}}' "$U" "$PW")
 	ans=$(curl -sk -m 30 -c "$JAR" -b "$JAR" -H 'Content-Type: application/json' -H 'X-Requested-With: XMLHttpRequest' \
 		-H "Origin: https://$H" -H "Referer: https://$H/createUser.html" --data "$body" "https://$H/Device/Authentication")
-	say "answer: $ans"
-	grep -q '"StatusId":0' <<<"$ans" || { say "account creation refused"; exit 1; }
+	say "answer: ${ans:-(empty)}"
+	if ! grep -q '"StatusId":0' <<<"$ans"; then
+		# a unit without forced authentication (TSW-760 tested) enables it and
+		# restarts its web service before it answers: ask again
+		for i in 1 2 3 4 5 6; do sleep 5; st=$(account_state); [ "$st" = exists ] && break; done
+		[ "$st" = exists ] || { say "account creation refused (still no account after 30 s)"; exit 1; }
+		say "no answer to the request, but the account now exists (web UI restarted)"
+	fi
 	sleep 3;;
-*) say "web UI does not ask for a first account (redirect: ${loc:-none}): an account exists, not changing it";;
+exists) say "the web UI already has an account (or authentication on): not changing it";;
+*) say "web UI https://$H/ does not answer"; exit 1;;
 esac
 out=$(printf 'ver\r\nbye\r\n' | timeout 30 sshpass -p "$PW" ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 "$U@$H" 2>&1 | tr -d '\r')
 v=$(printf '%s\n' "$out" | grep -E '\[v[0-9]' | head -n 1)

@@ -3,10 +3,10 @@
 # Crestron/NXP proprietary, never committed to the repository) with
 # rootfs/vendor-fetch.sh ON THIS MACHINE, then copy them onto an already-
 # mainline panel at /usr/local/share/tsx/tfa9890/<variant>/stereo.cnt (the
-# path tsx-tfa-dsp / tfa_dsp.py expects). Called by tsx-install-mainline
-# after the eMMC migration; safe to re-run by hand later (e.g. if the first
-# fetch failed and the panel is running with no DSP tuning: the speakers
-# still work, just without the vendor EQ/volume-step presets).
+# path tsx-tfa-dsp / tfa_dsp.py expects). tsx-install-mainline normally
+# takes these files from the panel itself (docs/install.md "TFA9890 speaker
+# DSP tuning"); this script is for a panel that was installed without them
+# (the speakers still work, just without the vendor EQ/volume-step presets).
 #   steps/tsx-deploy-tfa.sh PANEL_IP [--dry-run]
 # Exit 0 even if the fetch or deploy fails (the DSP is optional): callers
 # that want a hard failure should check the printed WARNING/ERROR lines.

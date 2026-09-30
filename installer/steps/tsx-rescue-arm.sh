@@ -233,8 +233,11 @@ fi
 if [ $REBOOT = 1 ]; then
 	# in the background, immune to the ssh session's hangup, so this script
 	# returns (and the host sees DONE) before the reboot drops the connection
+	# (tsx_reboot_detached: own session, HUP ignored; each step goes to a
+	# trace on /data that the host reads if the panel does not go down)
 	log "rebooting in 3 s"
+	log "reboot trace: $BK/reboot.trace"
 	sync
-	( trap '' HUP; sleep 3; "$BB" reboot -f; sleep 5; echo 1 > /proc/sys/kernel/sysrq; echo b > /proc/sysrq-trigger ) </dev/null >/dev/null 2>&1 &
+	tsx_reboot_detached "$BK/reboot.trace" 3
 fi
 exit 0

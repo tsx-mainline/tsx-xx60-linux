@@ -54,6 +54,10 @@ text_console() {
 }
 # splash TEXT PERCENT [show]: status line + progress bar (no-op when verbose)
 splash() { [ -n "$verbose" ] || /usr/sbin/tsx-splash -o "$orient" -s "$1" -p "$2" "${3:-status}" 2>/dev/null; }
+# The rescue system is busybox init (etc/inittab): rcS (network, dropbear) and the
+# rescue screen /usr/sbin/tsx-rescue-status on the LCD, with "Press Enter for a
+# rescue shell" for a USB keyboard. The same screen for every way in, the
+# standalone rescue image included.
 rescue() {
 	fbrot=0   # the rescue screen is always landscape
 	text_console
@@ -93,7 +97,11 @@ if [ -n "$verbose" ]; then text_console; else wait_drm_fb; splash "starting" 5 s
 # installer: UART-free install (p1:tsxinst.cfg from stock Android, a stick with
 # tsx-install/GO, or a U-Boot jabil boot from a stick). Exit 0 = nothing to do.
 if [ -x /usr/sbin/tsx-autoinstall ]; then
-	/usr/sbin/tsx-autoinstall || rescue "tsx-autoinstall: install failed or waits for deploy.sh, see /run/tsx-autoinstall.log"
+	/usr/sbin/tsx-autoinstall || {
+		# the rescue screen shows this as the operation that went wrong
+		echo "- autoinstall" > /run/tsx-op; echo "failed, see /run/tsx-autoinstall.log" > /run/tsx-install-state
+		rescue "tsx-autoinstall: install failed or waits for deploy.sh, see /run/tsx-autoinstall.log"
+	}
 fi
 
 up() { cut -d. -f1 /proc/uptime; }
