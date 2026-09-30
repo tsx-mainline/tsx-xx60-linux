@@ -36,6 +36,8 @@ jobs:
         run: rootfs/tests/test-idled-als.sh
       - name: rootfs/tests/test-idled-runtime.sh - brightness offset, blank-timeout override, last-input
         run: rootfs/tests/test-idled-runtime.sh
+      - name: rootfs/tests/test-idled-display.sh - display output off while blank (tsx-display-power)
+        run: rootfs/tests/test-idled-display.sh
       - name: rootfs/tests/test-als.sh
         run: rootfs/tests/test-als.sh
       - name: rootfs/tests/test-clock.sh - network time (chrony, DHCP NTP servers, boot clock floor)

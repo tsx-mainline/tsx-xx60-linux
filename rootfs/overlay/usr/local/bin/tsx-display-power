@@ -1,0 +1,94 @@
+#!/bin/sh
+# tsx-display-power on|off|status: turn the display output of the kiosk on or
+# off. Run it as root or as the kiosk user.
+#
+# tsx-idled runs "off" after it turns the backlight off, and "on" before it
+# turns the backlight on (DISPLAY_POWER_CMD in /etc/kiosk.conf). With only the
+# backlight off, the LCD keeps the last frame, and the frame shows in room
+# light. With the output off, the scanout stops and the kernel turns the LCD
+# power off (panel-lvds). The glass then shows nothing.
+#
+#   sway (KIOSK_OSK not off): "output * power off|on" on every sway IPC
+#       socket of the kiosk user. On the Meson display, sway 1.12 with
+#       wlroots 0.20 refuses the first "power on" after a "power off"
+#       ("Backend commit failed"), and the second request works. The script
+#       reads the power state back after each request and sends the request
+#       again, TSX_DISPLAY_TRIES times at most (default 3).
+#   no sway: the framebuffer console (/sys/class/graphics/fb*/blank). The
+#       kernel ignores it while a compositor (cage) owns the display. Under
+#       cage, the blank stays backlight only.
+#
+# Exit status: 0 = the outputs are in the requested state (or the framebuffer
+# took the request), 1 = no output took the request, 2 = usage error.
+# Env for tests: TSX_SWAYMSG (swaymsg), TSX_RUN_USER_DIR (/run/user),
+# TSX_KIOSK_USER (kiosk), TSX_FB_DIR (/sys/class/graphics),
+# TSX_DISPLAY_TRIES (3).
+set -u
+cmd=${1:-status}
+case "$cmd" in
+on|off|status) ;;
+*) echo "usage: tsx-display-power on|off|status" >&2; exit 2;;
+esac
+SWAYMSG=${TSX_SWAYMSG:-swaymsg}
+tries=${TSX_DISPLAY_TRIES:-3}
+
+# power SOCKET: "on", "off" or "mixed" for the outputs of one sway
+power() {
+	p=$(SWAYSOCK=$1 "$SWAYMSG" -t get_outputs -r 2>/dev/null | tr -d ' \t\n' | grep -o '"power":[a-z]*')
+	case "$p" in
+	'') echo none;;
+	*false*) case "$p" in *true*) echo mixed;; *) echo off;; esac;;
+	*) echo on;;
+	esac
+}
+
+socks=
+u=${TSX_KIOSK_USER:-kiosk}
+if uid=$(id -u "$u" 2>/dev/null); then
+	for s in "${TSX_RUN_USER_DIR:-/run/user}/$uid"/sway-ipc.*.sock; do
+		[ -S "$s" ] && socks="$socks $s"
+	done
+fi
+
+if [ -n "$socks" ]; then
+	rc=1
+	for s in $socks; do
+		if [ "$cmd" = status ]; then
+			echo "sway $(power "$s")"
+			rc=0
+			continue
+		fi
+		i=0 ok=0
+		while [ $i -lt "$tries" ]; do
+			i=$((i + 1))
+			# swaymsg exits 2 when sway refuses the command, and 1 when it
+			# cannot connect (a stale socket of a crashed session: skip it).
+			SWAYSOCK=$s "$SWAYMSG" "output * power $cmd" >/dev/null 2>&1
+			[ $? = 1 ] && { i=0; break; }
+			if [ "$(power "$s")" = "$cmd" ]; then
+				ok=1
+				break
+			fi
+		done
+		if [ $ok = 1 ]; then
+			rc=0
+			[ $i -gt 1 ] && echo "tsx-display-power: output $cmd after $i requests" >&2
+		elif [ $i -gt 0 ]; then
+			echo "tsx-display-power: output not $cmd after $i requests" >&2
+		fi
+	done
+	exit $rc
+fi
+
+# No sway: the framebuffer console (4 = FB_BLANK_POWERDOWN, 0 = FB_BLANK_UNBLANK)
+rc=1
+for b in "${TSX_FB_DIR:-/sys/class/graphics}"/fb*/blank; do
+	[ -e "$b" ] || continue
+	case "$cmd" in
+	status) echo "framebuffer ${b%/blank}"; rc=0;;
+	on) echo 0 > "$b" 2>/dev/null && rc=0;;
+	off) echo 4 > "$b" 2>/dev/null && rc=0;;
+	esac
+done
+[ $rc = 0 ] || [ "$cmd" != status ] || echo "no display output"
+exit $rc

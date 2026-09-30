@@ -3,12 +3,21 @@
  *
  * It does not depend on the compositor. It watches every /dev/input/event*
  * device itself.
- *  - After BLANK_TIMEOUT seconds without input, it sets the backlight to 0 and
- *    grabs (EVIOCGRAB) all input devices. The touch that wakes the screen then
- *    does not also press a button on the dashboard.
- *  - On the first event while the screen is blank, it restores the backlight,
- *    swallows the rest of that gesture (until no event for WAKE_SWALLOW_MS)
- *    and ungrabs.
+ *  - After BLANK_TIMEOUT seconds without input, it grabs (EVIOCGRAB) all input
+ *    devices, sets the backlight to 0 and then turns the display output off
+ *    (DISPLAY_POWER_CMD with the argument "off"). The touch that wakes the
+ *    screen then does not also press a button on the dashboard. With only the
+ *    backlight off, the LCD keeps the last frame, and the frame shows in room
+ *    light. With the output off, the glass shows nothing.
+ *  - On the first event while the screen is blank, it turns the display
+ *    output on (DISPLAY_POWER_CMD "on", the daemon waits for it), restores
+ *    the backlight, swallows the rest of that gesture (until no event for
+ *    WAKE_SWALLOW_MS) and ungrabs.
+ *  - DISPLAY_POWER_CMD (default "/usr/local/bin/tsx-display-power", empty =
+ *    backlight only) gets "on" or "off" as its last argument. The daemon waits
+ *    for it DISPLAY_POWER_TIMEOUT_MS at most (default 3000). While the screen
+ *    is blank, the daemon runs "off" again every 30 s: a compositor that
+ *    starts during the blank (the nightly kiosk restart) turns its output on.
  *  - Brightness follows a day/night schedule (BRIGHTNESS_DAY/NIGHT in
  *    backlight steps, NIGHT_START/NIGHT_END hours, local time). BACKLIGHT_MAX
  *    limits it (the TSX panels: MP3309C 0..31, vendor cap 23, U-Boot 17).
@@ -53,7 +62,7 @@
  *
  * Config: shell-style KEY=VALUE file (default /etc/kiosk.conf).
  * Env overrides for testing: TSX_INPUT_DIR, TSX_BACKLIGHT_DIR, TSX_STATE_FILE,
- * TSX_RUN_DIR.
+ * TSX_RUN_DIR, TSX_DISPLAY_REPEAT_MS (the 30 s "off" repeat while blank).
  */
 #define _GNU_SOURCE
 #include <ctype.h>
@@ -71,6 +80,7 @@
 #include <sys/inotify.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -88,6 +98,8 @@ struct cfg {
 	int osk_gesture;        /* fingers of the tap that runs osk_cmd, 0 = off */
 	int osk_tap_ms;
 	char osk_cmd[512];
+	char disp_cmd[512];     /* display output on/off command, "" = none */
+	int disp_timeout_ms;
 };
 
 static struct cfg C;
@@ -129,6 +141,8 @@ static void cfg_defaults(struct cfg *c)
 	strcpy(c->backlight, "auto");
 	c->osk_gesture = 3; c->osk_tap_ms = 500;
 	strcpy(c->osk_cmd, "/usr/local/bin/tsx-osk toggle");
+	strcpy(c->disp_cmd, "/usr/local/bin/tsx-display-power");
+	c->disp_timeout_ms = 3000;
 }
 
 static void cfg_load(struct cfg *c)
@@ -155,6 +169,9 @@ static void cfg_load(struct cfg *c)
 		if (!strcmp(p, "OSK_GESTURE")) c->osk_gesture = !strcmp(v, "threefinger") ? 3 : !strcmp(v, "twofinger") ? 2 : 0;
 		I("OSK_TAP_MS", osk_tap_ms);
 		if (!strcmp(p, "OSK_TOGGLE_CMD") && *v) snprintf(c->osk_cmd, sizeof c->osk_cmd, "%s", v);
+		/* An empty value turns the display power control off. */
+		if (!strcmp(p, "DISPLAY_POWER_CMD")) snprintf(c->disp_cmd, sizeof c->disp_cmd, "%s", v);
+		I("DISPLAY_POWER_TIMEOUT_MS", disp_timeout_ms);
 #undef I
 	}
 	fclose(f);
@@ -339,6 +356,60 @@ static void backlight_off(void)
 	set_state("blank");
 }
 
+/* Run DISPLAY_POWER_CMD with "on" or "off" and wait for it (at most
+ * DISPLAY_POWER_TIMEOUT_MS). The wake path turns the output on before the
+ * backlight, so the order matters, and the daemon waits. If the command does
+ * not end in time, the daemon continues and the main loop reaps the child
+ * later. The daemon logs a failure only when the result changes, because it
+ * repeats "off" while the screen is blank. */
+static void display_power(int on)
+{
+	static int last_rc = 0;
+	char cmd[sizeof C.disp_cmd + 8];
+	long long t0 = now_ms(), end;
+	int status, rc = -1;
+	pid_t pid;
+	if (!C.disp_cmd[0]) return;
+	snprintf(cmd, sizeof cmd, "%s %s", C.disp_cmd, on ? "on" : "off");
+	if ((pid = fork()) == 0) {
+		execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+		_exit(127);
+	}
+	if (pid < 0) { logm("fork: %s", strerror(errno)); return; }
+	end = t0 + (C.disp_timeout_ms > 0 ? C.disp_timeout_ms : 3000);
+	for (;;) {
+		pid_t r = waitpid(pid, &status, WNOHANG);
+		if (r == pid) { rc = WIFEXITED(status) ? WEXITSTATUS(status) : 128; break; }
+		if (r < 0 && errno != EINTR) break;
+		if (now_ms() >= end) { logm("%s: no result after %d ms, continuing", cmd, (int)(now_ms() - t0)); rc = 124; break; }
+		struct timespec ts = { 0, 5 * 1000000 };
+		nanosleep(&ts, NULL);
+	}
+	if (rc != last_rc) logm("%s: exit %d", cmd, rc);
+	else if (verbose) logm("%s: exit %d after %lld ms", cmd, rc, now_ms() - t0);
+	last_rc = rc;
+}
+
+static void grab_all(int on);
+
+/* Blank: grab the input first (the wake touch must not reach the dashboard),
+ * then the backlight off, then the display output off. */
+static void screen_off(void)
+{
+	if (C.swallow) grab_all(1);
+	backlight_off();
+	display_power(0);
+}
+
+/* Wake: the display output on first, then the backlight. The panel then
+ * lights up with the current frame, not with a black or stale one. */
+static void screen_on(void)
+{
+	display_power(1);
+	cur_level = -1;
+	backlight_on();
+}
+
 static void grab_all(int on)
 {
 	for (int i = 0; i < ndev; i++) {
@@ -496,10 +567,14 @@ int main(int argc, char **argv)
 	if (getenv("TSX_INPUT_DIR")) indir = getenv("TSX_INPUT_DIR");
 	if (getenv("TSX_STATE_FILE")) statefile = getenv("TSX_STATE_FILE");
 	if (getenv("TSX_RUN_DIR")) ovrdir = getenv("TSX_RUN_DIR");
+	long long off_repeat = getenv("TSX_DISPLAY_REPEAT_MS") ? atoll(getenv("TSX_DISPLAY_REPEAT_MS")) : 30000;
 	sigemptyset(&sa.sa_mask);
 	sigaction(SIGUSR1, &sa, NULL); sigaction(SIGUSR2, &sa, NULL);
 	sigaction(SIGHUP, &sa, NULL); sigaction(SIGTERM, &sa, NULL); sigaction(SIGINT, &sa, NULL);
-	signal(SIGCHLD, SIG_IGN);   /* OSK_TOGGLE_CMD children clean up after themselves */
+	/* SIGCHLD stays at the default: display_power() waits for its child. The
+	 * main loop reaps the OSK_TOGGLE_CMD children (and a display command that
+	 * did not end in time). */
+	signal(SIGCHLD, SIG_DFL);
 
 	cfg_load(&C); find_backlight();
 	{
@@ -519,25 +594,30 @@ int main(int argc, char **argv)
 	     eff_timeout, eff_timeout != C.blank_timeout ? " (runtime override)" : "",
 	     C.day, C.night, C.night_start, C.night_end, C.bl_max, bldir[0] ? bldir : "none",
 	     C.osk_gesture == 3 ? "threefinger" : C.osk_gesture == 2 ? "twofinger" : "off");
+	/* A previous instance can have stopped while the output was off. */
+	display_power(1);
 	backlight_on();
 
 	int blanked = 0, swallowing = 0;
-	long long last_input = now_ms(), last_scan = 0, last_sched = 0, swallow_until = 0;
+	long long last_input = now_ms(), last_scan = 0, last_sched = 0, swallow_until = 0, last_off = 0;
 
 	while (!sig_term) {
 		long long t = now_ms();
+		while (waitpid(-1, NULL, WNOHANG) > 0) ;   /* OSK_TOGGLE_CMD children */
 		if (t - last_scan >= 5000) { scan_devices(blanked && C.swallow); last_scan = t; }
 		if (sig_hup) {
 			sig_hup = 0; cfg_load(&C); load_timeout(0); bldir[0] = 0; find_backlight(); cur_level = -1;
 			if (!blanked) backlight_on();
 			logm("config reloaded");
 		}
-		if (sig_blank) { sig_blank = 0; if (!blanked) { backlight_off(); blanked = 1; if (C.swallow) grab_all(1); } }
+		if (sig_blank) { sig_blank = 0; if (!blanked) { screen_off(); blanked = 1; last_off = t; } }
 		if (sig_wake) { sig_wake = 0; last_input = t;
-			        if (blanked) { blanked = 0; cur_level = -1; backlight_on(); grab_all(0); } }
+			        if (blanked) { blanked = 0; screen_on(); grab_all(0); } }
 		if (!blanked && eff_timeout > 0 && t - last_input >= (long long)eff_timeout * 1000) {
-			backlight_off(); blanked = 1; if (C.swallow) grab_all(1);
+			screen_off(); blanked = 1; last_off = t;
 		}
+		/* A compositor that started during the blank has its output on. */
+		if (blanked && off_repeat > 0 && t - last_off >= off_repeat) { display_power(0); last_off = t; }
 		if (!blanked && !swallowing && t - last_sched >= 5000) { backlight_on(); last_sched = t; }
 		if (swallowing && t >= swallow_until) { swallowing = 0; grab_all(0); if (verbose) logm("ungrab"); }
 
@@ -596,13 +676,14 @@ int main(int argc, char **argv)
 			last_input = t;
 			note_input();
 			if (power && C.power_key && !blanked && !swallowing) {
-				backlight_off(); blanked = 1; if (C.swallow) grab_all(1);
+				screen_off(); blanked = 1; last_off = t;
 				if (verbose) logm("power key: blank");
 				continue;
 			}
 			if (blanked) {
-				blanked = 0; cur_level = -1; backlight_on();
-				if (C.swallow) { swallowing = 1; swallow_until = t + C.swallow_ms; }
+				blanked = 0; screen_on();
+				/* The swallow time starts when the picture is back. */
+				if (C.swallow) { swallowing = 1; swallow_until = now_ms() + C.swallow_ms; }
 				else grab_all(0);
 				if (verbose) logm("wake");
 			} else if (swallowing) {
@@ -613,6 +694,8 @@ int main(int argc, char **argv)
 		}
 	}
 	grab_all(0);
+	if (blanked) display_power(1);
+	cur_level = -1;
 	backlight_on();
 	logm("exit");
 	return 0;
