@@ -91,8 +91,9 @@ docker run --rm --platform linux/amd64 -e TSX_KIOSK_URL="$URL" -v "$TARDIR:/src:
 	sed -i 's#^LABEL=tsxroot  *#LABEL=tsxroot-emmc   #' etc/fstab
 	grep -q '/media/bootfat' etc/fstab || echo '/dev/mmcblk0p1  /media/bootfat  vfat    noauto,rw,noatime,umask=022  0 0' >> etc/fstab
 	grep -q 'LABEL=tsxdata' etc/fstab || echo 'LABEL=tsxdata   /data           ext4    rw,noatime,nofail         0      0' >> etc/fstab
-	for d in data media/bootfat var/log var/lib/tsx var/lib/sendspin root home; do mkdir -p \"\$d\"; done
-	[ -n \"\$TSX_KIOSK_URL\" ] && sed -i \"s|^KIOSK_URL=.*|KIOSK_URL=\\\"\$TSX_KIOSK_URL\\\"|\" etc/kiosk.conf
+	for d in data media/bootfat var/log var/lib/tsx root home; do mkdir -p \"\$d\"; done
+	[ ! -e etc/init.d/tsx-sendspin ] || mkdir -p var/lib/sendspin   # ha profile only
+	[ -n \"\$TSX_KIOSK_URL\" ] && [ -f etc/kiosk.conf ] && sed -i \"s|^KIOSK_URL=.*|KIOSK_URL=\\\"\$TSX_KIOSK_URL\\\"|\" etc/kiosk.conf
 	{ echo 'root=emmc'; echo 'built=(host, mk-tsxroot-emmc.sh $BUILDTS)'; echo 'source_tar_sha256=$TARSHA'; echo 'kernel_modules_ver=$MVER'; echo 'kernel_flavor=$FLAVOR'; } > etc/tsx/emmc-root.info
 	# Size the WORKING image to the content, not to the partition. mke2fs picks
 	# the journal, inode table and flex_bg in proportion to the size it is TOLD.

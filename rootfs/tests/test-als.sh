@@ -71,6 +71,9 @@ rm -f "$T/run/"*; run 1 "ALS_AUTO=0"
 TSX_RUN_DIR=$T/run sh "$ALS" auto on >/dev/null; [ ! -e "$T/run/brightness" ] || bad "auto on kept override"
 run 1 "ALS_AUTO=0"; [ -e "$T/run/als-level" ] && ok "runtime auto on beats ALS_AUTO=0" || bad "runtime auto on"
 TSX_RUN_DIR=$T/run sh "$ALS" auto off >/dev/null; run 1; [ ! -e "$T/run/als-level" ] && ok "runtime auto off" || bad "runtime auto off"
+# the state file follows "auto on|off" at once, with no new loop of the daemon
+TSX_RUN_DIR=$T/run sh "$ALS" auto on >/dev/null; [ "$(st auto)" = on ] && ok "auto on: als.state says on at once" || bad "als.state stays at '$(st auto)' after auto on"
+TSX_RUN_DIR=$T/run sh "$ALS" auto off >/dev/null; [ "$(st auto)" = off ] && ok "auto off: als.state says off at once" || bad "als.state stays at '$(st auto)' after auto off"
 rm -f "$T/run/als-auto"
 # 6b. auto off keeps the level on the glass (fixed level), auto on clears the manual settings
 rm -f "$T/run/"*; printf 'level 9\nbase 5\noffset 4\n' > "$T/run/brightness.state"; echo 4 > "$T/run/brightness-offset"

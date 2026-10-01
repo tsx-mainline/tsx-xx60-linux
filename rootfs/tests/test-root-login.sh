@@ -132,5 +132,19 @@ for f in issue motd; do grep -q 'password is set' "$T/$f" && ok "$f (password se
 printf 'root:*::0:::::\n' > "$SH"; : > "$AK"; ban
 grep -q 'Nobody can log in' "$T/issue" && ok "issue (no password, no key): says nobody can log in" || bad "issue (nothing) wrong"
 
+echo "== the banner follows passwd while the panel runs (tsx-banner check) =="
+cban() { env TSX_BANNER_ART="$ART" TSX_ISSUE_FILE="$T/issue" TSX_MOTD_FILE="$T/motd" TSX_RUN="$T/run" TSX_IP=192.0.2.10 TSX_NO_RESPAWN=1 TSX_ROOTPW_BIN="$RPW" TSX_SHADOW_FILE="$SH" TSX_AUTH_KEYS_FILE="$AK" sh "$BAN" check; }
+printf 'root:*::0:::::\n' > "$SH"; echo "$KEY" > "$AK"; ban
+touch -d '2026-01-01 00:00:00' "$SH"; ban
+grep -q 'no password is set' "$T/issue" || bad "setup of the check test failed"
+cp "$T/issue" "$T/issue.1"; cban
+cmp -s "$T/issue" "$T/issue.1" && ok "check: no change in the files, no rewrite" || bad "check rewrote the banner with no change"
+printf 'root:%s:19000:0:::::\n' "$HASH" > "$SH"; touch -d '2026-02-01 00:00:00' "$SH"; cban
+for f in issue motd; do grep -q 'password is set' "$T/$f" && ! grep -q 'login on this screen is off' "$T/$f" && ok "check: $f says the password is set after passwd" || bad "check: $f stays stale after passwd"; done
+printf 'root:*::0:::::\n' > "$SH"; touch -d '2026-03-01 00:00:00' "$SH"; cban
+grep -q 'no password is set' "$T/issue" && ok "check: the password removed, the banner follows" || bad "check: banner stays at password set"
+grep -q 'tsx-banner watch' "$HERE/profiles/console/overlay/etc/local.d/tsx-banner.start" && ok "the boot hook starts the watch" || bad "boot hook does not start the watch"
+busybox sh -n "$BAN" && ok "tsx-banner passes busybox sh -n" || bad "tsx-banner: busybox sh -n"
+
 echo "$N passed, $F failed"
 [ "$F" = 0 ]

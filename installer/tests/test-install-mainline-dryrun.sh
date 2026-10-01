@@ -107,6 +107,17 @@ grep -q "psr-source must be auto, panel, puf, or none" "$W/o7.txt" && ok "error 
 echo "== 8. --help exits 0 with no payload at all"
 "$DRIVER" --help >/dev/null 2>&1 && ok "--help exits 0"
 
+echo "== 9. the last line names the installed profile"
+grep -q 'mainline kiosk on the eMMC' "$DRIVER" && bad "the final line still says mainline kiosk" || ok "the final line does not say mainline kiosk for every profile"
+grep -q 'DONE. $PANEL now runs mainline, profile $PROFILE' "$DRIVER" && ok "the final line has the profile" || bad "the final line lacks the profile"
+fake_profile() { # fake_profile FILE-OR-EMPTY: run the profile read of step 5 against a fake panel root
+	line=$(grep -m1 '^PROFILE=\$(' "$DRIVER" | sed "s#/etc/tsx/profile#$1#")
+	MSSH='sh -c'; eval "$line"; echo "$PROFILE"
+}
+echo console > "$W/profile-file"
+eq=$(fake_profile "$W/profile-file"); [ "$eq" = console ] && ok "profile file says console: the line shows console" || bad "profile read: $eq"
+eq=$(fake_profile "$W/no-such-file"); [ "$eq" = ha ] && ok "no profile file: ha" || bad "no-file read: $eq"
+
 echo "== $N ok, $F failed"
 [ $F = 0 ] && echo PASS test-install-mainline-dryrun || echo FAIL test-install-mainline-dryrun
 exit $F

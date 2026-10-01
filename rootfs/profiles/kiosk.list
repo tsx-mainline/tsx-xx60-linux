@@ -4,6 +4,7 @@
 
 overlay etc/chromium/policies/managed/tsx-kiosk.json
 overlay etc/init.d/kiosk
+overlay etc/kiosk.conf
 overlay etc/init.d/tsx-setupd
 overlay etc/init.d/tsx-setup-helper
 overlay etc/inittab

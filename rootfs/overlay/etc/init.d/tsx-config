@@ -25,3 +25,9 @@ start() {
 	/usr/local/sbin/tsx-config apply || ewarn "tsx-config apply failed (see above). Continuing with defaults"
 	eend 0   # never fails boot
 }
+# At shutdown, keep a root password that a person set with passwd. A
+# reinstall that keeps /data reads it from panel.conf.
+stop() {
+	/usr/local/sbin/tsx-config sync-root >/dev/null 2>&1
+	return 0
+}

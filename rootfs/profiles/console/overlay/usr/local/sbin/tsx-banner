@@ -8,16 +8,36 @@
 #                     getty processes. init starts them again, so the login
 #                     prompt shows the new address.
 #
-# /etc/local.d/tsx-banner.start runs it at boot and again when the DHCP lease
-# gives an address. /etc/udhcpc/post-bound/tsx-banner runs it at each new lease.
+#   tsx-banner watch  run "check" every few seconds, without end
+#   tsx-banner check  write both files only when the root password or the
+#                     authorized keys changed since the last run. This is how
+#                     the banner follows a passwd or a new key at once.
+#
+# /etc/local.d/tsx-banner.start runs it at boot, starts "watch", and runs it
+# again when the DHCP lease gives an address. /etc/udhcpc/post-bound/tsx-banner
+# runs it at each new lease.
 # The model comes from /run/tsx/model, which /etc/init.d/tsx-hostname writes.
 # Test hooks: TSX_BANNER_ART TSX_ISSUE_FILE TSX_MOTD_FILE TSX_RUN TSX_IP
-# (an empty value means: no address) TSX_ROOTPW_BIN TSX_PKILL TSX_NO_RESPAWN=1.
+# (an empty value means: no address) TSX_ROOTPW_BIN TSX_PKILL TSX_NO_RESPAWN=1
+# TSX_SHADOW_FILE TSX_AUTH_KEYS_FILE TSX_WATCH_SEC.
 set -u
+SHADOW=${TSX_SHADOW_FILE:-/etc/shadow}
+KEYS=${TSX_AUTH_KEYS_FILE:-/root/.ssh/authorized_keys}
 ART=${TSX_BANNER_ART:-/etc/tsx/banner.art}
 ISSUE=${TSX_ISSUE_FILE:-/etc/issue}
 MOTD=${TSX_MOTD_FILE:-/etc/motd}
 RUN=${TSX_RUN:-/run/tsx}
+
+# the files that decide which root password case the banner shows
+stamp() { stat -c '%Y:%s' "$SHADOW" "$KEYS" 2>/dev/null | tr '\n' ' '; }
+
+case "${1:-}" in
+watch)
+	while :; do sleep "${TSX_WATCH_SEC:-3}"; "$0" check; done;;
+check)
+	[ "$(stamp)" != "$(cat "$RUN/banner.stamp" 2>/dev/null)" ] || exit 0;;
+esac
+mkdir -p "$RUN" 2>/dev/null; stamp > "$RUN/banner.stamp" 2>/dev/null
 
 model=$(head -n 1 "$RUN/model" 2>/dev/null) || model=
 [ -n "$model" ] || model="TSX panel"

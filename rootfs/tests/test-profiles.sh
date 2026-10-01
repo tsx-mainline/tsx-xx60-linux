@@ -63,7 +63,7 @@ for s in compile-kiosk cursors chromium-es2 sendspin lva; do sh "$PS" has ha ste
 echo "== console =="
 sh "$PS" stage console "$T/console" >/dev/null
 (cd "$T/console" && find . \( -type f -o -type l \) | sort) > "$T/console.files"
-bad_names=$(grep -E 'mqtt|esphome|voice|sendspin|lva|chromium|kiosk|setupd|setup-helper|tsx-osk|tsx-overlay|kiosk-set-token|\.json$' "$T/console.files" | grep -v 'etc/kiosk.conf$')
+bad_names=$(grep -E 'mqtt|esphome|voice|sendspin|lva|chromium|kiosk|setupd|setup-helper|tsx-osk|tsx-overlay|kiosk-set-token|\.json$' "$T/console.files")
 eq "$bad_names" "" "no Home Assistant, MQTT, ESPHome, voice, Sendspin, Chromium, kiosk or setup file in the staged tree"
 for s in compile-kiosk cursors chromium-es2 sendspin lva; do sh "$PS" has console step $s && bad "console: build step $s" || ok "console: no build step $s"; done
 pk=$( { sh "$PS" packages console "$HERE/packages.txt"; sh "$PS" packages console "$HERE/packages-tsx.txt"; } | grep -E 'chromium|mosquitto|py3-|mpv|sendspin|tensorflow|sway|seatd|cage|wlroots|squeekboard|wvkbd|mesa|libinput|compat-libdns' )
@@ -79,6 +79,16 @@ done
 eq "$(sh "$PS" entries console user | tr '\n' ' ')" "" "console has no kiosk or setup user"
 [ -e "$T/console/usr/local/sbin/tsx-config" ] && [ -e "$T/console/usr/local/sbin/tsx-autoupdate" ] && ok "console has tsx-config and tsx-autoupdate" || bad "console lacks tsx-config or tsx-autoupdate"
 [ -e "$T/console/usr/local/lib/tsx/board.sh" ] && ok "console has the board file" || bad "console lacks the board file"
+[ ! -e "$T/console/etc/kiosk.conf" ] && ok "console: no /etc/kiosk.conf (tsx-idled and tsx-buttons use their built-in defaults)" || bad "console ships /etc/kiosk.conf"
+# tsx-data moves /var/lib/sendspin only when the image has the player
+dirs_for() { # dirs_for SENDSPIN-INIT-PATH: the DIRS list of tsx-data
+	sed -n '/^DIRS=/,/^\[ -e \/etc\/init.d\/tsx-sendspin/p' "$HERE/overlay/etc/init.d/tsx-data" | sed "s#/etc/init.d/tsx-sendspin#$1#" > "$T/dirs.sh"
+	sh -c '. "$1"; echo "$DIRS"' sh "$T/dirs.sh"
+}
+touch "$T/fake-sendspin"
+case "$(dirs_for "$T/fake-sendspin")" in *var/lib/sendspin*) ok "tsx-data: the ha profile moves /var/lib/sendspin";; *) bad "tsx-data: no sendspin dir with the player";; esac
+case "$(dirs_for "$T/no-such-sendspin")" in *sendspin*) bad "tsx-data: console gets /var/lib/sendspin";; *) ok "tsx-data: console has no /var/lib/sendspin";; esac
+grep -q '\[ -r /etc/kiosk.conf \] && \. /etc/kiosk.conf' "$HERE/overlay/etc/init.d/tsx-setup" && ok "tsx-setup (base): reads /etc/kiosk.conf only when it exists" || bad "tsx-setup: unguarded /etc/kiosk.conf"
 eq "$(cat "$T/console/etc/tsx/profile" 2>/dev/null)" "console" "console has the marker /etc/tsx/profile"
 grep -Eq '^tty1::respawn:/sbin/getty ' "$T/console/etc/inittab" && ok "console: getty on tty1" || bad "console: no getty on tty1"
 grep -Eq '^ttyAML0::respawn:/sbin/getty ' "$T/console/etc/inittab" && ok "console: getty on the serial port" || bad "console: no serial getty"
@@ -88,6 +98,7 @@ grep -Eq '^ttyAML0::respawn:/sbin/getty ' "$T/console/etc/inittab" && ok "consol
 
 echo "== kiosk =="
 sh "$PS" stage kiosk "$T/kiosk" >/dev/null
+[ -e "$T/kiosk/etc/kiosk.conf" ] && ok "kiosk: has /etc/kiosk.conf" || bad "kiosk lacks /etc/kiosk.conf"
 (cd "$T/kiosk" && find . \( -type f -o -type l \) | sort) > "$T/kiosk.files"
 bad_names=$(grep -E 'mqtt|esphome|voice|sendspin|lva|kiosk-set-token' "$T/kiosk.files")
 eq "$bad_names" "" "no Home Assistant, MQTT, ESPHome, voice or Sendspin file"
@@ -100,6 +111,10 @@ eq "$(cat "$T/kiosk/etc/tsx/profile" 2>/dev/null)" "kiosk" "kiosk has the marker
 [ ! -e "$T/kiosk/etc/tsx/boot-verbose" ] && ok "kiosk: no boot-verbose flag (the splash stays)" || bad "kiosk has the boot-verbose flag"
 grep -Eq '^tty[0-9]::' "$T/ha/etc/inittab" && bad "ha: getty on tty1" || ok "ha: no getty on tty1"
 grep -Eq '^ttyAML0::respawn:/sbin/getty ' "$T/ha/etc/inittab" && ok "ha: serial getty stays" || bad "ha: no serial getty"
+for p in console kiosk ha; do
+	grep -qx ttyAML0 "$T/$p/etc/securetty" 2>/dev/null && grep -qx tty1 "$T/$p/etc/securetty" 2>/dev/null \
+		&& ok "$p: securetty lets root log in on the serial port and on tty1" || bad "$p: securetty has no ttyAML0 or tty1 (root cannot log in on the console)"
+done
 
 echo "== nesting: console in kiosk in ha =="
 comm -23 "$T/console.files" "$T/kiosk.files" | grep -v -e etc/inittab -e etc/motd -e etc/tsx/profile -e etc/tsx/banner.art -e etc/local.d/tsx-banner.start -e etc/udhcpc/post-bound/tsx-banner -e etc/tsx/boot-verbose -e usr/local/sbin/tsx-banner > "$T/lost"

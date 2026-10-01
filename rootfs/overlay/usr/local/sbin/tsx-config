@@ -20,6 +20,13 @@
 #                                  (hostname, root password, ssh key, voice
 #                                  enable/disable). The tsx-config OpenRC
 #                                  service runs it early at boot.
+#   tsx-config sync-root          (panel, root) copy the root password hash of
+#                                  /etc/shadow into panel.conf when a person
+#                                  changed it with passwd. A reinstall that
+#                                  keeps /data then keeps the password. It
+#                                  never prints the hash. apply and the stop
+#                                  of the tsx-config service run it too, and
+#                                  so does the installer before a reinstall.
 #   tsx-config setup               (panel, root) show the on-panel setup page
 #                                  for one ~15 min window even if KIOSK_URL is
 #                                  already set. It touches /run/tsx/setup-open
@@ -348,6 +355,8 @@ clock_status() {
 # Warn when the ESPHome API has neither a key nor an allow-list. Then anyone
 # on the LAN can use it (docs/ha.md "Security").
 warn_open_api() {
+	# The console profile has no ESPHome device: nothing listens on port 6053.
+	[ "$(cat "$PREFIX/etc/tsx/profile" 2>/dev/null)" != console ] || return 0
 	key=$(cfg_get HA_API_KEY) || key=
 	allow=$(cfg_get HA_ALLOW_FROM) || allow=
 	[ -z "$key" ] && [ -z "$allow" ] || return 0
@@ -408,6 +417,25 @@ apk_repos() {
 	} > "$tmp"
 	if cmp -s "$tmp" "$repos"; then rm -f "$tmp"; return 0; fi
 	chmod 644 "$tmp" && mv "$tmp" "$repos" && log "apk repositories: tsx-aports at $url ($br). The next apk update / tsx-autoupdate check uses it"
+}
+
+# sync_root: keep panel.conf in step with a root password that a person set
+# with passwd. The rootfs is new after a reinstall, but /data stays, so the
+# hash in panel.conf is the only copy that survives. Rules:
+#   - a locked or empty field changes nothing (a key-only panel keeps what
+#     panel.conf has)
+#   - the hash must pass the same check as `set`
+#   - the log line never holds the hash
+sync_root() {
+	[ -r "$PREFIX/etc/shadow" ] || return 0
+	[ -f "$TSX_CONF" ] || return 0
+	cur=$(awk -F: '$1=="root"{print $2}' "$PREFIX/etc/shadow")
+	case "$cur" in ''|'!'*|'*'*) return 0;; esac
+	[ "$cur" != "$(cfg_get ROOT_PASSWORD_HASH 2>/dev/null)" ] || return 0
+	val_ok ROOT_PASSWORD_HASH "$cur" || return 0
+	cfg_set ROOT_PASSWORD_HASH "$cur" || return 0
+	mkdir -p "$STATE" && (umask 077; printf '%s' "$(printf '%s' "$cur" | sha256sum | cut -d' ' -f1)" > "$STATE/.root-hash-applied")
+	log "root password hash saved to panel.conf, so a reinstall keeps it"
 }
 
 apply() {
@@ -680,6 +708,8 @@ apply() {
 			&& log "root password field was empty: locked it"
 	fi
 
+	sync_root
+
 	key=$(cfg_get SSH_AUTHORIZED_KEY) || key=
 	if [ -n "$key" ]; then
 		mkdir -p "$PREFIX/root/.ssh"; chmod 700 "$PREFIX/root/.ssh"
@@ -726,6 +756,9 @@ validate) [ $# = 2 ] || usage; key_known "$1" && val_ok "$1" "$2" || exit 1;;
 unset) [ $# = 1 ] || usage; key_known "$1" || die "unknown key: $1"; cfg_unset "$1";;
 show) [ $# = 0 ] || usage; cfg_show;;
 apply) [ $# = 0 ] || usage; apply;;
+sync-root) [ $# = 0 ] || usage
+	[ "${TSX_APPLY_ALLOW_NONROOT:-0}" = 1 ] || [ "$(id -u)" = 0 ] || die "sync-root must run as root"
+	sync_root;;
 setup) [ $# = 0 ] || usage; setup;;
 *) usage;;
 esac

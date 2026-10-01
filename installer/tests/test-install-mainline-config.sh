@@ -83,6 +83,27 @@ OUT=$(PATH="$W/bin3:$PATH" STUB_CONF="$W/nologin.conf" TSX_PANEL_KIND=mainline "
 echo "$OUT" | grep -q "No root password and no SSH public key" && ok "reinstall with --yes: a panel.conf with no root login stops the install" || bad "no stop on the panel's own panel.conf: $OUT"
 OUT=$(PATH="$W/bin3:$PATH" STUB_CONF="$W/keyonly.conf" TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --yes --results "$W/res3/c.txt" </dev/null 2>&1)
 echo "$OUT" | grep -q "No root password and no SSH public key" && bad "a panel.conf with a key was refused: $OUT" || ok "reinstall with --yes: a panel.conf with a key passes the check"
+# a reinstall keeps the root password of the panel (tsx-config sync-root)
+mkdir -p "$W/bin9" "$W/res9"
+cat > "$W/bin9/ssh" <<'STUB'
+#!/bin/sh
+echo "$*" >> "$STUB_LOG"
+case "$*" in
+*"cat /data/tsx/panel.conf"*) cat "$STUB_CONF";;
+*"tsx-config sync-root"*) exit 0;;
+*"tsx-config get ROOT_PASSWORD_HASH"*) echo '$6$stubsalt$stubhashvaluestubhashvalue1234';;
+*" true") exit 0;;
+*) exit 1;;
+esac
+STUB
+chmod +x "$W/bin9/ssh"
+: > "$W/res9/log"
+OUT=$(PATH="$W/bin9:$PATH" STUB_LOG="$W/res9/log" STUB_CONF="$W/keyonly.conf" TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --yes --results "$W/res9/a.txt" </dev/null 2>&1)
+grep -q 'tsx-config sync-root' "$W/res9/log" && ok "reinstall: the panel saves its current root hash before the install" || bad "sync-root not called: $OUT"
+cp "$W/keyonly.conf" "$W/cfg-nohash.conf"
+OUT=$(PATH="$W/bin9:$PATH" STUB_LOG="$W/res9/log" STUB_CONF="$W/keyonly.conf" TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --config "$W/cfg-nohash.conf" --results "$W/res9/b.txt" </dev/null 2>&1)
+[ "$(TSX_CONF="$W/cfg-nohash.conf" "$TSX_CONFIG_BIN" get ROOT_PASSWORD_HASH 2>/dev/null)" = '$6$stubsalt$stubhashvaluestubhashvalue1234' ] && ok "reinstall with a --config file that has no password: the panel hash is carried over" || bad "hash not carried over: $OUT"
+echo "$OUT" | grep -q 'stubhashvalue' && bad "the installer printed a hash" || ok "the installer output holds no hash"
 
 echo "== 4. interactive prompts, answers fed on stdin (installer/lib/tsx-config-prompt.sh) =="
 PCONF="$W/prompted.conf"

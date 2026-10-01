@@ -268,6 +268,14 @@ if [ "$DRYRUN" = 1 ]; then
 	log "== dry-run done"; exit 0
 fi
 
+# ------------------------------------------------ root password on a reinstall --
+# A password set with passwd lives only in /etc/shadow of the old root image.
+# The new image has a locked root. Before the install, the panel copies its
+# current hash into its panel.conf (tsx-config sync-root). The hash is never
+# printed or logged here.
+if [ "$KIND" = mainline ] && [ "$DRYRUN" != 1 ] && $MSSH true >/dev/null 2>&1; then
+	$MSSH 'tsx-config sync-root' >/dev/null 2>&1 || log "  note: the panel could not save its root password (old image?): the new image may have a locked root"
+fi
 # ---------------------------------------------------- panel configuration --
 # docs/rootfs.md "Panel configuration". --config FILE is used as it is.
 # --yes with no --config keeps the old behavior that uses only --kiosk-url
@@ -311,6 +319,16 @@ elif [ "$KIND" = mainline ]; then
 	if [ "$ROOT_LOGIN_CHECK" = later ]; then tsx_config_has_root_login "$CONFIG" || root_login_stop; fi
 else
 	log "== panel configuration: --yes with no --config: skipping prompts, keeping only --kiosk-url (no panel.conf will be written)"
+fi
+# A reinstall with a --config file that has no root password keeps the password
+# of the panel (the file may still give a new key).
+if [ -n "$CONFIG" ] && [ "$KIND" = mainline ] && [ "$DRYRUN" != 1 ] \
+	&& [ -z "$(TSX_CONF="$CONFIG" "$TSX_CONFIG_BIN" get ROOT_PASSWORD_HASH 2>/dev/null || true)" ]; then
+	keep=$($MSSH 'tsx-config get ROOT_PASSWORD_HASH' 2>/dev/null || true)
+	if [ -n "$keep" ] && TSX_CONF="$CONFIG" "$TSX_CONFIG_BIN" set ROOT_PASSWORD_HASH "$keep" >/dev/null 2>&1; then
+		log "== the panel keeps its current root password (the config file has none)"
+	fi
+	keep=
 fi
 [ -n "$CONFIG" ] && { TSX_CONF="$CONFIG" "$TSX_CONFIG_BIN" set KERNEL_FLAVOR "$KERNEL" || die "could not record KERNEL_FLAVOR in $CONFIG"; }
 
@@ -590,9 +608,12 @@ until kiosk_up; do
 	[ $w -ge $((hb + 30)) ] && { hb=$w; log "  still waiting for mainline ssh (root=/dev/mmcblk1p8) on $PANEL: ${w}/420 s"; }
 	[ $w -lt 420 ] || die "the kiosk did not come up on $PANEL within 420 s after the install (OpenSSH on port 22 of the new system). The installer verified the eMMC writes before the reboot. The panel most likely booted with another DHCP address, because some images used a random eth0 MAC on the first boot. Power-cycle the panel once, or find it in the leases of your DHCP server. Then check it with ssh root@<its-ip>"
 done
-KIOSK_UP=$($MSSH 'pgrep -f chromium >/dev/null && echo yes || echo no' 2>/dev/null) || KIOSK_UP=unknown
+KIOSK_UP=$($MSSH 'if [ -e /etc/init.d/kiosk ]; then pgrep -f "[c]hromium" >/dev/null && echo yes || echo no; else echo "not in this image profile"; fi' 2>/dev/null) || KIOSK_UP=unknown
 log "  ok: root=/dev/mmcblk1p8, kiosk running=$KIOSK_UP"
-log "== DONE. $PANEL is now the mainline kiosk on the eMMC ($KERNEL kernel). ssh root@$PANEL (the root password that you gave, or your SSH key)."
+# the profile of the installed image: /etc/tsx/profile (a missing file means ha)
+PROFILE=$($MSSH 'cat /etc/tsx/profile 2>/dev/null || echo ha' 2>/dev/null | head -n 1 | tr -cd 'a-z0-9') || PROFILE=
+[ -n "$PROFILE" ] || PROFILE=unknown
+log "== DONE. $PANEL now runs mainline, profile $PROFILE, on the eMMC ($KERNEL kernel). ssh root@$PANEL (the root password that you gave, or your SSH key)."
 # a newly generated ESPHome API key (installer/lib/tsx-config-prompt.sh), once
 if [ "$(type -t tsx_config_print_api_key)" = function ]; then tsx_config_print_api_key "$PANEL"; fi
 if [ "$(type -t tsx_config_print_root_login)" = function ]; then tsx_config_print_root_login "$CONFIG"; fi

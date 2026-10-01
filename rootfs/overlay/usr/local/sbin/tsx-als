@@ -152,6 +152,13 @@ do_auto() {
 	esac
 }
 
+# The "auto" line of als.state follows a change at once. The daemon writes the
+# file once per loop, and a ramp of the backlight can take a few seconds.
+state_auto() {
+	[ -r "$R/als.state" ] || return 0
+	sed "s/^auto .*/auto $1/" "$R/als.state" > "$R/als.state.tmp.$$" && mv -f "$R/als.state.tmp.$$" "$R/als.state"
+}
+
 state_field() { [ -r "$R/als.state" ] && sed -n "s/^$1 //p" "$R/als.state" | head -1; }
 
 case ${1:-} in
@@ -163,7 +170,7 @@ status)
 auto)
 	mkdir -p "$R"
 	case ${2:-} in
-	on|off) do_auto "$2"
+	on|off) do_auto "$2"; state_auto "$2"
 	     # Keep the setting in panel.conf. If that fails, the run-time change stays.
 	     "$CONFIG" set AUTO_BRIGHTNESS "$2" && "$CONFIG" apply \
 	         || echo "tsx-als: could not save AUTO_BRIGHTNESS in panel.conf" >&2;;
@@ -260,6 +267,7 @@ while :; do
 				while [ "$b" -ne "$tgt" ]; do
 					if [ "$b" -lt "$tgt" ]; then b=$((b + 1)); else b=$((b - 1)); fi
 					echo "$b" > "$bd/brightness" 2>/dev/null || break
+					auto_on || break   # "auto off" came in: stop the ramp
 					[ "$b" -ne "$tgt" ] && usleep $(( ALS_RAMP_MS * 1000 ))
 				done
 			else
@@ -279,6 +287,8 @@ while :; do
 		thr=$(( rep * ALS_REPORT_PCT / 100 )); [ "$thr" -ge 1 ] || thr=1
 		if [ "$d" -gt "$thr" ] || [ $(( now - rep_t )) -ge "$ALS_REPORT_MAX" ]; then rep=$lx; rep_t=$now; fi
 	fi
+	# "auto on|off" may have come in during the ramp: report the state now
+	if auto_on; then a=on; else a=off; fi
 	printf 'lux %s\nraw %s\nreport %s\nlevel %s\nauto %s\n' "$lx" "$(( (raw + 5) / 10 ))" "$rep" "$cur" "$a" > "$R/als.state.tmp" \
 		&& mv -f "$R/als.state.tmp" "$R/als.state"
 

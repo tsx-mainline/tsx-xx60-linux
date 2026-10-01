@@ -34,7 +34,6 @@ overlay etc/init.d/tsx-ledbar
 overlay etc/init.d/tsx-panelctl
 overlay etc/init.d/tsx-setup
 overlay etc/init.d/tsx-tfa-dsp
-overlay etc/kiosk.conf
 overlay etc/local.d/tsx-ip.start
 overlay etc/logrotate.d/tsx-als
 overlay etc/logrotate.d/tsx-autoupdate
@@ -45,6 +44,7 @@ overlay etc/periodic/15min/tsx-savetime
 overlay etc/periodic/hourly/tsx-emmc-state
 overlay etc/periodic/weekly/tsx-fstrim
 overlay etc/profile.d/tsx.sh
+overlay etc/securetty
 overlay etc/ssh/sshd_config.d/tsx.conf
 overlay etc/sysctl.d/tsx.conf
 overlay etc/tsx/als.conf

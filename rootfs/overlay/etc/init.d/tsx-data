@@ -27,7 +27,9 @@ depend() {
 	before bootmisc syslog tsx-setup
 }
 
-DIRS="var/lib/kiosk var/log var/lib/tsx var/lib/sendspin root home"
+DIRS="var/lib/kiosk var/log var/lib/tsx root home"
+# Only the ha profile has the Sendspin player and its state directory.
+[ -e /etc/init.d/tsx-sendspin ] && DIRS="var/lib/kiosk var/log var/lib/tsx var/lib/sendspin root home"
 LOG=/run/tsx-data.log
 
 # stdout: "file <sha256> <relpath>" per regular file and "link <target>

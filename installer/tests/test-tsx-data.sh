@@ -26,6 +26,7 @@ printf "https://dl-cdn.alpinelinux.org/alpine/v3.24/main\nhttps://dl-cdn.alpinel
 apk add -q --root /r --initdb --no-cache --keys-dir /etc/apk/keys --repositories-file /r/etc/apk/repositories busybox busybox-suid >/dev/null
 mkdir -p /r/etc/init.d /r/data /r/proc /r/run
 cp /tsx-data.src /r/etc/init.d/tsx-data; chmod 755 /r/etc/init.d/tsx-data
+touch /r/etc/init.d/tsx-sendspin   # the ha profile has the player, so its state dir moves too
 
 # fake openrc logging functions + a driver that sources the real script and
 # calls start(), exactly as /sbin/openrc-run would

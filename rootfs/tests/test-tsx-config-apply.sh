@@ -123,6 +123,11 @@ set_ HA_ALLOW_FROM 192.0.2.9 >/dev/null
 OUT=$(apply_ 2>&1)
 case "$OUT" in *"WARNING"*) bad "apply warns with HA_ALLOW_FROM set";; *) ok "no warning once HA_ALLOW_FROM is set";; esac
 TSX_CONF="$CFG" busybox sh "$SCRIPT" unset HA_ALLOW_FROM >/dev/null 2>&1 || true
+mkdir -p "$FX/etc/tsx"; echo console > "$FX/etc/tsx/profile"
+OUT=$(apply_ 2>&1)
+case "$OUT" in *"WARNING: the ESPHome API"*) bad "the console profile warns about an ESPHome API";; *) ok "the console profile has no open-API warning (no ESPHome device)";; esac
+rm -f "$FX/etc/tsx/profile"
+TSX_CONF="$CFG" busybox sh "$SCRIPT" unset HA_ALLOW_FROM >/dev/null 2>&1 || true
 set_ HA_API_KEY "$KEY" >/dev/null
 OUT=$(apply_ 2>&1)
 case "$OUT" in *"WARNING"*) bad "apply warns with HA_API_KEY set";; *) ok "no warning with HA_API_KEY set (HA_ALLOW_FROM optional)";; esac
@@ -323,6 +328,26 @@ case "$out" in *"apply done"*) ok "apply reached its end (apply done)";; *) bad 
 TSX_CONF="$CFG2" busybox sh "$SCRIPT" set KIOSK_URL https://ha.example.org >/dev/null
 PATH="$W/bin:$PATH" env TSX_CONF="$CFG2" TSX_RUN="$FX2/run" TSX_STATE_DIR="$FX2/var/lib/tsx" TSX_APPLY_PREFIX="$FX2" TSX_APPLY_ALLOW_NONROOT=1 busybox sh "$SCRIPT" apply >/dev/null 2>&1
 grep -q 'tsx-buttons reload' "$W/rc.log" 2>/dev/null && ok "the first KIOSK_URL (setup page save) reloads tsx-buttons" || bad "first KIOSK_URL did not reload tsx-buttons"
+
+echo "== sync-root: a password set with passwd is saved into panel.conf =="
+FXS="$W/fx-sync"; mkdir -p "$FXS/etc" "$FXS/root" "$W/sync"
+CFGS="$W/sync/panel.conf"
+syncr() { env TSX_CONF="$CFGS" TSX_RUN="$FXS/run" TSX_STATE_DIR="$FXS/var/lib/tsx" TSX_APPLY_PREFIX="$FXS" TSX_APPLY_ALLOW_NONROOT=1 busybox sh "$SCRIPT" "$@"; }
+printf 'PANEL_NAME="x"\n' > "$CFGS"
+echo 'root:*:19000:0:99999:7:::' > "$FXS/etc/shadow"
+syncr sync-root >/dev/null 2>&1; ! grep -q ROOT_PASSWORD_HASH "$CFGS" && ok "sync-root: a locked field adds nothing" || bad "sync-root: locked field written"
+echo 'root:$6$passwdsalt$handsethashvalue0123456789:19000:0:99999:7:::' > "$FXS/etc/shadow"
+out=$(syncr sync-root 2>&1); rc=$?
+grep -q '^ROOT_PASSWORD_HASH="\$6\$passwdsalt\$handsethashvalue0123456789"$' "$CFGS" && ok "sync-root: the hash from passwd is in panel.conf" || bad "sync-root: hash not saved"
+[ $rc = 0 ] && ! printf '%s' "$out" | grep -q 'handsethash' && ok "sync-root: exit 0 and the output holds no hash" || bad "sync-root: failed or printed the hash"
+[ "$(stat -c %a "$CFGS")" = 600 ] && ok "sync-root: panel.conf stays mode 600" || bad "sync-root: panel.conf mode"
+echo 'root:$6$newsalt$anotherhashvalue0123456789:19000:0:99999:7:::' > "$FXS/etc/shadow"
+syncr apply >/dev/null 2>&1
+grep -q 'anotherhashvalue' "$CFGS" && grep -q 'anotherhashvalue' "$FXS/etc/shadow" && ! grep -q handsethash "$CFGS" && ok "apply: a later passwd replaces the saved hash and is not undone" || bad "apply: passwd change lost"
+echo 'root:*:19000:0:99999:7:::' > "$FXS/etc/shadow"
+syncr apply >/dev/null 2>&1
+grep -q '^root:\$6\$newsalt\$anotherhashvalue' "$FXS/etc/shadow" && ok "reinstall (locked root, kept panel.conf): the saved hash is applied again" || bad "reinstall: saved hash not applied"
+rm -f "$CFGS"; syncr sync-root >/dev/null 2>&1; [ ! -e "$CFGS" ] && ok "sync-root: no panel.conf, nothing created" || bad "sync-root created panel.conf"
 
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-tsx-config-apply || echo FAIL test-tsx-config-apply
