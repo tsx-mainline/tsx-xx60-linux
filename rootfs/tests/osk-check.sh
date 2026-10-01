@@ -7,7 +7,7 @@
 # Usage: osk-check.sh CFG [IP]   -> results/perf-CFG-osk.txt, -osk-shown.png
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd); ROOTFS_DIR=$HERE/../../rootfs
-CFG=${1:?cfg}; IP=${2:-${PANEL_IP:?set PANEL_IP or pass IP as arg 2}}; R=$HERE/../results; PORT=${PORT:-9222}
+CFG=${1:?cfg}; IP=${2:-${PANEL_IP:?set PANEL_IP or pass IP as arg 2}}; R=$HERE/../results; PORT=${PORT:-9222}; mkdir -p "$R"
 p() { sshpass -p tsx ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR root@$IP "$@"; }
 CDP="python3 $ROOTFS_DIR/tests/cdp.py $PORT"
 tap() { python3 $ROOTFS_DIR/tests/tap.py --ip $IP "$@" >/dev/null; }

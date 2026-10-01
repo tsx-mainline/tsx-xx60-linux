@@ -128,6 +128,7 @@ EVT_LE_META = 0x3E
 LE_ADV_REPORT = 0x02
 LE_CONN_COMPLETE = (0x01, 0x0A)
 
+OP_INQUIRY_CANCEL = 0x0402
 OP_READ_BD_ADDR = 0x1009
 OP_LE_SET_SCAN_PARAMS = 0x200B
 OP_LE_SET_SCAN_ENABLE = 0x200C
@@ -243,6 +244,7 @@ class Scanner:
         self.client_modes = {}   # adv client -> the scan mode it asked for
         self.scan_mode = MODE_PASSIVE   # the mode of the scan that runs
         self.scan_failed = False
+        self.discovery_dirty = False  # an active scan ran: the kernel thinks discovery runs
         self.sent_state = {}     # adv client -> the last state message sent
         self.cc_params = {}      # opcode -> return parameters of the last Command Complete
         self.link_event_at = -100.0  # a link came up or went down (retry the scan sooner)
@@ -278,6 +280,8 @@ class Scanner:
         self.hci = sock
         self.hci_error_logged = False
         self.le_enabled = False
+        # An earlier tsx-btscan can have left an active scan behind.
+        self.discovery_dirty = True
         _LOGGER.info("HCI socket open on %s", "the fake controller" if fake else self.hci_name)
         self.publish_address()
 
@@ -386,6 +390,7 @@ class Scanner:
                 # Stop a scan that may still run (from us or from the kernel):
                 # the controller refuses new parameters while it scans.
                 self.send_cmd(OP_LE_SET_SCAN_ENABLE, bytes((0, 0)))
+                self.reset_discovery()
                 mode = self.wanted_mode()
                 params = struct.pack("<BHHBB", mode, SCAN_INTERVAL, SCAN_WINDOW, 0, 0)
                 st = self.send_cmd(OP_LE_SET_SCAN_PARAMS, params)
@@ -399,17 +404,40 @@ class Scanner:
                 self.scanning = True
                 self.scan_failed = False
                 self.scan_mode = mode
+                if mode == MODE_ACTIVE:
+                    self.discovery_dirty = True
                 self.last_report = time.monotonic()
                 _LOGGER.info("%s scan on (interval %d ms, window %d ms)", "active" if mode else "passive",
                              SCAN_INTERVAL * 625 // 1000, SCAN_WINDOW * 625 // 1000)
             else:
                 self.send_cmd(OP_LE_SET_SCAN_ENABLE, bytes((0, 0)))
                 self.scanning = False
+                self.reset_discovery()
                 _LOGGER.info("scan off (%s)", "a link comes up" if self.paused else "no clients")
             return True
         except OSError as err:
             self.hci_fail("HCI command", err)
             return False
+
+    def reset_discovery(self):
+        """Set the discovery state of the kernel back to stopped.
+
+        The kernel tracks the scan commands on the raw socket. When an active
+        scan starts, it sets its discovery state to "finding", and only a
+        stop of its own discovery sets it back. While the state is not
+        "stopped", the kernel does not start the scan for a pending LE link,
+        and every connect() runs into the 20 s timeout. The Command Complete
+        of Inquiry Cancel sets the state to "stopped" when no active scan
+        runs. The CSR8811 answers "Command Disallowed" (no inquiry runs), and
+        the kernel takes that answer as success. Call this with the scan off.
+        """
+        if not self.discovery_dirty or self.hci is None:
+            return
+        st = self.send_cmd(OP_INQUIRY_CANCEL)
+        if st in (0x00, 0x0C):
+            self.discovery_dirty = False
+        else:
+            _LOGGER.warning("Inquiry Cancel: %s", "no answer" if st is None else f"status 0x{st:02x}")
 
     def read_hci(self):
         try:
@@ -483,6 +511,12 @@ class Scanner:
         self.paused = True
         if self.scanning:
             self.set_scan(False)
+        else:
+            # The kernel stopped the scan: it can still be in discovery
+            try:
+                self.reset_discovery()
+            except OSError as err:
+                self.hci_fail("HCI command", err)
 
     def scan_resume(self):
         if self.paused:

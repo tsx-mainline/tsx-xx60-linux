@@ -11,7 +11,7 @@
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 PFX=${1:?prefix}; IP=${2:-${PANEL_IP:?set PANEL_IP or pass IP as arg 2}}
-R=$HERE/results; OUT=$R/$PFX.txt
+R=$HERE/results; OUT=$R/$PFX.txt; mkdir -p "$R"
 p() { sshpass -p tsx ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR root@$IP "$@"; }
 shot() { p 'su -s /bin/sh kiosk -c "XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=$(ls /run/user/1000 | grep -m1 "^wayland-[0-9]*$") grim -"' > "$R/$PFX-$1.png"; echo "screenshot $PFX-$1.png ($(stat -c %s "$R/$PFX-$1.png") bytes)"; }
 tap() { python3 $HERE/tests/tap.py --ip $IP "$@" >/dev/null; }

@@ -324,10 +324,11 @@ assert seen == want, seen
 s.close()
 EOF
 sleep 1.5
-python3 - "$W/hci.log" <<'EOF' && ok "passive scan: disable, parameters (type passive, 100 ms/100 ms, public, no filter), enable without duplicate filter. Disable after the last client left" || { bad "HCI commands"; cat "$W/hci.log"; }
+python3 - "$W/hci.log" <<'EOF' && ok "passive scan: disable, one Inquiry Cancel (kernel discovery state), parameters (type passive, 100 ms/100 ms, public, no filter), enable without duplicate filter. Disable after the last client left" || { bad "HCI commands"; cat "$W/hci.log"; }
 import sys
 cmds = [l.split()[1:] for l in open(sys.argv[1]) if l.startswith("cmd ") and not l.startswith("cmd 1009")]
-assert cmds[:3] == [["200c", "0000"], ["200b", "00a000a0000000"], ["200c", "0100"]], cmds
+assert cmds[:4] == [["200c", "0000"], ["0402"], ["200b", "00a000a0000000"], ["200c", "0100"]], cmds
+assert cmds.count(["0402"]) == 1, cmds
 assert cmds[-1] == ["200c", "0000"], cmds
 EOF
 kill "$SCAN" 2>/dev/null; wait "$SCAN" 2>/dev/null
@@ -384,6 +385,11 @@ s.send(b"m\x00")
 st = states(s, 1.5)
 assert st and st[-1] == (2, 0), st
 assert scan_types()[-1] == "00", scan_types()
+# after the active scan: disable, Inquiry Cancel (the kernel set its
+# discovery state to "finding"), then the passive parameters
+cmds = [" ".join(l.split()[1:]) for l in open(hcilog) if l.startswith("cmd ")]
+last = len(cmds) - 1 - cmds[::-1].index("200b 00a000a0000000")
+assert cmds[last - 2:last] == ["200c 0000", "0402"], cmds
 s.close()
 # a second client gets the state at once
 s2 = conn(); st = states(s2, 0.6); assert st and st[0][1] == 0, st
@@ -499,6 +505,10 @@ PYEOF
 python3 - "$G/hci.log" <<'PYEOF' && ok "HCI order: LE host support once, the scan pauses for the connect and starts again after it" || bad "HCI order: $(grep '^cmd' "$G/hci.log" | tail -12 | tr '\n' ' ')"
 import sys
 cmds = [" ".join(l.split()[1:]) for l in open(sys.argv[1]) if l.startswith("cmd ") and not l.startswith("cmd 1009")]
+# one Inquiry Cancel before the first link (an earlier process can have
+# left the kernel in discovery), none after: no active scan ran
+assert cmds[0] == "0402" and cmds.count("0402") == 1, cmds
+cmds = cmds[1:]
 # LE Host Supported once for the HCI socket (before the first link)
 assert cmds.count("0c6d 0100") == 1 and cmds[0] == "0c6d 0100", cmds
 # the check above: scan on, off for the connect (pause), then disable,
