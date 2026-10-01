@@ -1,4 +1,4 @@
-"""Builds the panel's Home Assistant entity list (PLAN.md section 18 item 1)
+"""Builds the panel's Home Assistant entity list
 from a PanelBackend, and polls it for state changes to push to Home
 Assistant. Shared by tsx-esphome (standalone) and the voice satellite's
 plugin (tsx_lva) so there is exactly one entity list, one poll loop.
@@ -224,7 +224,7 @@ def build_entities(server, backend: PanelBackend, key_base: int = 0) -> PanelDev
     )
     entities.append(touched_recently)
 
-    # ---- update (tsx-autoupdate status. PLAN.md section 21) -------------------
+    # ---- update (tsx-autoupdate status. docs/rootfs.md "Updates") -------------------
     update = UpdateEntity(
         server, next_key(), "Update", "update",
         get_state=backend.get_update_status, install=backend.install_update, icon="mdi:package-up",

@@ -49,7 +49,7 @@ defuse=${DEFUSE_GOLDEN:-yes}
 if [ "$mode" = --status ]; then
 	echo "env disk: ${disk:-not found} ($ENV_DISK) offset $ENV_OFFSET size $ENV_SIZE verified=$ENV_VERIFIED defuse_golden=$defuse"
 fi
-[ "$ENV_VERIFIED" = yes ] && [ "$ENV_OFFSET" != TODO ] || die "U-Boot env location not verified (edit /etc/tsx/uboot-env.conf, see REPORT.md). boot_retry NOT reset."
+[ "$ENV_VERIFIED" = yes ] && [ "$ENV_OFFSET" != TODO ] || die "U-Boot env location not verified (edit /etc/tsx/uboot-env.conf, see docs/boot.md). boot_retry NOT reset."
 [ -n "$disk" ] && [ -b "$disk" ] || die "env disk ($ENV_DISK) not found. Does the kernel DT enable that MMC controller?"
 
 run=${TSX_RUN:-/run}

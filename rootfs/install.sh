@@ -1,7 +1,7 @@
 #!/bin/sh
 # The xx60 kiosk installer. It runs on the panel, as root, in the rescue
 # system (the rootfs switch_root initramfs or the rescue initramfs).
-# deploy.sh normally drives it from the host. See REPORT.md "On-panel procedure".
+# deploy.sh normally drives it from the host. See docs/install.md.
 #
 #   install.sh check                       verify the disk layout, print what would happen
 #   install.sh backup-p5head               write the first MiB of p5 to stdout
@@ -137,4 +137,4 @@ mkdir -p $R/var/lib/tsx
 { echo "installed=$(date -Iseconds 2>/dev/null || date)"; echo "disk=/dev/$disk"; echo "rootfs_sha256=$SHA"
   echo "p5_head_backup_sha256=$P5SHA"; echo "kernel_at_install=$kver"; [ -n "$BOOTIMG" ] && echo "bootimg_sha256=$BOOTSHA"; } > $R/var/lib/tsx/install.info
 sync; umount /mnt/tsxroot
-say "done. p5 = tsxroot. Next: U-Boot must boot the mainline image (REPORT.md, 'Boot image location')."
+say "done. p5 = tsxroot. Next: U-Boot must boot the mainline image (docs/boot.md 'Root selection')."

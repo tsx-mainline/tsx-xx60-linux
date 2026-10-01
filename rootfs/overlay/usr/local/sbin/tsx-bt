@@ -263,5 +263,5 @@ status)
 	[ -n "$h" ] && hciconfig "$h" 2>/dev/null
 	exit 0;;
 mac) bt_mac;;
-*) sed -n '2,10p' "$0" >&2; exit 2;;
+*) sed -n '2,39p' "$0" >&2; exit 2;;
 esac

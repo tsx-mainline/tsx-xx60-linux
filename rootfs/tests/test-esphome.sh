@@ -1,6 +1,6 @@
 #!/bin/bash
 # Host test for the ESPHome device of the panel (see rootfs/voice/shim/tsx_panel/
-# and PLAN.md section 18). The test uses both front ends:
+# and docs/ha.md "One Home Assistant device"). The test uses both front ends:
 #  - tsx-esphome, the standalone server that runs when VOICE=off.
 #  - The code path of the voice satellite: the VoiceSatelliteProtocol of
 #    linux-voice-assistant with the tsx_lva patches (esphome-lva-harness.py,
@@ -60,7 +60,7 @@ mkdir -p "$F/run/tsx" "$F/etc/tsx" "$F/sys/thermal" "$F/proc/asound" "$F/bin"
 echo "want 50 60 70" > "$F/run/tsx/ledbar.state"
 printf 'led 128 unknown\nlast power short\n' > "$F/run/tsx/buttons.state"
 echo "on 17" > "$F/run/tsx-idled.state"
-# the own status of tsx-autoupdate (the shape of write_ha_json, PLAN.md section 21)
+# the own status of tsx-autoupdate (the shape of write_ha_json, docs/rootfs.md "Updates")
 cat > "$F/run/tsx/update-ha-state.json" <<'EOF'
 {"installed_version":"abc123","latest_version":"abc123+1pending","title":"TSX test-panel packages","release_summary":"pkg1 (1.0 -> 1.1)","in_progress":false}
 EOF

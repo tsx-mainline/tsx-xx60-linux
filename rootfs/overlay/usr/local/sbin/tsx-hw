@@ -76,5 +76,5 @@ get)
 show)
 	cat "$CONF" 2>/dev/null || { echo "tsx-hw: no $CONF (run tsx-hw detect as root)" >&2; exit 1; }
 	;;
-*) sed -n '2,10p' "$0" >&2; exit 2;;
+*) sed -n '2,33p' "$0" >&2; exit 2;;
 esac

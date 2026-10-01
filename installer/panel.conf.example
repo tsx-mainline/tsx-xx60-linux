@@ -25,6 +25,7 @@ KIOSK_URL=https://ha.example.org/
 # How the kiosk logs in with no keyboard. "token" seeds HA_TOKEN below into the
 # browser profile at first start. "trusted" relies on a Home Assistant
 # trusted_networks auth provider for the IP of the panel instead (no token needed).
+# Unset = the panel shows the login form of Home Assistant.
 HA_LOGIN_METHOD=trusted
 # A Home Assistant long-lived access token (Profile > Long-Lived Access
 # Tokens). It is used only when HA_LOGIN_METHOD=token. It is a secret, so keep
@@ -42,7 +43,8 @@ TZ_NAME=America/Denver
 #ORIENTATION=landscape
 
 # The Home Assistant Assist voice satellite (docs/ha.md): on or off. When it is
-# on, WAKE_WORD sets the on-device wake word.
+# on, WAKE_WORD sets the on-device wake word. A panel without a microphone
+# (U-Boot government=1, the TSW-760-NC) keeps the satellite off, also with on.
 VOICE=off
 #WAKE_WORD=okay_nabu
 
@@ -100,6 +102,7 @@ KERNEL_FLAVOR=lts
 # The Bluetooth proxy for Home Assistant (docs/ha.md "Bluetooth proxy"): on
 # or off. When it is on, the panel starts its Bluetooth chip and passes the
 # BLE advertisements that it hears to Home Assistant over the ESPHome API.
+# A panel without a Bluetooth module (government=1) keeps it off, also with on.
 # Default: off.
 #BT_PROXY=off
 # Active connections of the Bluetooth proxy: on or off. With BT_PROXY=on and

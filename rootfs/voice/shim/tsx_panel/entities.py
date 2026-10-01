@@ -348,7 +348,7 @@ class BinarySensorEntity(ESPHomeEntity):
 
 
 class UpdateEntity(ESPHomeEntity):
-    """tsx-autoupdate's status (PLAN.md section 21) as a generic HA `update`
+    """tsx-autoupdate's status (docs/rootfs.md "Updates") as a generic HA `update`
     entity: the same status tsx-mqtt already publishes
     (docs/ha.md "Update entity"), now also on the ESPHome device. get_state
     returns tsx-autoupdate's own update-ha-state.json shape --

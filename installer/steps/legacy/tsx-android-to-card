@@ -15,7 +15,7 @@
 #                       (out/rootfs-p2.ext4). The script uses a FILE.sha256
 #                       sidecar if there is one. The parent directory of FILE
 #                       must also hold sshShell.sh (out/sshShell.sh, see
-#                       docs/install.md "TSX Android root over SSH").
+#                       docs/install.md "Prerequisites").
 #   PANEL_IP            the LAN IP of the panel (any current state: mainline,
 #                       half-booted Android, or fresh stock Android)
 #
@@ -34,7 +34,7 @@
 #                       Otherwise, and with --uart no, those steps use only
 #                       the network (steps/rootsh + ssh polling, no serial
 #                       console). --uart yes forces the UART and dies if
-#                       uc.sh is missing. See docs/install.md "Network-only
+#                       uc.sh is missing. See installer/payload/README.md "Network-only
 #                       mode (no UART)" for the prerequisites.
 #   --yes               do not ask before the install (step 6 still prints
 #                       the preflight output first)
@@ -374,7 +374,7 @@ if [ "$FROM_STEP" -le 3 ]; then
 		wait_android_stable 720
 	else
 		log "  network-only mode: checking root over ssh (rootsh.sh) and that p5 is mounted (the mke2fs repair is UART-only)"
-		rootsh_ok || die "network-only mode needs root over ssh already (steps/rootsh). See docs/install.md 'Network-only mode (no UART)', or rerun with --uart yes"
+		rootsh_ok || die "network-only mode needs root over ssh already (steps/rootsh). See installer/payload/README.md 'Network-only mode (no UART)', or rerun with --uart yes"
 		MOUNTED=$("$ROOTSH" "$PANEL" 'grep -c mmcblk0p5 /proc/mounts' 2>/dev/null) || MOUNTED=
 		grep -qE '^[1-9][0-9]*$' <<<"$MOUNTED" || die "p5 (mmcblk0p5) is not mounted. The mke2fs repair is UART-only, rerun with --uart yes"
 		log "  p5 (mmcblk0p5) is mounted. Looks stock already"

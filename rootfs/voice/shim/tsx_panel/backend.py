@@ -3,7 +3,7 @@ device (tsx-esphome, and the voice satellite's plugin). Mirrors
 rootfs/overlay/usr/local/sbin/tsx-mqtt's shell functions/paths (ledbar_state,
 keypad_state, screen_state, als_state, volume_state, the R/IDLED/BCONF/KCONF/
 ACONF/CARD/ASOUND env names) so both transports read the exact same state
-files -- this is the "one backend" of PLAN.md section 18 item 2; tsx-mqtt
+files -- this is the "one backend"; tsx-mqtt
 stays POSIX sh (busybox-only panel shell) while this is Python (the voice
 satellite's own language), so the sharing is at the state-file/CLI level, not
 literally one source file.
@@ -582,7 +582,7 @@ class PanelBackend:
     def reboot(self) -> None:
         self._ctl("reboot")
 
-    # ---- update (tsx-autoupdate, PLAN.md section 21) --------------------------
+    # ---- update (tsx-autoupdate, docs/rootfs.md "Updates") --------------------------
     def get_update_status(self) -> dict:
         """tsx-autoupdate's own HA-ready status (same file tsx-mqtt's
         update_state() reads: $TSX_RUN_DIR/update-ha-state.json), or a safe

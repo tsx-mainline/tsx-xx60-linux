@@ -2,8 +2,8 @@
 # Host: make sure PANEL_IP is stock Android, settled, and answers root over
 # the patched Crestron sshd (steps/rootsh). Every install flow needs this
 # bootstrap over the network or the UART. It is extracted from
-# steps/tsx-android-to-card (its old steps 2-4), so tsx-install-mainline v2
-# (the rescue-first flow) can reuse it. steps/tsx-android-to-card keeps its
+# steps/legacy/tsx-android-to-card (its old steps 2-4), so tsx-install-mainline v2
+# (the rescue-first flow) can reuse it. steps/legacy/tsx-android-to-card keeps its
 # own copy (see installer/steps/legacy/). Behavior did not change. This is
 # a straight extraction.
 #

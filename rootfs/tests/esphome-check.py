@@ -2,7 +2,7 @@
 """Client-side checks for rootfs/tests/test-esphome.sh: connects to the
 tsx-esphome standalone server under test with aioesphomeapi (the same client
 library Home Assistant's ESPHome integration uses) and exercises the panel
-entity list PLAN.md section 18 asks for: list entities, toggle the LED bar
+entity list of the panel: list entities, toggle the LED bar
 light, set the kiosk URL text, receive a key-press event.
 
   esphome-check.py PORT [--key BASE64] [--name N] [--friendly F] [--voice]

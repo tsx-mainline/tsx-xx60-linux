@@ -112,6 +112,12 @@ jobs:
         run: installer/emmc/tests/test-root-fallback.sh
       - name: installer/emmc/tests/test-usb-recovery.sh
         run: installer/emmc/tests/test-usb-recovery.sh
+      - name: installer/lib/tests/test-tsx-rescue.sh - env writes, MBR fold and the tsx_once one-shot (plain-file fixtures)
+        run: installer/lib/tests/test-tsx-rescue.sh
+      - name: installer/tests/test-arm-from-mainline.sh - arm one rescue boot from a running kiosk (PATH shims)
+        run: installer/tests/test-arm-from-mainline.sh
+      - name: tools/release/tests/test-prepare-publish.sh - the publish scan on throwaway repos
+        run: tools/release/tests/test-prepare-publish.sh
       - name: installer/tests/test-factory.sh - skips without PUF_FILE + CAPTURES_DIR
         run: installer/tests/test-factory.sh
       - name: installer/tests/test-sdcard.sh - skips without CAPTURES_DIR

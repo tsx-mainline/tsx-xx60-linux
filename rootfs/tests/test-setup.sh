@@ -1,5 +1,5 @@
 #!/bin/bash
-# Host test for the on-panel setup page (PLAN.md section 16 item 3,
+# Host test for the on-panel setup page (see
 # docs/rootfs.md "Setup page"). The test covers these parts:
 #  - tsx-kiosk-url (which URL the kiosk loads)
 #  - the `validate` and `setup` subcommands of tsx-config

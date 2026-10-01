@@ -14,10 +14,10 @@
 #     p1:tsxlayout.cfg orders it.
 # The Android on the card is gone afterwards. factory/puf-tool.sh and
 # tsx-factory-restore bring it back from the .puf.
-# This "card stage" is temporary. tsx-card-to-emmc (steps/tsx-card-to-emmc)
+# This "card stage" is temporary. tsx-card-to-emmc (steps/legacy/tsx-card-to-emmc)
 # then migrates boot and root onto the eMMC, which is the normal end state of
-# the panel. tsx-install-mainline runs this script and the eMMC migration as
-# one command. Calling this script directly is an expert and debug step.
+# the panel. tsx-install-mainline does not use this script. Only the USB
+# install method does. Calling it directly is an expert and debug step.
 #
 #   bash tsx-android-install.sh preflight [options]   read only: checks + plan
 #   bash tsx-android-install.sh install   [options]   do it (asks for "INSTALL")

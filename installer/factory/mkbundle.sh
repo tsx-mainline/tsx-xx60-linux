@@ -33,7 +33,7 @@
 #               tsx-restore-factory reads live from the card), p1:tsxenv.bak, or a full
 #               card image (tsx-env.py reads it at 0x100000). It carries the identity of
 #               the unit (MAC, tsid, model). The script removes the mainline hook (tsx-env.py unhook)
-#   --emmc-raw  optional: the raw eMMC image of the unit (zcat of captures/tsw-1060-unitB/emmc/*.img.gz)
+#   --emmc-raw  optional: the raw eMMC image of the unit (for example a gzipped backup, unpacked with zcat)
 #   --boot0     optional (with --emmc-raw): the mmcblk1boot0 image of the unit
 # Root over ssh (DEFAULT): /system/bin/sshShell.sh inside the system.img of the .puf
 #               gets a `rootsh` branch. The single line of the interactive (tty) branch

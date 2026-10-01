@@ -23,7 +23,7 @@ esphome), this also appends the panel's own Home Assistant entities (LED
 bar, key LEDs, screen, backlight, kiosk URL, front-key events, sensors --
 see rootfs/voice/shim/tsx_panel/) into this SAME process's ESPHome device,
 so Home Assistant discovers exactly one device whether or not voice is on
-(PLAN.md section 18; the standalone tsx-esphome serves the same entities
+(the standalone tsx-esphome serves the same entities
 when VOICE=off instead -- see docs/ha.md "One Home Assistant device"). This
 is why the plugin patches VoiceSatelliteProtocol rather than starting a
 second ESPHome server: a second TCP listener on the same port would just

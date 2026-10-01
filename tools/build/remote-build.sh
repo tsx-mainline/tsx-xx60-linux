@@ -78,7 +78,7 @@ while [ $# -gt 0 ]; do case $1 in
 	-j) J=$2; shift;;
 	--flavor) FLAVOR=$2; shift;;
 	--flavor=*) FLAVOR=${1#--flavor=};;
-	-h|--help) sed -n '2,44p' "$0"; exit 0;;
+	-h|--help) sed -n '2,66p' "$0"; exit 0;;
 	*) ARGS+=("$1");; esac; shift; done
 set -- "${ARGS[@]}"
 CMD=${1:-}; ARG=${2:-}
@@ -103,7 +103,7 @@ if [ -z "${BUILD_HOST:-}" ]; then
 		[ -z "$DEST" ] || { mkdir -p "$DEST"; cp "$REPO"/rootfs/out/tsxboot.img* "$DEST/"; }
 		exit 0;;
 	sync|jobs) say "$CMD is a no-op for a local build"; exit 0;;
-	*) sed -n '2,44p' "$0"; exit 1;; esac
+	*) sed -n '2,66p' "$0"; exit 1;; esac
 fi
 
 # --- BUILD_HOST set: go remote. --------------------------------------------
@@ -278,6 +278,6 @@ sync)
 	true;;
 jobs)
 	rsh "cd $BUILD_DIR/tools/build/state/jobs 2>/dev/null && for f in \$(ls -t *.log | head -15); do j=\${f%.log}; printf '%-45s rc=%s  %s\n' \$j \"\$(cat \$j.rc 2>/dev/null || echo running)\" \"\$(date -r \$f '+%F %T')\"; done";;
-*) sed -n '2,44p' "$0"; exit 1;;
+*) sed -n '2,66p' "$0"; exit 1;;
 esac
 say "total $(( $(date +%s) - t0 )) s"

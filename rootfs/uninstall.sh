@@ -15,7 +15,7 @@
 #                    Android recreates its folders. The two raw images that
 #                    lived there (update boot.img and the golden copy) are gone.
 #   --keep-bootimg   keep tsxboot.img and only disable it (p1:tsxboot.off)
-# Afterwards, revert the U-Boot env (REPORT.md "Revert"), then power-cycle.
+# Afterwards, revert the U-Boot env (installer/payload/README.md "Undo"), then power-cycle.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/tsx-disk.sh"
@@ -58,7 +58,7 @@ else
 fi
 cat >&2 <<'T'
 uninstall.sh: if the U-Boot hook was installed, revert it at the U-Boot prompt
-  (serial; uboot/tsx-boot-hook.txt, REPORT.md "Revert"):
+  (serial; installer/payload/README.md "Undo"):
     setenv switch_bootmode 'usb start 0;if fatexist usb 0 jabil.txt; then run jabil_factory; else   fi;'
     setenv tsx_boot
     saveenv

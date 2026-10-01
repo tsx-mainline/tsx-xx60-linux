@@ -35,7 +35,7 @@
 # Keys:
 # PANEL_NAME, KIOSK_URL, HA_LOGIN_METHOD (token|trusted), HA_TOKEN, TZ_NAME,
 # VOICE (on|off), WAKE_WORD.
-# HA_TRANSPORT (esphome|mqtt|both), see PLAN.md section 18:
+# HA_TRANSPORT (esphome|mqtt|both), see docs/ha.md "One Home Assistant device":
 #   esphome = one zero-config Home Assistant device over the ESPHome native
 #             API, with no broker. It is tsx-esphome, or the voice satellite
 #             itself when VOICE=on.
@@ -99,7 +99,7 @@ HW_CONF=${TSX_HW_CONF:-$RUN/hw.conf}
 KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT BOOT_VERBOSE ORIENTATION BT_PROXY BT_ACTIVE BT_MAC ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 SECRET_KEYS="HA_TOKEN HA_API_KEY MQTT_PASSWORD ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 
-usage() { sed -n '2,26p' "$0" >&2; exit 2; }
+usage() { sed -n '2,83p' "$0" >&2; exit 2; }
 die() { echo "tsx-config: ERROR: $*" >&2; exit 2; }
 log() { echo "tsx-config: $*" >&2; }
 
@@ -514,7 +514,7 @@ apply() {
 	[ "$transport" = mqtt ] || warn_open_api
 
 	# HA_TRANSPORT and VOICE together decide whether tsx-esphome (the
-	# standalone ESPHome device, PLAN.md section 18) must run. Its own start()
+	# standalone ESPHome device) must run. Its own start()
 	# makes the same check. It is always in the default runlevel (like
 	# tsx-mqtt), so restart it only if it is already up. At boot, this
 	# apply() runs before the runlevel entry of tsx-esphome starts it. Then
@@ -631,8 +631,8 @@ apply() {
 
 # setup: show the on-panel setup page (tsx-setupd) for one ~15 min window,
 # even if the panel is already configured. This is the CLI form of the
-# "Setup" overlay entry (the "setup" command of tsx-panelctl, PLAN.md
-# section 16 item 3). It touches only a runtime flag. kiosk-session,
+# "Setup" overlay entry (the "setup" command of tsx-panelctl,
+# docs/rootfs.md "Setup page"). It touches only a runtime flag. kiosk-session,
 # tsx-kiosk-url and tsx-setupd all read the age of the flag. It never edits
 # panel.conf.
 #

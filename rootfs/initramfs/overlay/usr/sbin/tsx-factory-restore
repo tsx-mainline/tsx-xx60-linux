@@ -79,10 +79,10 @@ pr_dd() {
 	exec 7<&- 8<&-
 	return $_pd_rc
 }
-CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,23p' "$0"; exit 2; }
+CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,24p' "$0"; exit 2; }
 YES=0 OTHER=0
 while [ $# -gt 0 ]; do case "$1" in --yes) YES=1;; --other-unit) OTHER=1;; *) die "unknown option $1";; esac; shift; done
-case "$CMD" in check|run) ;; *) sed -n '2,23p' "$0"; exit 2;; esac
+case "$CMD" in check|run) ;; *) sed -n '2,24p' "$0"; exit 2;; esac
 M=$B/factory.manifest
 [ -f "$M" ] && grep -q '^format=tsx-factory-bundle-1$' "$M" || die "$B has no factory.manifest (factory/puf-tool.sh bundle)"
 . "$B/crestron-fs.sh"

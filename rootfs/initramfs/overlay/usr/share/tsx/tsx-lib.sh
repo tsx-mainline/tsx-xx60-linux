@@ -21,8 +21,8 @@ TSX_LAYOUT_STOCK="1:81920:81920 2:206849:1638400 3:2048:2048 4:1845249:- 5:18472
 # It is the same MBR with ONE byte changed: entry 4 goes from type 0x05
 # (extended: p5..p8 = Android sdcard/data/cache/logs) to 0x83. Then p4 is one
 # primary partition over the old extended area (tsxdata), and p2 is the kiosk
-# rootfs. The logical partitions p5..p8 are gone. This is a temporary step
-# inside tsx-install-mainline. The panel then migrates from here onto the eMMC
+# rootfs. The logical partitions p5..p8 are gone. This is a temporary step of
+# the USB install method. The panel then migrates from here onto the eMMC
 # (boot p7 + root p8).
 TSX_LAYOUT_CARD="1:81920:81920 2:206849:1638400 3:2048:2048 4:1845249:5928959"
 TSX_MBR_P4_TYPE_OFFSET=498   # 446 + 3*16 + 4
@@ -30,7 +30,7 @@ TSX_P5_SECTORS=3055616
 TSX_ENV_OFFSET=1048576      # 0x100000 on the whole disk (= start of p3), proven in rootfs
 TSX_ENV_SIZE=65536
 
-# ---- the U-Boot env hook (rootfs/uboot/tsx-boot-hook.txt, installed on the TSW-1060) ----
+# ---- the U-Boot env hook (docs/boot.md "The env hook (`tsx_boot`)") ----
 TSX_STOCK_SWITCH='usb start 0;if fatexist usb 0 jabil.txt; then run jabil_factory; else   fi;'
 TSX_BOOT_CMD='mmcinfo; if fatexist mmc 0 tsxboot.off; then echo tsx: mainline disabled; else if fatexist mmc 0 tsxboot.img; then echo tsx: booting tsxboot.img; fatload mmc 0 ${loadaddr} tsxboot.img; bootm; fi; fi'
 # guard "fallback" (tested on hardware 2026-09-26): after 5 boots without

@@ -1,7 +1,7 @@
 #!/bin/sh
-# panel-provision.sh: put the Home Assistant credentials on the TSW-1060
-# and verify them. Run it from this workstation, only when the panel is free
-# (no other agent redeploys p5). It needs the secrets from ./ha-provision.py mint.
+# panel-provision.sh: put the Home Assistant credentials on the panel and
+# verify them. Run it from a workstation that reaches the panel over ssh. It
+# needs the secrets from ./ha-provision.py mint.
 #
 #   ./panel-provision.sh --panel <panel-ip> [--no-verify] [--light light.xyz] [--broker <host>]
 #

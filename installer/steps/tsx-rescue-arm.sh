@@ -3,7 +3,7 @@
 # (ssh -tt admin@<panel>, root bash 3.2). It arms a ONE-SHOT boot into the
 # mainline rescue system and reboots. The rescue does the whole eMMC and root
 # install afterwards (installer/steps/tsx-rescue-install). See docs/install.md
-# "Install: rescue-first (v2)" and docs/boot.md "The v2 env state machine".
+# "One command (network method, rescue-first)" and docs/boot.md "The v2 env state machine".
 # Unlike the old tsx-android-install.sh, this script writes NOTHING to p2 and
 # does not touch the MBR. It leaves the Android partitions of the SD card
 # alone until the rescue folds them. You can still undo a v2 install: power-

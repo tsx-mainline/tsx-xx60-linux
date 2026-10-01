@@ -1,5 +1,5 @@
 """tsx_panel: the xx60 panel as one Home Assistant device over the ESPHome
-native API (PLAN.md section 18). Shared by two front ends that never run at
+native API. Shared by two front ends that never run at
 the same time (see docs/ha.md "One Home Assistant device"):
 
   tsx-esphome           standalone server, used when VOICE=off

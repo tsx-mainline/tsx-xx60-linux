@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tsx-setupd: the on-panel first-boot setup page (PLAN.md section 16 item 3,
+"""tsx-setupd: the on-panel first-boot setup page (see
 docs/rootfs.md "Setup page").
 
 It always runs in the default runlevel, as the UNPRIVILEGED "tsx-setup"

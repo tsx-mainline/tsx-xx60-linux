@@ -12,7 +12,7 @@
 # not use (recovery, misc, data, alignment gaps). Cache gets an empty ext4
 # (mkbundle.sh). The card gets empty factory p5..p8 as always. Crestron /data
 # (account, settings) is factory-fresh. Create the admin account in the web UI
-# (https://PANEL/) or let tsx-android-to-card do it.
+# (https://PANEL/) or let steps/legacy/tsx-android-to-card do it.
 #
 # Steps. The driver logs each step with timestamps to --results (default
 # results/tsx-restore-factory-<date>.txt). --from-step N resumes.

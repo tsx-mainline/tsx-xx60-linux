@@ -15,7 +15,7 @@
 #                           plug the stick, power-cycle (the script renames GO after the install)
 #   U-Boot jabil boot       the stock jabil_factory hook booted the image from the stick
 #                           (the cmdline has androidboot.selinux=permissive). This works only if
-#                           U-Boot USB works on the unit (REPORT.md section 1)
+#                           U-Boot USB works on the unit (docs/boot.md "U-Boot USB needs VBUS held before enumeration")
 #
 # It uses /usr/share/tsx/{install.sh,tsx-disk.sh} (unchanged) and tsx-lib.sh.
 # Test hooks: TSX_SYSBLOCK TSX_DEVDIR TSX_STICK (stick root, skips USB detection)

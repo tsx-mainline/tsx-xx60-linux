@@ -7,7 +7,7 @@ A block is reported when crc32(data[4:size]) == le32(data[0:4]) and the data
 starts with printable "key=value" strings. Prints the byte offset and a few
 variables (bootcmd, boot_retry, aml_dt). Use the offset in
 /etc/tsx/uboot-env.conf (ENV_OFFSET) after confirming it on the panel with
-fw_printenv -c (see REPORT.md).
+fw_printenv -c (see docs/boot.md).
 """
 import argparse, sys, zlib
 

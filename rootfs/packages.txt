@@ -96,7 +96,7 @@ py3-aiohappyeyeballs
 py3-mpv
 mpv-libs
 # ha-esphome : the panel as one Home Assistant device over the ESPHome
-# native API (PLAN.md section 18, docs/ha.md "One Home Assistant device").
+# native API (docs/ha.md "One Home Assistant device").
 # No new packages: tsx-esphome (rootfs/voice/shim/tsx_panel/, standalone,
 # used when VOICE=off) and the voice satellite's own plugin (VOICE=on) both
 # run with the "voice" packages above (installed unconditionally by

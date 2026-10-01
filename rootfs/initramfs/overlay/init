@@ -90,10 +90,10 @@ done
 # installer-armed boot (see the 2026-09-27 hardware run notes). This path
 # never switch_roots, never runs tsx-autoinstall and never formats anything.
 # See /usr/sbin/tsx-rescue.
-# TODO: installer/steps/tsx-rescue-arm.sh will get a one-shot tsx_once env
-# flag (separate change, in flight). When it exists, read and clear it here
-# (or in the rescue rcS). Then the message can say "installer arm", "golden
-# fallback" or "manual" instead of this generic text.
+# The one-shot flag tsx_once (installer/steps/tsx-rescue-arm.sh) is spent in
+# U-Boot before this boot starts, so Linux cannot read it here. The message
+# cannot tell "installer arm", "golden fallback" or "manual" apart and stays
+# generic.
 [ -e /etc/tsx/rescue-image ] && rescue "$(head -n 1 /etc/tsx/rescue-image)"
 if [ -n "$verbose" ]; then text_console; else wait_drm_fb; splash "starting" 5 show; fi
 

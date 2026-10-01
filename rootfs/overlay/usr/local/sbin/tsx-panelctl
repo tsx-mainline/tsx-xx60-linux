@@ -1,6 +1,6 @@
 #!/bin/sh
 # tsx-panelctl: the ONLY privileged surface of the panel for the
-# unprivileged Home Assistant ESPHome plugin (PLAN.md section 18). It runs
+# unprivileged Home Assistant ESPHome plugin (docs/ha.md "One Home Assistant device"). It runs
 # as root and reads fixed, whitelisted commands from a FIFO that the group
 # "kiosk" can write. It runs them with the existing root-only CLIs
 # (tsx-ledbar, tsx-keypad, tsx-blank, tsx-config, reboot), or it writes the

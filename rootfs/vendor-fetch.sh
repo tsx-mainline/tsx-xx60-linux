@@ -67,9 +67,8 @@ PSR_NAME=PSR-CSR8811.psr
 PSR_SHA256=${PSR_SHA256:-96709f6ca529efb0dc8cf48165ba0c1c1934236794424aa539810376676aa8be}
 
 # Pinned sha256 of the stereo.cnt of each variant. The values come from the
-# .puf above (2026-09-26). They match the table in vendor-local/README.md
-# byte for byte. The public firmware package and the Android vendor tree drop
-# carry identical containers.
+# .puf above (2026-09-26). The public firmware package and the Android vendor
+# tree drop carry identical containers.
 sha_for() {
 	case $1 in
 	settings_yushan) echo b479300ed44a7663afe04fd271b8e059ea4d6e1778939a18e87d004613288de8 ;;
@@ -265,7 +264,7 @@ for v in $VARIANTS; do
 	got=$(sha256_of "$src/stereo.cnt")
 	want=$(sha_for "$v")
 	if [ "$got" != "$want" ]; then
-		echo "vendor-fetch: ERROR: $v/stereo.cnt sha256 $got != pinned $want (Crestron shipped a different container. Update sha_for() in this script and vendor-local/README.md on purpose, and do not ignore this)"
+		echo "vendor-fetch: ERROR: $v/stereo.cnt sha256 $got != pinned $want (Crestron shipped a different container. Update sha_for() in this script on purpose, and do not ignore this)"
 		fail=1
 		continue
 	fi

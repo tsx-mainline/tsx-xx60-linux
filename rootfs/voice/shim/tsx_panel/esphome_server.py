@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """tsx-esphome: standalone ESPHome native API server for the panel entities
-(PLAN.md section 18), used when VOICE=off. When VOICE=on the same entities
+(docs/ha.md "One Home Assistant device"), used when VOICE=off. When VOICE=on the same entities
 live inside the voice satellite's own process instead (tsx_lva's plugin) so
 Home Assistant only ever sees one device -- see docs/ha.md "One Home
 Assistant device". Reuses linux_voice_assistant's low-level frame parser

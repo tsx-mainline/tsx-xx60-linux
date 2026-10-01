@@ -135,5 +135,5 @@ sway)
 	echo "output * transform $SWAY_TRANSFORM"
 	echo "input type:touch calibration_matrix $TOUCH_MATRIX";;
 apply) apply_live;;
-*) sed -n '2,40p' "$0" >&2; exit 2;;
+*) sed -n '2,46p' "$0" >&2; exit 2;;
 esac

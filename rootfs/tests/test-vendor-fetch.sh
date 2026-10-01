@@ -2,8 +2,7 @@
 # Host test of ../vendor-fetch.sh. The script fetches (or reuses) the public
 # Crestron tsw-xx60 firmware .puf and extracts the TFA9890 DSP containers
 # from it. The test checks the three stereo.cnt files against the sha256
-# values pinned in the script. These must match the table in
-# vendor-local/README.md. The purpose of vendor-fetch.sh is that the public
+# values pinned in the script. The purpose of vendor-fetch.sh is that the public
 # package and the proprietary Android vendor tree carry byte-identical
 # containers.
 #
