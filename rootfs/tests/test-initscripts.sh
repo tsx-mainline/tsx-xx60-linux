@@ -23,7 +23,7 @@ bad() { echo "  FAIL: $*"; F=$((F+1)); }
 # stand-in of tsx-config or another tool wins.
 run_fn() {
 	local fn=$1 name=$2; shift 2
-	sed "s|/usr/local/sbin|$T/sbin|g; s|/usr/local/bin|$T/sbin|g; s|/run/tsx|$T/run|g; s|/var/log|$T/log|g; s|/etc/tsx|$T/etc/tsx|g; s|/etc/crontabs|$T/etc/crontabs|g; s|^#!.*||; s|supervisor=.*||" "$I/$name" > "$T/script"
+	sed "s|/usr/local/sbin|$T/sbin|g; s|/usr/local/bin|$T/sbin|g; s|/run/tsx|$T/run|g; s|/run/supervise-|$T/run/supervise-|g; s|/var/log|$T/log|g; s|/etc/tsx|$T/etc/tsx|g; s|/etc/crontabs|$T/etc/crontabs|g; s|/etc/init.d|$I|g; s|^#!.*||; s|supervisor=.*||" "$I/$name" > "$T/script"
 	(
 		einfo() { echo "info: $*"; }; eerror() { echo "error: $*"; }; ewarn() { echo "warn: $*"; }
 		ebegin() { :; }; eend() { return "${1:-0}"; }; checkpath() { echo "checkpath $*"; }
@@ -83,11 +83,20 @@ out=$(run_start tsx-esphome); rc=$?
 [ $rc = 0 ] && echo "$out" | grep -q '^START' && ok "default: the device starts" || bad "default (rc $rc): $out"
 out=$(run_start tsx-esphome T_TRANSPORT=mqtt); rc=$?
 [ $rc = 0 ] && ! echo "$out" | grep -q START && ok "HA_TRANSPORT=mqtt: not started, no failure" || bad "transport mqtt (rc $rc): $out"
-out=$(run_start tsx-esphome T_VOICE=on); rc=$?
-[ $rc = 0 ] && ! echo "$out" | grep -q START && ok "VOICE=on: the satellite serves the entities, not started, no failure" || bad "voice on (rc $rc): $out"
+out=$(run_start tsx-esphome T_VOICE=on TSX_TFLITE_SO="$T/libtflite.so"); rc=$?
+[ $rc = 0 ] && echo "$out" | grep -q '^START' && ok "VOICE=on but the satellite is not enabled: the device starts (the runlevel decides)" || bad "voice on, not enabled (rc $rc): $out"
+: > "$T/libtflite.so"; mkdir -p "$T/rl"; : > "$T/rl/tsx-voice"
+out=$(run_start tsx-esphome TSX_RUNLEVEL_DIR="$T/rl" TSX_TFLITE_SO="$T/libtflite.so"); rc=$?
+[ $rc = 0 ] && ! echo "$out" | grep -q START && ok "satellite enabled: the device does not start, no failure" || bad "satellite enabled (rc $rc): $out"
+out=$(run_start tsx-esphome TSX_RUNLEVEL_DIR="$T/rl" T_VOICE=off TSX_TFLITE_SO="$T/libtflite.so"); rc=$?
+[ $rc = 0 ] && ! echo "$out" | grep -q START && ok "satellite enabled by hand, VOICE=off: still only the satellite" || bad "hand enable (rc $rc): $out"
+out=$(run_start tsx-esphome TSX_RUNLEVEL_DIR="$T/rl" T_TRANSPORT=mqtt); rc=$?
+[ $rc = 0 ] && ! echo "$out" | grep -q START && ok "satellite enabled, HA_TRANSPORT=mqtt: not started" || bad "mqtt (rc $rc): $out"
+out=$(run_start tsx-esphome TSX_RUNLEVEL_DIR="$T/rl" TSX_TFLITE_SO="$T/no-such-lib"); rc=$?
+[ $rc = 0 ] && echo "$out" | grep -q '^START' && echo "$out" | grep -q 'wake word library is missing' && ok "satellite enabled, no wake word library: the device starts and says why" || bad "no library (rc $rc): $out"
 printf 'MIC=no\nREASON=test\n' > "$T/run/hw.conf"
-out=$(run_start tsx-esphome T_VOICE=on); rc=$?
-[ $rc = 0 ] && echo "$out" | grep -q '^START' && ok "no microphone: starts even with VOICE=on" || bad "no microphone (rc $rc): $out"
+out=$(run_start tsx-esphome TSX_RUNLEVEL_DIR="$T/rl" TSX_TFLITE_SO="$T/libtflite.so"); rc=$?
+[ $rc = 0 ] && echo "$out" | grep -q '^START' && ok "no microphone: starts even with the satellite enabled" || bad "no microphone (rc $rc): $out"
 rm -f "$T/run/hw.conf"
 
 echo "== tsx-voice =="
@@ -95,6 +104,32 @@ printf 'MIC=no\nREASON=government=1 (test)\n' > "$T/run/hw.conf"
 out=$(run_fn start_pre tsx-voice); rc=$?
 [ $rc != 0 ] && echo "$out" | grep -q '^error: No microphone' && ok "no microphone: start_pre refuses with a clear error" || bad "MIC=no (rc $rc): $out"
 rm -f "$T/run/hw.conf"
+
+printf '#!/bin/sh\n[ "$1 $2" = "tsx-esphome status" ] && exit 3\necho "rc-service $*" >> "%s/rc.log"\n' "$T" > "$T/pbin/rc-service"; chmod +x "$T/pbin/rc-service"
+: > "$T/rc.log"; rm -f "$T/run/supervise-tsx-esphome.pid"
+out=$(run_fn start_pre tsx-voice); rc=$?
+! grep -q 'tsx-esphome stop' "$T/rc.log" && ok "tsx-esphome not running: start_pre leaves it alone" || bad "esphome idle (rc $rc): $(cat "$T/rc.log")"
+: > "$T/run/supervise-tsx-esphome.pid"
+out=$(run_fn start_pre tsx-voice); rc=$?
+grep -qx 'rc-service tsx-esphome stop' "$T/rc.log" && ok "tsx-esphome running (pid file): start_pre stops it before the satellite binds port 6053" || bad "esphome running (rc $rc): $(cat "$T/rc.log")"
+rm -f "$T/run/supervise-tsx-esphome.pid"; : > "$T/rc.log"
+printf '#!/bin/sh\n[ "$1 $2" = "tsx-esphome status" ] && exit 0\necho "rc-service $*" >> "%s/rc.log"\n' "$T" > "$T/pbin/rc-service"
+out=$(run_fn start_pre tsx-voice); rc=$?
+grep -qx 'rc-service tsx-esphome stop' "$T/rc.log" && ok "tsx-esphome started (rc-service status): start_pre stops it" || bad "esphome status (rc $rc): $(cat "$T/rc.log")"
+grep -q 'after .*tsx-esphome' "$I/tsx-voice" && ok "tsx-voice starts after tsx-esphome at boot (no parallel bind)" || bad "tsx-voice has no after tsx-esphome"
+rm -f "$T/pbin/rc-service"
+
+echo "== tsx-audio enable and disable voice =="
+for c in rc-update rc-service; do printf '#!/bin/sh\necho "%s $*" >> "%s/rc.log"\n' "$c" "$T" > "$T/pbin/$c"; chmod +x "$T/pbin/$c"; done
+au() { PATH=$T/pbin:$PATH busybox sh "$HERE/overlay/usr/local/bin/tsx-audio" "$@"; }
+rl() { tr '\n' '|' < "$T/rc.log"; }
+: > "$T/rc.log"; au enable voice >/dev/null; rc=$?
+[ $rc = 0 ] && [ "$(rl)" = "rc-update add tsx-voice default|rc-service tsx-esphome stop|rc-service tsx-voice start|" ] && ok "enable voice: runlevel, stop tsx-esphome, then start" || bad "enable voice (rc $rc): $(rl)"
+rm -rf "$T/rl0"; : > "$T/rc.log"; TSX_RUNLEVEL_DIR=$T/rl0 au disable voice >/dev/null; rc=$?
+[ $rc = 0 ] && [ "$(rl)" = "rc-service tsx-voice stop|rc-update del tsx-voice default|" ] && ok "disable voice, never enabled (boot with VOICE=off): tsx-esphome is not touched" || bad "disable voice (rc $rc): $(rl)"
+: > "$T/rc.log"; TSX_RUNLEVEL_DIR=$T/rl au disable voice >/dev/null; rc=$?
+[ $rc = 0 ] && [ "$(rl)" = "rc-service tsx-voice stop|rc-update del tsx-voice default|rc-service tsx-esphome restart|" ] && ok "disable voice, was enabled: stop, leave the runlevel, restart tsx-esphome" || bad "disable voice enabled (rc $rc): $(rl)"
+rm -f "$T/pbin/rc-service" "$T/pbin/rc-update"
 
 echo "== tsx-bt =="
 printf '#!/bin/sh\necho "tsx-bt $*" >> "%s/bt.log"\n' "$T" > "$T/sbin/tsx-bt"; chmod +x "$T/sbin/tsx-bt"

@@ -148,11 +148,35 @@ svc_enable() {  # $1 = add|del, services...
 	done
 }
 
+# The voice satellite and tsx-esphome both serve the ESPHome API on port 6053.
+# Exactly one of them may run. Enable stops tsx-esphome before it starts the
+# satellite. Disable starts tsx-esphome again, but only when the satellite was
+# enabled before: apply runs "disable voice" at every boot with VOICE=off,
+# and that must not start tsx-esphome ahead of its own place in the boot order.
+voice_enabled() { [ -e "${TSX_RUNLEVEL_DIR:-/etc/runlevels/default}/tsx-voice" ]; }
+
+voice_handover() {  # $1 = add|del
+	if [ "$1" = add ]; then
+		rc-update add tsx-voice default >/dev/null || return 1
+		rc-service tsx-esphome stop >/dev/null 2>&1
+		rc-service tsx-voice start
+	else
+		was=no; voice_enabled && was=yes
+		rc-service tsx-voice stop
+		rc-update del tsx-voice default >/dev/null
+		# restart, not start: after a boot with the satellite, tsx-esphome is
+		# "started" with no daemon, and start would do nothing. Its own start
+		# decides whether it runs (HA_TRANSPORT).
+		[ "$was" = yes ] && rc-service tsx-esphome restart >/dev/null 2>&1
+	fi
+	return 0
+}
+
 cmd_enable() {  # $1 = add|del, $2 = sendspin|voice
 	case ${2:-} in
 	sendspin) if [ "$1" = add ]; then svc_enable add dbus avahi-daemon tsx-sendspin
 		  else svc_enable del tsx-sendspin; fi;;
-	voice) svc_enable "$1" tsx-voice;;
+	voice) voice_handover "$1";;
 	*) echo "usage: tsx-audio enable|disable sendspin|voice" >&2; exit 1;;
 	esac
 }

@@ -19,11 +19,18 @@ respawn_max=0
 # Start after tsx-config. Its apply writes /run/tsx/esphome.key (HA_API_KEY)
 # and esphome.conf (HA_ALLOW_FROM), and the satellite reads them once at
 # start. If it started earlier, it would serve the ESPHome API without them.
-depend() { need net; after tsx-audio tsx-setup tsx-config; }
+# Also after tsx-esphome: both serve port 6053, so they must not start at the
+# same time. tsx-esphome does not start when this service is in the runlevel.
+depend() { need net; after tsx-audio tsx-setup tsx-config tsx-esphome; }
 start_pre() {
 	if [ "$(sed -n 's/^MIC=//p' /run/tsx/hw.conf 2>/dev/null)" = no ]; then
 		eerror "No microphone on this panel ($(sed -n 's/^REASON=//p' /run/tsx/hw.conf)). The voice satellite does not start"
 		return 1
+	fi
+	# Only one service may own port 6053. Stop tsx-esphome if it runs.
+	if [ -e /run/supervise-tsx-esphome.pid ] || rc-service tsx-esphome status >/dev/null 2>&1; then
+		einfo "tsx-voice: stopping tsx-esphome, this service serves the ESPHome API"
+		rc-service tsx-esphome stop >/dev/null 2>&1 || ewarn "tsx-esphome did not stop"
 	fi
 	# supervise-daemon opens the log after it switches to command_user. The log
 	# must exist, and kiosk must be able to write it.

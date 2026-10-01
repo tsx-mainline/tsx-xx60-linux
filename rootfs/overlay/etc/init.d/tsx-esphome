@@ -8,22 +8,32 @@ output_log=/var/log/tsx-esphome.log
 error_log=/var/log/tsx-esphome.log
 depend() { need net; after tsx-idled tsx-buttons tsx-ledbar tsx-als tsx-config avahi-daemon; }
 start() {
-	# Do not run in two cases. HA_TRANSPORT=mqtt means the panel config opted
-	# out of ESPHome entirely. VOICE=on means the voice satellite serves the
-	# same entities itself, and two ESPHome devices would confuse Home
-	# Assistant. Like tsx-mqtt when unconfigured: exit quietly and do not
-	# fail the runlevel.
+	# HA_TRANSPORT=mqtt means the panel config opted out of ESPHome entirely.
+	# Like tsx-mqtt when unconfigured: exit quietly and do not fail the
+	# runlevel.
 	transport=$(tsx-config get HA_TRANSPORT 2>/dev/null) || transport=esphome
-	voice=$(tsx-config get VOICE 2>/dev/null) || voice=
-	# No microphone (government=1): the voice satellite never runs, so
-	# this device serves the entities whatever VOICE says.
-	[ "$(sed -n 's/^MIC=//p' /run/tsx/hw.conf 2>/dev/null)" = no ] && voice=off
 	if [ "$transport" = mqtt ]; then
 		einfo "tsx-esphome: HA_TRANSPORT=mqtt, not started"
 		return 0
 	fi
+	# The satellite owns port 6053 when it is in the default runlevel
+	# ("tsx-audio enable voice", which tsx-config apply runs for VOICE=on).
+	# The runlevel is the one source, so a hand "tsx-audio disable voice"
+	# gives the port back to this device. If the satellite cannot start,
+	# this device serves the entities: no microphone (MIC=no, government=1),
+	# or the wake word library is missing (package tensorflow-lite-c).
+	voice=off
+	if [ -e "${TSX_RUNLEVEL_DIR:-/etc/runlevels/default}/tsx-voice" ] && [ -e /etc/init.d/tsx-voice ]; then
+		voice=on
+		if [ "$(sed -n 's/^MIC=//p' /run/tsx/hw.conf 2>/dev/null)" = no ]; then
+			voice=off
+		elif [ ! -e "${TSX_TFLITE_SO:-/usr/lib/libtensorflowlite_c.so}" ]; then
+			ewarn "tsx-esphome: the voice satellite is enabled, but the wake word library is missing. This device serves the entities"
+			voice=off
+		fi
+	fi
 	if [ "$voice" = on ]; then
-		einfo "tsx-esphome: VOICE=on, the voice satellite serves these entities instead"
+		einfo "tsx-esphome: the voice satellite is enabled and serves these entities instead"
 		return 0
 	fi
 	checkpath -d -m 0755 /run/tsx
