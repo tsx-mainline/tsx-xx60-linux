@@ -1,0 +1,48 @@
+# Profile "ha": kiosk plus the Home Assistant layer (tsx-ha): the ESPHome
+# device, MQTT, the voice satellite, the Bluetooth proxy, Sendspin and
+# kiosk-set-token. Format: see console.list.
+
+overlay etc/init.d/tsx-bt
+overlay etc/init.d/tsx-esphome
+overlay etc/init.d/tsx-mqtt
+overlay etc/init.d/tsx-sendspin
+overlay etc/init.d/tsx-voice
+overlay etc/logrotate.d/tsx-bt
+overlay etc/logrotate.d/tsx-sendspin
+overlay etc/logrotate.d/tsx-voice
+overlay etc/tsx/esphome.conf
+overlay etc/tsx/mqtt.conf
+overlay etc/tsx/sendspin.conf
+overlay etc/tsx/voice.conf
+overlay usr/local/bin/kiosk-set-token
+overlay usr/local/bin/tsx-esphome-run
+overlay usr/local/bin/tsx-voice
+overlay usr/local/bin/tsx-voice-hook
+overlay usr/local/bin/tsx-voice-run
+overlay usr/local/sbin/tsx-mqtt
+overlay usr/local/share/tsx/setup.d/ha.py
+
+tree /opt/lva
+built /usr/local/bin/linux-voice-assistant
+built /usr/bin/sendspin-cli
+built /usr/local/bin/sendspin-cli
+step sendspin
+step lva
+
+pkg mosquitto-clients
+pkg avahi-compat-libdns_sd
+pkg py3-zeroconf
+pkg py3-numpy
+pkg py3-protobuf
+pkg py3-cryptography
+pkg py3-tzlocal
+pkg py3-aiohappyeyeballs
+pkg py3-mpv
+pkg mpv-libs
+pkg sendspin-cli
+pkg tensorflow-lite-c
+
+svc default tsx-sendspin
+svc default tsx-bt
+svc default tsx-esphome
+svc default tsx-mqtt

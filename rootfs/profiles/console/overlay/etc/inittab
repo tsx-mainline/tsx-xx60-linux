@@ -1,0 +1,10 @@
+# /etc/inittab (TSX console profile). The panel screen shows a text login on
+# tty1. A USB keyboard types into it. The serial console has its own login.
+# The kiosk profiles have no getty on tty1, because the browser owns the screen.
+::sysinit:/sbin/openrc sysinit
+::sysinit:/sbin/openrc boot
+::wait:/sbin/openrc default
+tty1::respawn:/sbin/getty 38400 tty1
+ttyAML0::respawn:/sbin/getty -L 115200 ttyAML0 vt100
+::ctrlaltdel:/sbin/reboot
+::shutdown:/sbin/openrc shutdown

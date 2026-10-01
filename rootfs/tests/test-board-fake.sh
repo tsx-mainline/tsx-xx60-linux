@@ -133,6 +133,8 @@ echo "== tsx-mqtt (dry run) =="
 mkdir -p "$T/mq/run" "$T/mq/bin"
 printf 'NODE_ID=tsx-kiosk\nDEVICE_NAME=TSX test\n' > "$T/mq/mqtt.conf"
 mkdir -p "$T/mq/asound/FakeCard"
+# tsx-mqtt asks tsx-panelctl whether the sound card of the board is there
+printf '#!/bin/sh\nexec sh "%s/usr/local/sbin/tsx-panelctl" "$@"\n' "$O" > "$T/mq/bin/tsx-panelctl"; chmod +x "$T/mq/bin/tsx-panelctl"
 mq() { echo | PATH=$T/mq/bin:$PATH TSX_BOARD_CONF=$1 TSX_MQTT_DRY=1 TSX_MQTT_CONF=$T/mq/mqtt.conf TSX_RUN_DIR=$T/mq/run TSX_ASOUND_DIR=$T/mq/asound sh "$O/usr/local/sbin/tsx-mqtt" 2>&1; }
 out=$(mq "$BOARDX")
 echo "$out" | grep -q '"mdl":"FAKE-100 (mainline Linux)"' && ok "the device model comes from the board file" || bad "mdl: $(echo "$out" | grep -m1 mdl)"

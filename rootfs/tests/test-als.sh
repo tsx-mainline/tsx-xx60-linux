@@ -7,7 +7,7 @@ export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/ts
 export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")" && pwd); O=$HERE/../../rootfs/overlay
 ALS=$O/usr/local/sbin/tsx-als
-T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+T=$(mktemp -d); PCPID=; trap '[ -z "$PCPID" ] || kill "$PCPID" 2>/dev/null; rm -rf "$T"' EXIT
 mkdir -p "$T/iio/iio:device0" "$T/bl/mp3309c" "$T/run" "$T/bin"
 printf '#!/bin/sh\n:\n' > "$T/bin/usleep"; chmod +x "$T/bin/usleep"
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/tsx-config"; chmod +x "$T/bin/tsx-config"
@@ -149,7 +149,16 @@ json_ok() {
 	done)
 	[ -z "$n" ] && ok "$2: discovery payloads are valid JSON" || bad "$2: bad JSON: $n"
 }
-# 10. MQTT entities (dry run)
+# 10. MQTT entities (dry run). tsx-mqtt does not touch the hardware: its
+# commands go to tsx-panelctl, so a real panelctl daemon runs the (real
+# tsx-als, stub amixer) tools here.
+mkdir -p "$T/asound/TSW1060"
+printf '#!/bin/sh\nexec sh "%s/usr/local/sbin/tsx-panelctl" "$@"\n' "$O" > "$T/bin/tsx-panelctl"; chmod +x "$T/bin/tsx-panelctl"
+printf '#!/bin/sh\ncase "$*" in *sget*) echo "  Front Left: 128 [42%%]";; *) echo "AMIXER $*" >&2;; esac\n' > "$T/bin/amixer"; chmod +x "$T/bin/amixer"
+PATH=$O/usr/local/sbin:$T/bin:$PATH TSX_RUN_DIR=$T/run TSX_IDLED_STATE=$T/idled TSX_ALS_CONF=$O/etc/tsx/als.conf \
+	TSX_ASOUND_DIR=$T/asound TSX_BUTTONS_CONF=$T/buttons.conf TSX_BACKLIGHT_DIR=$T/bl sh "$O/usr/local/sbin/tsx-panelctl" > "$T/pc.log" 2>&1 &
+PCPID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do grep -q "listening on" "$T/pc.log" 2>/dev/null && break; sleep 0.1; done
 printf 'NODE_ID=tsx-kiosk\n' > "$T/mqtt.conf"; : > "$T/buttons.conf"
 printf 'lux 250\nraw 250\nreport 248\nlevel 16\nauto on\n' > "$T/run/als.state"
 echo 'tsx/tsx-kiosk/als_auto/set OFF' | PATH=$T/bin:$PATH TSX_MQTT_DRY=1 TSX_MQTT_CONF=$T/mqtt.conf TSX_RUN_DIR=$T/run \
@@ -159,17 +168,17 @@ json_ok "$T/mq" "mqtt"
 grep -q 'homeassistant/sensor/tsx-kiosk/illuminance/config .*"dev_cla":"illuminance"' "$T/mq" && ok "mqtt: illuminance discovery" || bad "mqtt discovery sensor"
 grep -q 'homeassistant/switch/tsx-kiosk/als_auto/config' "$T/mq" && ok "mqtt: auto brightness discovery" || bad "mqtt discovery switch"
 grep -q 'tsx/tsx-kiosk/als/lux 248' "$T/mq" && grep -q 'tsx/tsx-kiosk/als_auto/state ON' "$T/mq" && ok "mqtt: lux 248, auto ON published" || bad "mqtt state"
-[ "$(cat "$T/run/als-auto" 2>/dev/null)" = off ] && ok "mqtt: als_auto/set OFF -> tsx-als auto off" || bad "mqtt als_auto command"
+sleep 0.5   # the daemon runs the command a moment after tsx-mqtt sent it
+[ "$(cat "$T/run/als-auto" 2>/dev/null)" = off ] && ok "mqtt: als_auto/set OFF -> tsx-panelctl -> tsx-als auto off" || bad "mqtt als_auto command"
 # 11. MQTT volume number (fake sound card + amixer stub)
-mkdir -p "$T/asound/TSW1060"
-printf '#!/bin/sh\ncase "$*" in *sget*) echo "  Front Left: 128 [42%%]";; *) echo "AMIXER $*" >&2;; esac\n' > "$T/bin/amixer"; chmod +x "$T/bin/amixer"
 echo 'tsx/tsx-kiosk/volume/set 55' | PATH=$T/bin:$PATH TSX_MQTT_DRY=1 TSX_MQTT_CONF=$T/mqtt.conf TSX_RUN_DIR=$T/run \
 	TSX_IDLED_STATE=$T/idled TSX_BUTTONS_CONF=$T/buttons.conf TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_ASOUND_DIR=$T/asound \
 	TSX_BACKLIGHT_DIR=$T/bl sh "$O/usr/local/sbin/tsx-mqtt" > "$T/mv" 2>&1 || true
 json_ok "$T/mv" "mqtt volume"
-grep -q 'homeassistant/number/tsx-kiosk/volume/config' "$T/mv" && grep -q 'tsx/tsx-kiosk/volume/state 42' "$T/mv" && grep -q 'AMIXER -q -c TSW1060 sset Master 55%' "$T/mv" \
+sleep 0.5
+grep -q 'homeassistant/number/tsx-kiosk/volume/config' "$T/mv" && grep -q 'tsx/tsx-kiosk/volume/state 42' "$T/mv" && grep -q 'AMIXER -q -c TSW1060 sset Master 55%' "$T/pc.log" \
 	&& ok "mqtt: volume number (discovery, state 42 %, set 55 %)" || { bad "mqtt volume"; cat "$T/mv"; }
-TSX_MQTT_DRY=1 TSX_MQTT_CONF=$T/mqtt.conf TSX_RUN_DIR=$T/run TSX_IDLED_STATE=$T/idled TSX_BUTTONS_CONF=$T/buttons.conf \
+PATH=$T/bin:$PATH TSX_MQTT_DRY=1 TSX_MQTT_CONF=$T/mqtt.conf TSX_RUN_DIR=$T/run TSX_IDLED_STATE=$T/idled TSX_BUTTONS_CONF=$T/buttons.conf \
 	TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_ASOUND_DIR=$T/none sh "$O/usr/local/sbin/tsx-mqtt" < /dev/null 2>&1 | grep -q volume \
 	&& bad "volume published without a sound card" || ok "mqtt: no volume entity without the sound card"
 [ $fail = 0 ] && echo "PASS tsx-als" || { echo "--- log"; cat "$T/log"; exit 1; }

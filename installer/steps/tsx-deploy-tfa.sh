@@ -12,7 +12,7 @@
 # The exit status is 0 even if the fetch or deploy fails (the DSP is optional).
 # A caller that wants a hard failure must check the printed WARNING and ERROR lines.
 # Needs: rootfs/vendor-fetch.sh (this repo, unmodified, see docs/rootfs.md),
-# sshpass, ssh, scp. Panel login: root / $TSX_MAINLINE_PW (default tsx).
+# sshpass, ssh, scp. Panel login: root with your ssh key, or with $TSX_MAINLINE_PW.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 FETCH="$HERE/../../rootfs/vendor-fetch.sh"
@@ -22,9 +22,15 @@ while [ $# -gt 0 ]; do case "$1" in --dry-run) DRY=1; shift;; -h|--help) sed -n 
 say() { echo "tsx-deploy-tfa: $*" >&2; }
 VARIANTS="settings_yushan settings_yushan_2nd settings_yushan_3rd"
 LOCAL=${TFA_VENDOR_LOCAL:-"$HERE/../../rootfs/vendor-local/tfa9890"}
-MPW=${TSX_MAINLINE_PW:-tsx}
-SSH="sshpass -p $MPW ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$PANEL"
-SCP="sshpass -p $MPW scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+MPW=${TSX_MAINLINE_PW:-}
+# No fixed root password on the installed system: $TSX_MAINLINE_PW if set, else the ssh key.
+if [ -n "$MPW" ]; then
+	SSH="sshpass -p $MPW ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$PANEL"
+	SCP="sshpass -p $MPW scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+else
+	SSH="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$PANEL"
+	SCP="scp -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+fi
 
 if [ ! -x "$FETCH" ]; then say "WARNING: $FETCH not found/executable. Skipping DSP file deployment"; exit 0; fi
 if [ "$DRY" = 1 ]; then

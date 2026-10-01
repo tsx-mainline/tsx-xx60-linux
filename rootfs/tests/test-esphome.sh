@@ -88,6 +88,28 @@ EOF
 	chmod +x "$F/bin/$b"
 done
 
+# The base system's tsx-panelctl: the backend sends every command to its FIFO
+# and gets the volume from it. It runs the fake tools above.
+cat > "$F/bin/reboot" <<EOF
+#!/bin/sh
+echo "reboot" >> "$F/cmds.log"
+EOF
+cat > "$F/bin/amixer" <<EOF
+#!/bin/sh
+echo "amixer \$*" >> "$F/cmds.log"
+EOF
+cat > "$F/bin/tsx-panelctl" <<EOF
+#!/bin/sh
+exec sh "$HERE/../overlay/usr/local/sbin/tsx-panelctl" "\$@"
+EOF
+chmod +x "$F/bin/reboot" "$F/bin/amixer" "$F/bin/tsx-panelctl"
+env PATH="$F/bin:$PATH" TSX_RUN_DIR="$F/run/tsx" TSX_REBOOT_BIN="$F/bin/reboot" TSX_IDLED_STATE="$F/run/tsx-idled.state" \
+	TSX_BUTTONS_CONF="$F/etc/tsx/buttons.conf" TSX_ALS_CONF="$F/etc/tsx/als.conf.missing" TSX_ASOUND_DIR="$F/proc/asound" \
+	sh "$HERE/../overlay/usr/local/sbin/tsx-panelctl" > "$T/panelctl.log" 2>&1 &
+PIDS="$PIDS $!"
+for _ in $(seq 1 30); do grep -q "listening on" "$T/panelctl.log" 2>/dev/null && break; sleep 0.1; done
+grep -q "listening on" "$T/panelctl.log" || { echo "FAIL: tsx-panelctl did not start"; cat "$T/panelctl.log"; exit 1; }
+
 DT_HTTP=$((20000 + RANDOM % 5000)); DT_WS=$((DT_HTTP + 1)); API_PORT=$((DT_HTTP + 2))
 
 "$T/venv/bin/python3" "$HERE/esphome-fake-devtools.py" "$DT_HTTP" "$DT_WS" > "$T/devtools.log" 2>&1 &
@@ -118,7 +140,7 @@ start_server() {
 	TSX_ALS_CONF="$F/etc/tsx/als.conf.missing" TSX_ASOUND_DIR="$F/proc/asound" \
 	TSX_THERMAL_ZONE="$F/sys/thermal/temp" TSX_DEVTOOLS="127.0.0.1:$DT_HTTP" \
 	TSX_BOOT_VERBOSE_FLAG="$F/etc/tsx/boot-verbose" \
-	TSX_PANEL_DIRECT=1 TSX_HA_TRANSPORT=esphome \
+	TSX_HA_TRANSPORT=esphome \
 	TSX_ESPHOME_RUN_CONF="$F/run/tsx/esphome.conf.missing" TSX_ESPHOME_KEY_FILE="$F/run/tsx/esphome.key.missing" \
 	TSX_PANEL_NAME="$pname" \
 	TSX_ORIENTATION_FILE="$F/etc/tsx/orientation.missing" \
@@ -168,6 +190,7 @@ full_check() {
 	( sleep 3; printf 'led 128 unknown\nlast home long\n' > "$F/run/tsx/buttons.state" ) &
 	PIDS="$PIDS $!"
 	"$T/venv/bin/python3" "$HERE/esphome-check.py" "$port" "$@" || rc=1
+	sleep 0.5   # tsx-panelctl runs the commands a moment after the backend sent them
 	echo "-- backend commands issued --"
 	cat "$F/cmds.log" 2>/dev/null || echo "(none)"
 	grep -q '^tsx-ledbar set 100 0 0$' "$F/cmds.log" 2>/dev/null && echo "OK: ledbar command reached the backend" || { echo "FAIL: ledbar command missing/wrong"; rc=1; }

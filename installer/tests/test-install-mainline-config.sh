@@ -71,6 +71,8 @@ off
 tss10
 hunter2
 off
+correct horse
+correct horse
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test@host
 EOF
 )
@@ -152,13 +154,13 @@ cat > "$W/bin/sshpass" <<'STUB'
 case "$*" in *"cat /data/tsx/panel.conf"*) echo "KIOSK_URL=https://ha.example.org/";; *) exit 1;; esac
 STUB
 chmod +x "$W/bin/sshpass"
-OUT=$(PATH="$W/bin:$PATH" TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --yes --wipe-data \
+OUT=$(PATH="$W/bin:$PATH" TSX_MAINLINE_PW=tsx TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --yes --wipe-data \
 	--results "$W/res/wipe.txt" </dev/null 2>&1)
 [ $? -ne 0 ] && ok "--yes --wipe-data run stops at the (stubbed) MAC read" || bad "--yes --wipe-data run did not fail as staged: $OUT"
 echo "$OUT" | grep -q "keeping the panel's own /data/tsx/panel.conf" && ok "the panel's panel.conf was carried over (temp copy made)" || bad "no carry-over seen: $OUT"
 LEFT=$(ls "$W/res" | grep -c 'panel-conf\|reinstall-conf')
 [ "$LEFT" = 0 ] && ok "no panel-conf temp file left after the --wipe-data run" || bad "$LEFT temp file(s) left: $(ls "$W/res")"
-OUT=$(cd "$HERE" && PATH="$W/bin:$PATH" TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts \
+OUT=$(cd "$HERE" && PATH="$W/bin:$PATH" TSX_MAINLINE_PW=tsx TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts \
 	--results "$W/res/prompt.txt" 2>&1 <<'EOF'
 TSS-10-ABCDEF
 https://ha.example.org/lovelace/home
@@ -178,6 +180,67 @@ echo "$OUT" | grep -q "could not read the panel's eth0 MAC" && ok "prompted run 
 LEFT=$(ls "$W/res" | grep -c 'panel-conf\|reinstall-conf')
 [ "$LEFT" = 0 ] && ok "no panel-conf temp file left after the prompted run" || bad "$LEFT temp file(s) left: $(ls "$W/res")"
 [ -s "$W/res/prompt.txt" ] && ok "the results file itself is kept" || bad "results file missing"
+
+echo "== 7. root password: asked at install, only its hash is stored =="
+# pre prints the answers to the questions that come before the root password
+pre() { printf 'TSS-10-ABCDEF\nhttps://ha.example.org/x\ntrusted\nUTC\noff\nno\n\n\n\n'; }
+rp() {   # rp CONF DEFAULTS [ENV=VALUE...] < answers: run the prompt flow
+	local conf=$1 defaults=$2; shift 2
+	(cd "$HERE" && env TSX_CONFIG_BIN="$TSX_CONFIG_BIN" "$@" bash -c '. lib/tsx-config-prompt.sh; tsx_config_prompt "'"$conf"'" "'"$defaults"'"' 2>&1)
+}
+note() {  # note CONF: the root login note at the end of the install
+	(cd "$HERE" && TSX_CONFIG_BIN="$TSX_CONFIG_BIN" bash -c '. lib/tsx-config-prompt.sh; tsx_config_print_root_login "'"$1"'"' 2>&1)
+}
+# a wrapper that records the arguments of the hash tool, then runs the real one
+mkdir -p "$W/spy"
+for tool in openssl mkpasswd; do
+	real=$(command -v $tool 2>/dev/null) || continue
+	printf '#!/bin/sh\necho "$*" >> "%s/args.log"\nexec %s "$@"\n' "$W/spy" "$real" > "$W/spy/$tool"; chmod 755 "$W/spy/$tool"
+done
+if command -v openssl >/dev/null 2>&1 || command -v mkpasswd >/dev/null 2>&1; then
+	P7="$W/p7.conf"; : > "$W/spy/args.log"
+	OUT=$({ pre; printf 'correct horse battery\ncorrect horse battery\n\n'; } | rp "$P7" "" PATH="$W/spy:$PATH")
+	H=$(TSX_CONF="$P7" "$TSX_CONFIG_BIN" get ROOT_PASSWORD_HASH 2>/dev/null)
+	case "$H" in '$6$'*) ok "ROOT_PASSWORD_HASH is a sha512-crypt hash";; *) bad "no hash stored (got '$H'). Output: $OUT";; esac
+	salt=$(printf '%s' "$H" | cut -d'$' -f3)
+	if command -v openssl >/dev/null 2>&1 && printf 'x\n' | openssl passwd -6 -stdin >/dev/null 2>&1; then
+		RE=$(printf '%s\n' "correct horse battery" | openssl passwd -6 -salt "$salt" -stdin)
+		[ "$RE" = "$H" ] && ok "the hash matches the password that was typed" || bad "the hash does not match the password"
+	fi
+	grep -q 'correct horse' "$P7" && bad "the password is in panel.conf" || ok "the plain password is not in panel.conf"
+	case "$OUT" in *"correct horse"*) bad "the password was printed";; *) ok "the password is not printed";; esac
+	grep -q 'correct\|horse\|battery' "$W/spy/args.log" && bad "the password was an argument of the hash tool" || ok "the hash tool got the password on stdin, not as an argument"
+	echo "$OUT" | grep -q '^ROOT_PASSWORD_HASH=\*\*\*\*' && ok "the printed summary masks ROOT_PASSWORD_HASH" || bad "summary does not mask ROOT_PASSWORD_HASH"
+	OUT=$(note "$P7")
+	case "$OUT" in *"password that you gave is set"*) ok "the end of the install says that the password is set";; *) bad "root login note (set): $OUT";; esac
+
+	P8="$W/p8.conf"
+	OUT=$({ pre; printf 'short\ncorrect horse battery\nsomething else\ncorrect horse battery\ncorrect horse battery\n\n'; } | rp "$P8" "" PATH="$W/spy:$PATH")
+	echo "$OUT" | grep -q 'too short' && ok "a password under 8 characters is refused" || bad "short password accepted"
+	echo "$OUT" | grep -q 'two entries differ' && ok "two different entries are refused" || bad "mismatch accepted"
+	TSX_CONF="$P8" "$TSX_CONFIG_BIN" get ROOT_PASSWORD_HASH >/dev/null 2>&1 && ok "after the retries the hash is stored" || bad "no hash after the retries"
+
+	P9="$W/p9.conf"
+	OUT=$({ pre; printf '\n\n'; } | rp "$P9" "$P7")
+	[ "$(TSX_CONF="$P9" "$TSX_CONFIG_BIN" get ROOT_PASSWORD_HASH 2>/dev/null)" = "$H" ] && ok "reinstall: a blank answer keeps the saved hash" || bad "reinstall lost the hash"
+	echo "$OUT" | grep -q 'keeping the saved root password' && ok "reinstall says that it keeps the password" || bad "no keep message"
+else
+	echo "  skip: no openssl or mkpasswd on this host (the hash cases)"
+fi
+P10="$W/p10.conf"
+OUT=$({ pre; printf '\n'; } | rp "$P10" "")
+TSX_CONF="$P10" "$TSX_CONFIG_BIN" get ROOT_PASSWORD_HASH >/dev/null 2>&1 && bad "a blank answer stored a hash" || ok "a blank answer stores no password (none)"
+echo "$OUT" | grep -q 'no root password' && echo "$OUT" | grep -q 'asks for one' && ok "the prompt says what no password means" || bad "no explanation for a blank answer"
+OUT=$(note "$P10")
+case "$OUT" in *"no root password was set"*"no SSH key was given"*) ok "no password and no key: the end of the install says that ssh accepts nothing";; *) bad "root login note (none, no key): $OUT";; esac
+P11="$W/p11.conf"; TSX_CONF="$P11" "$TSX_CONFIG_BIN" set SSH_AUTHORIZED_KEY "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test@host" >/dev/null
+OUT=$(note "$P11")
+case "$OUT" in *"no root password was set"*"ssh accepts the SSH key"*) ok "no password with a key: ssh accepts the key";; *) bad "root login note (none, key): $OUT";; esac
+P12="$W/p12.conf"
+OUT=$({ pre; printf 'correct horse battery\ncorrect horse battery\n\n'; } | rp "$P12" "" TSX_HASH_DISABLE=1)
+TSX_CONF="$P12" "$TSX_CONFIG_BIN" get ROOT_PASSWORD_HASH >/dev/null 2>&1 && bad "a hash without a tool" || ok "no hash tool: nothing is stored"
+echo "$OUT" | grep -q 'no tool to hash' && ok "no hash tool: the prompt says so" || bad "no message for a missing hash tool"
+case "$OUT" in *"correct horse"*) bad "the password was printed";; *) ok "the password is not printed (no tool case)";; esac
 
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-install-mainline-config || echo FAIL test-install-mainline-config

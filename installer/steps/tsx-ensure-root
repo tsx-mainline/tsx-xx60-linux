@@ -45,7 +45,9 @@ auto) if command -v pgrep >/dev/null 2>&1 && pgrep -f 'serlog\.py' >/dev/null 2>
 esac
 log "== tsx-ensure-root: PANEL=$PANEL uart=$UART_OPT ($UART_MODE)"
 
-MSSH="sshpass -p ${TSX_MAINLINE_PW:-tsx} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$PANEL"
+# No fixed root password on the installed system: $TSX_MAINLINE_PW if set, else the ssh key.
+MSSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8"
+if [ -n "${TSX_MAINLINE_PW:-}" ]; then MSSH="sshpass -p $TSX_MAINLINE_PW ssh $MSSH_OPTS root@$PANEL"; else MSSH="ssh -o BatchMode=yes $MSSH_OPTS root@$PANEL"; fi
 is_mainline() { local out; is_crestron_sshd "$PANEL" && return 1; out=$($MSSH uname -r 2>/dev/null) || return 1; case "$out" in [6-9].*|[1-9][0-9].*) return 0;; *) return 1;; esac; }
 rootsh_ok() { local out; out=$(TSX_SSH_TIMEOUT=30 "$ROOTSH" "$PANEL" id 2>/dev/null) || true; grep -q '^uid=0(' <<<"$out"; }
 uart() { local w=5; if [ "$1" = -w ]; then w=$2; shift 2; fi; [ ${#1} -le 80 ] || die "UART command >80 chars: $1"; "$UC" -w "$w" "$1"; }

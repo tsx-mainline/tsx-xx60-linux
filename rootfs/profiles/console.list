@@ -1,0 +1,165 @@
+# Base of every image profile (profile "console"): a plain Linux system with
+# a text login on the panel screen and SSH. Every other profile adds to it.
+# Format: KIND NAME. See ../profile.sh. A profile can also have files that no
+# other profile has, in profiles/NAME/overlay. The build copies them over the
+# image last (console: the login on tty1 and the banner. kiosk: the marker file
+# /etc/tsx/profile. ha: none, and a missing marker means ha).
+#   overlay  file below rootfs/overlay, path relative to it
+#   built    file that mkrootfs.sh compiles or installs, absolute path on the panel
+#   tree     directory that a build step installs, absolute path on the panel
+#   step     build step of mkrootfs.sh
+#   pkg      Alpine or tsx-aports package, from packages.txt or packages-tsx.txt
+#   svc      OpenRC service: svc RUNLEVEL NAME (boot or default)
+#   user     system user that mkrootfs.sh adds
+
+# --- files of the overlay
+overlay etc/apk/keys/tsx-mainline-6ab9ca44.rsa.pub
+overlay etc/asound.conf
+overlay etc/chrony/chrony.conf
+overlay etc/conf.d/chronyd
+overlay etc/conf.d/syslog
+overlay etc/conf.d/watchdog
+overlay etc/fstab
+overlay etc/init.d/tsx-als
+overlay etc/init.d/tsx-audio
+overlay etc/init.d/tsx-autoupdate
+overlay etc/init.d/tsx-boot-ok
+overlay etc/init.d/tsx-buttons
+overlay etc/init.d/tsx-config
+overlay etc/init.d/tsx-cpufreq
+overlay etc/init.d/tsx-data
+overlay etc/init.d/tsx-hostname
+overlay etc/init.d/tsx-idled
+overlay etc/init.d/tsx-ledbar
+overlay etc/init.d/tsx-panelctl
+overlay etc/init.d/tsx-setup
+overlay etc/init.d/tsx-tfa-dsp
+overlay etc/kiosk.conf
+overlay etc/local.d/tsx-ip.start
+overlay etc/logrotate.d/tsx-als
+overlay etc/logrotate.d/tsx-autoupdate
+overlay etc/logrotate.d/tsx-buttons
+overlay etc/logrotate.d/tsx-cpufreq
+overlay etc/network/interfaces
+overlay etc/periodic/15min/tsx-savetime
+overlay etc/periodic/hourly/tsx-emmc-state
+overlay etc/periodic/weekly/tsx-fstrim
+overlay etc/profile.d/tsx.sh
+overlay etc/ssh/sshd_config.d/tsx.conf
+overlay etc/sysctl.d/tsx.conf
+overlay etc/tsx/als.conf
+overlay etc/tsx/audio.conf
+overlay etc/tsx/autoupdate.conf
+overlay etc/tsx/buttons.conf
+overlay etc/tsx/ledbar.conf
+overlay etc/tsx/tfa-dsp.conf
+overlay etc/tsx/uboot-env.conf
+overlay etc/udev/rules.d/60-tsx-backlight.rules
+overlay etc/udhcpc/post-bound/tsx-ntp
+overlay etc/udhcpc/post-renew/tsx-ntp
+overlay usr/local/bin/tsx-audio
+overlay usr/local/bin/tsx-blank
+overlay usr/local/bin/tsx-board
+overlay usr/local/bin/tsx-display-power
+overlay usr/local/bin/tsx-keypad
+overlay usr/local/bin/tsx-rootpw
+overlay usr/local/lib/tsx/board.sh
+overlay usr/local/lib/tsx/bt-chip-csr8811.sh
+overlay usr/local/lib/tsx/btgatt.py
+overlay usr/local/lib/tsx/btscan.py
+overlay usr/local/lib/tsx/csr_psload.py
+overlay usr/local/lib/tsx/tfa_dsp.py
+overlay usr/local/sbin/tsx-als
+overlay usr/local/sbin/tsx-autoupdate
+overlay usr/local/sbin/tsx-boot-ok
+overlay usr/local/sbin/tsx-bt
+overlay usr/local/sbin/tsx-config
+overlay usr/local/sbin/tsx-cpufreqd
+overlay usr/local/sbin/tsx-dhcp-ntp
+overlay usr/local/sbin/tsx-emmc-state
+overlay usr/local/sbin/tsx-hw
+overlay usr/local/sbin/tsx-ledbard
+overlay usr/local/sbin/tsx-panelctl
+overlay usr/local/sbin/tsx-tfa-dsp
+overlay usr/local/sbin/tsx-update-boot
+overlay usr/local/sbin/tsx-wait-time
+
+# --- files that the build installs
+built /usr/local/sbin/tsx-idled
+built /usr/local/sbin/tsx-buttons
+built /usr/local/bin/tsx-ledbar
+built /usr/local/bin/tsx-peak
+built /usr/local/bin/tsx-splash
+tree /usr/share/tsx/splash
+tree /usr/local/share/tsx/tfa9890
+step compile-base
+step splash
+step tfa-containers
+step ssh-policy
+step root-password
+
+# --- Alpine packages
+pkg alpine-baselayout
+pkg alpine-release
+pkg apk-tools
+pkg busybox
+pkg busybox-openrc
+pkg busybox-suid
+pkg openrc
+pkg musl-utils
+pkg eudev
+pkg eudev-openrc
+pkg e2fsprogs
+pkg dosfstools
+pkg util-linux-misc
+pkg kmod
+pkg tzdata
+pkg ca-certificates
+pkg logrotate
+pkg ifupdown-ng
+pkg chrony
+pkg openssh-server
+pkg openssh-sftp-server
+pkg openssh-client-default
+pkg dbus
+pkg curl
+pkg libusb
+pkg alsa-lib
+pkg alsa-utils
+pkg avahi
+pkg python3
+pkg bluez-deprecated
+pkg brightnessctl
+pkg evtest
+pkg u-boot-tools
+pkg i2c-tools
+pkg htop
+pkg procps-ng
+pkg tsx-keys
+pkg tsx-xx60-kernel-lts
+pkg tsx-xx60-kernel-stable
+
+# --- services
+svc boot tsx-setup
+svc boot tsx-hostname
+svc boot tsx-data
+svc boot tsx-config
+svc default tsx-idled
+svc default tsx-cpufreq
+svc default tsx-buttons
+svc default tsx-als
+svc default tsx-ledbar
+svc default tsx-audio
+svc default tsx-tfa-dsp
+svc default tsx-panelctl
+svc default tsx-autoupdate
+svc default tsx-boot-ok
+svc default networking
+svc default chronyd
+svc default sshd
+svc default crond
+svc default watchdog
+svc default dbus
+svc default avahi-daemon
+svc default local
+

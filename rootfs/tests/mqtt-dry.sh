@@ -1,13 +1,23 @@
 #!/bin/sh
 # Host test of tsx-mqtt in dry-run mode: discovery JSON (jq), state mapping,
-# command handling (tsx-ledbar/tsx-keypad/tsx-blank are stubs that log calls).
+# command handling. tsx-mqtt does not touch the hardware: every command goes to
+# tsx-panelctl, which is a stub here that logs the calls.
 set -eu
 # The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
 export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
 export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")" && pwd); O=$HERE/../../rootfs/overlay
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; mkdir -p "$T/bin" "$T/run" "$T/bl/x"
-for c in tsx-ledbar tsx-keypad tsx-blank tsx-autoupdate tsx-config; do printf '#!/bin/sh\necho "CALL %s $*" >&2\n' $c > "$T/bin/$c"; chmod +x "$T/bin/$c"; done
+# the stub of tsx-panelctl: the LED bar and the sound card are there, `send` logs, `get volume` has no value
+cat > "$T/bin/tsx-panelctl" <<'EOF'
+#!/bin/sh
+case "$1" in
+has) case "$2" in ledbar) exit 0;; *) exit 1;; esac;;
+get) exit 1;;
+send) echo "CALL tsx-panelctl $*" >&2;;
+esac
+EOF
+chmod +x "$T/bin/tsx-panelctl"
 printf 'want 0 0 40\nlast 0 0 40\nout 0 0 40\n' > "$T/run/ledbar.state"
 printf 'screen awake\nled 128 day\nlast home short 12:00:01\n' > "$T/run/buttons.state"
 echo "on 17" > "$T/idled"; echo 0 > "$T/bl/x/brightness"
@@ -32,27 +42,30 @@ chk 'PUB (retained) tsx/tsx-kiosk/ledbar/rgb 0,0,255'
 chk 'PUB (retained) tsx/tsx-kiosk/keypad/brightness 128'
 chk 'PUB (retained) tsx/tsx-kiosk/screen/state ON'
 chk 'PUB (retained) tsx/tsx-kiosk/backlight/state 17'
-chk 'CALL tsx-ledbar set 40 0 0'
-chk 'CALL tsx-ledbar set 50 0 0'
-chk 'CALL tsx-ledbar off'
-chk 'CALL tsx-keypad led 40'
-chk 'CALL tsx-keypad led off'
-chk 'CALL tsx-blank on'
+chk 'CALL tsx-panelctl send ledbar set 40 0 0'
+chk 'CALL tsx-panelctl send ledbar set 50 0 0'
+chk 'CALL tsx-panelctl send ledbar off'
+chk 'CALL tsx-panelctl send keypad led 40'
+chk 'CALL tsx-panelctl send keypad led off'
+chk 'CALL tsx-panelctl send blank on'
 chk 'PUB tsx/tsx-kiosk/key/home {"event_type":"short"}'
 chk 'PUB tsx/tsx-kiosk/trigger/home/short short'
 chk 'PUB (retained) tsx/tsx-kiosk/update/state {"installed_version":"abc123","latest_version":"abc123+2pending","title":"TSX test packages","release_summary":"musl (1.2.5-r0 -> 1.2.5-r1)","in_progress":false}'
-chk 'CALL tsx-autoupdate now'
+chk 'CALL tsx-panelctl send update-install'
 chk 'PUB (retained) tsx/tsx-kiosk/blank_timeout/state 120'
 chk 'PUB (retained) tsx/tsx-kiosk/touched_recently/state ON'
-chk 'CALL tsx-config set BLANK_TIMEOUT 600'
-chk 'CALL tsx-config apply'
-grep -q 'BLANK_TIMEOUT 99999' "$T/out" && { echo "FAIL: blank timeout above 86400 accepted"; fail=1; }
-[ "$(grep -c 'CALL tsx-ledbar' "$T/out")" = 3 ] || { echo "FAIL: ON after brightness must not send again"; fail=1; }
-[ "$(cat "$T/run/brightness")" = 23 ] || { echo "FAIL: backlight not clamped to BACKLIGHT_MAX"; fail=1; }
-[ "$(cat "$T/bl/x/brightness")" = 23 ] || { echo "FAIL: backlight sysfs not written"; fail=1; }
+chk 'CALL tsx-panelctl send blank-timeout 600'
+chk 'CALL tsx-panelctl send backlight 23'
+grep -q 'blank-timeout 99999' "$T/out" && { echo "FAIL: blank timeout above 86400 accepted"; fail=1; }
+[ "$(grep -c 'CALL tsx-panelctl send ledbar' "$T/out")" = 3 ] || { echo "FAIL: ON after brightness must not send again"; fail=1; }
+# the base system sets the backlight (tsx-panelctl backlight), so tsx-mqtt writes no file and no device
+[ ! -e "$T/run/brightness" ] || { echo "FAIL: tsx-mqtt wrote the brightness override itself"; fail=1; }
+[ "$(cat "$T/bl/x/brightness")" = 0 ] || { echo "FAIL: tsx-mqtt wrote the backlight device itself"; fail=1; }
+grep -qE 'CALL (tsx-ledbar|tsx-keypad|tsx-blank|tsx-als|tsx-config|amixer)' "$T/out" && { echo "FAIL: tsx-mqtt called a hardware tool directly"; fail=1; }
+grep -nE '^[[:space:]]*(tsx-ledbar|tsx-keypad|tsx-blank|tsx-als|amixer)[[:space:]]|[;&|][[:space:]]*(tsx-ledbar|tsx-keypad|tsx-blank|tsx-als|amixer)[[:space:]]' "$O/usr/local/sbin/tsx-mqtt" | grep -v '^[0-9]*:#' && { echo "FAIL: tsx-mqtt source runs a hardware tool"; fail=1; }
 # a panel without a LED bar tool, front keys and eMMC wear: those entities are
 # not announced, and an older discovery topic of them is cleared
-mkdir -p "$T/bin-bare"; for c in tsx-blank tsx-autoupdate tsx-config; do cp "$T/bin/$c" "$T/bin-bare/"; done
+mkdir -p "$T/bin-bare"
 PATH=$T/bin-bare:/usr/bin:/bin TSX_MQTT_DRY=1 TSX_MQTT_CONF=$T/mqtt.conf TSX_RUN_DIR=$T/run TSX_IDLED_STATE=$T/idled \
 	TSX_BUTTONS_CONF=$T/none TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_BACKLIGHT_DIR=$T/bl \
 	sh "$O/usr/local/sbin/tsx-mqtt" < /dev/null > "$T/outbare" 2>&1

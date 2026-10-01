@@ -95,8 +95,11 @@
 # the .puf download, and debugfs (e2fsprogs) only for the PSR file from it.
 # Without that download, a panel that has no DSP files gets no vendor speaker
 # tuning. The panel must be able to connect back to this
-# host (HTTP on ports 8079 and 8081). Panel logins: rescue root/tsx, mainline
-# kiosk root/$TSX_MAINLINE_PW (default tsx).
+# host (HTTP on ports 8079 and 8081). Panel logins: rescue root/tsx. The
+# installed system has no fixed root password (docs/rootfs.md "Root login"),
+# so the script logs in to a running mainline panel with your ssh key. If the
+# panel has a root password, give it in $TSX_MAINLINE_PW (a test build with
+# TSX_DEV_ROOT_HASH=<hash of tsx>: TSX_MAINLINE_PW=tsx).
 # Test hook: TSX_PANEL_KIND=android|mainline|rescue|unreachable skips the
 # network probe that picks the path.
 set -euo pipefail
@@ -138,10 +141,18 @@ done
 [ ! -f "$RESCUE_IMG.sha256" ] || { GOT=$(sha256sum < "$RESCUE_IMG" | cut -d' ' -f1); WANT=$(awk '{print $1}' "$RESCUE_IMG.sha256"); [ "$GOT" = "$WANT" ] || die "$RESCUE_IMG sha256 mismatch"; }
 log "== tsx-install-mainline v2: PANEL=$PANEL PAYLOAD=$PAYLOAD KERNEL=$KERNEL uart=$UART_OPT tfa-source=$TFA_SOURCE psr-source=$PSR_SOURCE dry-run=$DRYRUN"
 
-MPW=${TSX_MAINLINE_PW:-tsx}
+MPW=${TSX_MAINLINE_PW:-}
 RPW=tsx   # the rescue's documented default (docs/recovery.md); never overridden here
-MSSH="sshpass -p $MPW ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$PANEL"
+# No fixed root password on the installed system: use $TSX_MAINLINE_PW when it
+# is set, else the ssh key (BatchMode: never ask for a password).
+MSSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8"
+if [ -n "$MPW" ]; then MSSH="sshpass -p $MPW ssh $MSSH_OPTS root@$PANEL"; else MSSH="ssh -o BatchMode=yes $MSSH_OPTS root@$PANEL"; fi
 is_mainline_kiosk() { local out; is_crestron_sshd "$PANEL" && return 1; out=$($MSSH 'awk "\$2==\"/\"{print \$1}" /proc/mounts' 2>/dev/null) || return 1; [ "$out" = /dev/mmcblk1p8 ]; }
+# After the install the panel may have no login that this host can use (a root
+# password that only you know, no key). Then the OpenSSH banner on port 22
+# tells the new system from the rescue (dropbear) and from Android.
+ssh_banner() { timeout 5 bash -c 'exec 3<>/dev/tcp/$1/22 && head -n 1 <&3' _ "$1" 2>/dev/null | tr -d '\r'; }
+kiosk_up() { is_mainline_kiosk && return 0; is_crestron_sshd "$PANEL" && return 1; case "$(ssh_banner "$PANEL")" in SSH-2.0-OpenSSH*) return 0;; *) return 1;; esac; }
 run_stream_at() {  # SSHCMD REMOTECMD: like tsx-restore-factory's run_stream, parameterised on the ssh command
 	local sshcmd=$1 cmd=$2 tmp rc
 	tmp=$(mktemp "$RESULTS.XXXXXX")
@@ -526,13 +537,14 @@ w=0; while $RSSH true >/dev/null 2>&1 && [ $w -lt 60 ]; do sleep 5; w=$((w + 5))
 # Count wall-clock seconds (the ssh timeout of each probe counts too).
 # Print a heartbeat about every 30 s.
 t0=$(date +%s); hb=0
-until is_mainline_kiosk; do
+until kiosk_up; do
 	sleep 10; w=$(( $(date +%s) - t0 ))
 	[ $w -ge $((hb + 30)) ] && { hb=$w; log "  still waiting for mainline ssh (root=/dev/mmcblk1p8) on $PANEL: ${w}/420 s"; }
-	[ $w -lt 420 ] || die "the kiosk did not come up on $PANEL within 420 s after the install (mainline ssh: root/\$TSX_MAINLINE_PW). The installer verified the eMMC writes before the reboot. The panel most likely booted with another DHCP address, because some images used a random eth0 MAC on the first boot. Power-cycle the panel once, or find it in the leases of your DHCP server. Then check it with ssh root@<its-ip>"
+	[ $w -lt 420 ] || die "the kiosk did not come up on $PANEL within 420 s after the install (OpenSSH on port 22 of the new system). The installer verified the eMMC writes before the reboot. The panel most likely booted with another DHCP address, because some images used a random eth0 MAC on the first boot. Power-cycle the panel once, or find it in the leases of your DHCP server. Then check it with ssh root@<its-ip>"
 done
 KIOSK_UP=$($MSSH 'pgrep -f chromium >/dev/null && echo yes || echo no' 2>/dev/null) || KIOSK_UP=unknown
 log "  ok: root=/dev/mmcblk1p8, kiosk running=$KIOSK_UP"
-log "== DONE. $PANEL is now the mainline kiosk on the eMMC ($KERNEL kernel). ssh root@$PANEL (password \$TSX_MAINLINE_PW, default tsx)."
+log "== DONE. $PANEL is now the mainline kiosk on the eMMC ($KERNEL kernel). ssh root@$PANEL (the root password that you gave, or your SSH key)."
 # a newly generated ESPHome API key (installer/lib/tsx-config-prompt.sh), once
 if [ "$(type -t tsx_config_print_api_key)" = function ]; then tsx_config_print_api_key "$PANEL"; fi
+if [ "$(type -t tsx_config_print_root_login)" = function ]; then tsx_config_print_root_login "$CONFIG"; fi

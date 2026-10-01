@@ -49,14 +49,14 @@ for f in "$I"/*; do
 	grep -q '^description=' "$f" || bad "$n: no description"
 done
 ok "each script passes busybox sh -n, uses openrc-run, is executable and has a description"
-# every script is in a runlevel of mkrootfs.sh, except the ones that a
-# user turns on (tsx-voice: "tsx-audio enable voice")
+# every script is in a runlevel of the ha profile (profiles/*.list), except the
+# ones that a user turns on (tsx-voice: "tsx-audio enable voice")
 for f in "$I"/*; do
 	n=${f##*/}
 	case $n in tsx-voice) continue;; esac
-	grep -E '^for s in ' "$HERE/mkrootfs.sh" | grep -q " $n " || bad "$n is in no runlevel of mkrootfs.sh"
+	sh "$HERE/profile.sh" has ha svc "$n" || bad "$n is in no runlevel of the profile lists"
 done
-ok "each script, except tsx-voice, is in a runlevel of mkrootfs.sh"
+ok "each script, except tsx-voice, is in a runlevel of the ha profile"
 # the services in depend() exist: in this overlay, or on the Alpine list
 alpine="localmount net udev udev-settle udev-postmount crond sshd dbus avahi-daemon seatd chronyd networking syslog bootmisc hostname root swclock modules sysctl sysinit"
 for f in "$I"/*; do
@@ -124,7 +124,8 @@ rm -f "$T/pbin/rc-service"
 
 echo "== tsx-audio enable and disable voice =="
 for c in rc-update rc-service; do printf '#!/bin/sh\necho "%s $*" >> "%s/rc.log"\n' "$c" "$T" > "$T/pbin/$c"; chmod +x "$T/pbin/$c"; done
-au() { PATH=$T/pbin:$PATH busybox sh "$HERE/overlay/usr/local/bin/tsx-audio" "$@"; }
+mkdir -p "$T/initd"; : > "$T/initd/tsx-voice"; : > "$T/initd/tsx-sendspin"
+au() { PATH=$T/pbin:$PATH TSX_INITD=$T/initd busybox sh "$HERE/overlay/usr/local/bin/tsx-audio" "$@"; }
 rl() { tr '\n' '|' < "$T/rc.log"; }
 : > "$T/rc.log"; au enable voice >/dev/null; rc=$?
 [ $rc = 0 ] && [ "$(rl)" = "rc-update add tsx-voice default|rc-service tsx-esphome stop|rc-service tsx-voice start|" ] && ok "enable voice: runlevel, stop tsx-esphome, then start" || bad "enable voice (rc $rc): $(rl)"
@@ -132,6 +133,13 @@ rm -rf "$T/rl0"; : > "$T/rc.log"; TSX_RUNLEVEL_DIR=$T/rl0 au disable voice >/dev
 [ $rc = 0 ] && [ "$(rl)" = "rc-service tsx-voice stop|rc-update del tsx-voice default|" ] && ok "disable voice, never enabled (boot with VOICE=off): tsx-esphome is not touched" || bad "disable voice (rc $rc): $(rl)"
 : > "$T/rc.log"; TSX_RUNLEVEL_DIR=$T/rl au disable voice >/dev/null; rc=$?
 [ $rc = 0 ] && [ "$(rl)" = "rc-service tsx-voice stop|rc-update del tsx-voice default|rc-service tsx-esphome restart|" ] && ok "disable voice, was enabled: stop, leave the runlevel, restart tsx-esphome" || bad "disable voice enabled (rc $rc): $(rl)"
+# an image without the Home Assistant layer (the console and kiosk profiles) has neither service
+rm -f "$T/initd/tsx-voice" "$T/initd/tsx-sendspin"; : > "$T/rc.log"
+au disable voice >/dev/null; rc=$?
+[ $rc = 0 ] && [ ! -s "$T/rc.log" ] && ok "no tsx-voice service: disable voice is a quiet no-op (tsx-config apply runs it at every boot)" || bad "disable voice, no service (rc $rc): $(rl)"
+au disable sendspin >/dev/null; [ $? = 0 ] && [ ! -s "$T/rc.log" ] && ok "no tsx-sendspin service: disable sendspin is a no-op" || bad "disable sendspin, no service: $(rl)"
+au enable voice >/dev/null 2>"$T/err"; rc=$?
+[ $rc != 0 ] && [ ! -s "$T/rc.log" ] && grep -q 'not in this profile' "$T/err" && ok "no tsx-voice service: enable voice says why it cannot" || bad "enable voice, no service (rc $rc): $(cat "$T/err")"
 rm -f "$T/pbin/rc-service" "$T/pbin/rc-update"
 
 echo "== tsx-bt =="

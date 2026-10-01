@@ -78,6 +78,10 @@ jobs:
         run: rootfs/tests/test-hw.sh
       - name: rootfs/tests/test-board-xx60.sh - the board file of the xx60 and tsx-board
         run: rootfs/tests/test-board-xx60.sh
+      - name: rootfs/tests/test-profiles.sh - the file list of each image profile (console, kiosk, ha)
+        run: sh rootfs/tests/test-profiles.sh
+      - name: rootfs/tests/test-root-login.sh - no fixed root password, first boot apply, expired state, banner
+        run: sh rootfs/tests/test-root-login.sh
       - name: rootfs/tests/test-board-fake.sh - the shared software on a fake board file
         run: rootfs/tests/test-board-fake.sh
       - name: rootfs/tests/test-bt.sh - Bluetooth bring-up (PSR upload to a fake chip, tsx-bt with fake sysfs, passive scanner with a fake controller)

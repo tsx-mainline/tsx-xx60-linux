@@ -33,7 +33,9 @@
 #                    TSX_APK_LOCAL=<local tsx-aports published tree>: the script
 #                    mirrors it to rootfs/aports-local/ on the host, and
 #                    build-rootfs.sh installs from there. The script passes
-#                    TSX_APK_URL through.
+#                    TSX_APK_URL, PROFILE (console, kiosk or ha, default ha)
+#                    and TSX_DEV_ROOT_HASH (a root password hash for a test
+#                    image) through.
 #   initramfs        build-rootfs.sh initramfs -> initramfs-switchroot.cpio.gz
 #   image [--flavor lts|stable | BRANCH]   run rootfs/mkbootimg.sh with KDIR set to
 #                    the out-<flavor>/ of the worktree of the resolved branch
@@ -196,8 +198,8 @@ PROTECT=(--filter='P /sendspin/out/' --filter='P /tflite/libtensorflowlite_c.so'
 push_rootfs() {
 	local p=$REPO/rootfs
 	rsh "mkdir -p $BUILD_DIR/rootfs"
-	for d in overlay src initramfs config voice splash; do [ -d "$p/$d" ] && "${RS[@]}" --delete "${PROTECT[@]}" "$p/$d/" "$HOST:$BUILD_DIR/rootfs/$d/"; done
-	for f in mkrootfs.sh build-rootfs.sh mkbootimg.sh packages.txt packages-tsx.txt vendor-fetch.sh install.sh tsx-disk.sh authorized_keys; do [ -e "$p/$f" ] && "${RS[@]}" "$p/$f" "$HOST:$BUILD_DIR/rootfs/"; done
+	for d in overlay profiles src initramfs config voice splash; do [ -d "$p/$d" ] && "${RS[@]}" --delete "${PROTECT[@]}" "$p/$d/" "$HOST:$BUILD_DIR/rootfs/$d/"; done
+	for f in mkrootfs.sh build-rootfs.sh profile.sh mkbootimg.sh packages.txt packages-tsx.txt vendor-fetch.sh install.sh tsx-disk.sh authorized_keys; do [ -e "$p/$f" ] && "${RS[@]}" "$p/$f" "$HOST:$BUILD_DIR/rootfs/"; done
 	true
 }
 
@@ -252,8 +254,8 @@ maybe_pull() {  # like pull, but --no-pull/REMOTE_PULL=0 leaves the files on the
 }
 
 t0=$(date +%s)
-RS_PATHS=(tools/build ci kernel/mkimage.sh kernel/aml-dt.py rootfs/overlay rootfs/src rootfs/initramfs rootfs/config rootfs/voice rootfs/splash
-	rootfs/mkrootfs.sh rootfs/build-rootfs.sh rootfs/mkbootimg.sh rootfs/packages.txt rootfs/packages-tsx.txt rootfs/vendor-fetch.sh rootfs/install.sh rootfs/tsx-disk.sh rootfs/authorized_keys)
+RS_PATHS=(tools/build ci kernel/mkimage.sh kernel/aml-dt.py rootfs/overlay rootfs/profiles rootfs/src rootfs/initramfs rootfs/config rootfs/voice rootfs/splash
+	rootfs/mkrootfs.sh rootfs/build-rootfs.sh rootfs/profile.sh rootfs/mkbootimg.sh rootfs/packages.txt rootfs/packages-tsx.txt rootfs/vendor-fetch.sh rootfs/install.sh rootfs/tsx-disk.sh rootfs/authorized_keys)
 case $CMD in
 kernel) guard_sources tools/build ci kernel/mkimage.sh kernel/aml-dt.py;;
 rootfs|initramfs|image) guard_sources "${RS_PATHS[@]}";;
@@ -285,6 +287,13 @@ rootfs)
 	# TSX_APK_LOCAL (a local tsx-aports published tree): mirrored next to the
 	# rootfs sources on the host and used from there
 	apkenv="TSX_APK_URL=${TSX_APK_URL:-https://tsx-aports.unexceptional.net}"
+	# PROFILE: console, kiosk or ha (default ha). TSX_DEV_ROOT_HASH: a crypt hash
+	# for the root password of a test image (docs/rootfs.md "Root login").
+	case "${PROFILE:-ha}" in console|kiosk|ha) apkenv="$apkenv PROFILE=${PROFILE:-ha}";; *) echo "PROFILE must be console, kiosk or ha"; exit 1;; esac
+	if [ -n "${TSX_DEV_ROOT_HASH:-}" ]; then
+		case "$TSX_DEV_ROOT_HASH" in *[!\$./0-9A-Za-z]*) echo "TSX_DEV_ROOT_HASH is not a crypt(3) hash"; exit 1;; esac
+		apkenv="$apkenv TSX_DEV_ROOT_HASH='$TSX_DEV_ROOT_HASH'"
+	fi
 	# TFA_VENDOR_FETCH=no: no Crestron file in the image (as CI and release.yml)
 	# A build through this script fetches nothing unless TSX_ALLOW_PROPRIETARY=1.
 	[ "$ALLOW_PROP" = 1 ] && [ -z "${TFA_VENDOR_FETCH:-}" ] || apkenv="$apkenv TFA_VENDOR_FETCH=${TFA_VENDOR_FETCH:-no}"

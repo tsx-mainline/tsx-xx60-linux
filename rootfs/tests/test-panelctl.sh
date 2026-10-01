@@ -137,6 +137,71 @@ send "orientation landscape*"
 [ ! -s "$T/cmds.log" ] && [ "$(grep -c 'rejected:' "$T/panelctl.log")" = $((r0 + 5)) ] \
 	&& ok "5 bad orientation lines rejected, nothing run" || bad "bad orientation lines: $(cat "$T/cmds.log" 2>/dev/null)"
 
+echo "== the seam: commands for the Home Assistant layer (ledbar on, keypad led auto, backlight) =="
+: > "$T/cmds.log"
+mkdir -p "$T/bl/dev0"; echo 0 > "$T/bl/dev0/brightness"; echo "on 17" > "$T/idled.state"
+restart_with_hw() {
+	kill "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
+	PATH="$T/bin:$PATH" TSX_RUN_DIR="$T/run" TSX_REBOOT_BIN="$T/bin/reboot" TSX_IDLED_STATE="$T/idled.state" \
+		TSX_BACKLIGHT_DIR="$T/bl" TSX_BUTTONS_CONF="$T/buttons.conf" TSX_ALS_CONF="$T/als.conf" TSX_ASOUND_DIR="$T/asound" \
+		busybox sh "$SCRIPT" > "$T/panelctl.log" 2>&1 &
+	PID=$!
+	for _ in $(seq 1 20); do grep -q "listening on" "$T/panelctl.log" 2>/dev/null && break; sleep 0.1; done
+}
+restart_with_hw
+send "ledbar on"; send "keypad led auto"; send "backlight 9"
+grep -qxF 'tsx-ledbar on' "$T/cmds.log" && ok "ledbar on -> tsx-ledbar on" || bad "ledbar on: $(cat "$T/cmds.log")"
+grep -qxF 'tsx-keypad led auto' "$T/cmds.log" && ok "keypad led auto -> tsx-keypad led auto" || bad "keypad led auto missing"
+[ "$(cat "$T/run/brightness" 2>/dev/null)" = 9 ] && ok "backlight 9 writes the override file" || bad "backlight: override file wrong"
+[ "$(cat "$T/bl/dev0/brightness")" = 9 ] && ok "backlight 9 writes the backlight device while the screen is lit" || bad "backlight device not written"
+echo "blank" > "$T/idled.state"; send "backlight 12"
+[ "$(cat "$T/run/brightness")" = 12 ] && [ "$(cat "$T/bl/dev0/brightness")" = 9 ] && ok "backlight with the screen blanked: override only, device untouched" || bad "backlight while blanked wrong"
+r0=$(grep -c 'rejected:' "$T/panelctl.log"); : > "$T/cmds.log"
+send "backlight 0"; send "backlight 32"; send "backlight 5 extra"; send "backlight *"; send "ledbar on now"; send "keypad led auto 5"
+[ ! -s "$T/cmds.log" ] && [ "$(grep -c 'rejected:' "$T/panelctl.log")" = $((r0 + 6)) ] && ok "6 bad lines for the new commands rejected" || bad "bad lines for the new commands: $(cat "$T/cmds.log")"
+
+echo "== the seam: tsx-panelctl send, get, has, events =="
+PCTL="env PATH=$T/bin:$PATH TSX_RUN_DIR=$T/run TSX_IDLED_STATE=$T/idled.state TSX_BUTTONS_CONF=$T/buttons.conf TSX_ALS_CONF=$T/als.conf TSX_ASOUND_DIR=$T/asound busybox sh $SCRIPT"
+: > "$T/cmds.log"
+$PCTL send ledbar set 4 5 6 && sleep 0.2 && grep -qxF 'tsx-ledbar set 4 5 6' "$T/cmds.log" && ok "send writes the command, the daemon runs it" || bad "send did not reach the daemon"
+$PCTL send 2>/dev/null && bad "send with no command succeeded" || ok "send with no command fails"
+$PCTL send "ledbar $(printf 'x\001y')" 2>/dev/null && bad "send accepted a control character" || ok "send refuses control characters"
+$PCTL send "$(printf 'a%.0s' $(seq 1 250))" 2>/dev/null && bad "send accepted a 250 character line" || ok "send refuses a long line"
+# the FIFO exists, nothing reads it: send gives up
+mkdir -p "$T/run2"; mkfifo "$T/run2/panelctl"
+t0=$(date +%s); env TSX_RUN_DIR="$T/run2" busybox sh "$SCRIPT" send blank on 2>/dev/null && bad "send with no reader succeeded" || ok "send with no daemon fails"
+[ $(( $(date +%s) - t0 )) -le 6 ] && ok "send gives up after a few seconds, it does not hang" || bad "send waited too long"
+env TSX_RUN_DIR="$T/run3" busybox sh "$SCRIPT" send blank on 2>/dev/null && bad "send with no FIFO succeeded" || ok "send with no FIFO fails at once"
+mkdir -p "$T/asound/TSW1060"
+mkdir -p "$T/bin2"; printf '#!/bin/sh\necho "Simple mixer control Master,0"\necho "  Front Left: Playback 40 [63%%] [on]"\n' > "$T/bin2/amixer"; chmod +x "$T/bin2/amixer"
+[ "$(env PATH="$T/bin2:$PATH" TSX_RUN_DIR="$T/run" TSX_ASOUND_DIR="$T/asound" busybox sh "$SCRIPT" get volume)" = 63 ] && ok "get volume: the percent of the Master control" || bad "get volume wrong"
+rm -rf "$T/asound/TSW1060"
+env PATH="$T/bin2:$PATH" TSX_RUN_DIR="$T/run" TSX_ASOUND_DIR="$T/asound" busybox sh "$SCRIPT" get volume >/dev/null 2>&1 && bad "get volume without a sound card succeeded" || ok "get volume without a sound card: nothing, exit 1"
+printf 'want 10 20 30\n' > "$T/run/ledbar.state"; printf 'led 128 day\nlast home short 12:00:01\n' > "$T/run/buttons.state"; printf 'raw 12.50\nreport 12.5\nauto on\n' > "$T/run/als.state"
+echo "on 17" > "$T/idled.state"
+for kv in "ledbar=10 20 30" "keypad-led=128 day" "last-key=home short 12:00:01" "lux=12.5" "als-auto=on" "screen=on 17"; do
+	k=${kv%%=*}; w=${kv#*=}; got=$($PCTL get "$k" 2>/dev/null)
+	[ "$got" = "$w" ] && ok "get $k: $w" || bad "get $k: got '$got', want '$w'"
+done
+$PCTL get nothing >/dev/null 2>&1; [ $? = 2 ] && ok "get of an unknown name: exit 2" || bad "get of an unknown name"
+rm -f "$T/run/als.state"; $PCTL get lux >/dev/null 2>&1 && bad "get lux with no sensor succeeded" || ok "get lux with no sensor: nothing, exit 1"
+printf 'raw 12.50\nreport 12.5\nauto on\n' > "$T/run/als.state"
+printf '#!/bin/sh\n' > "$T/als.conf"; : > "$T/buttons.conf"; : > "$T/bin/tsx-ledbar"; chmod +x "$T/bin/tsx-ledbar"; mkdir -p "$T/asound/TSW1060"
+for h in ledbar keypad als sound; do $PCTL has $h && ok "has $h: yes" || bad "has $h: no"; done
+rm -f "$T/als.conf" "$T/buttons.conf" "$T/run/als.state"; rm -rf "$T/asound/TSW1060"; rm -f "$T/bin/tsx-ledbar"
+for h in keypad als sound; do $PCTL has $h && bad "has $h: yes without the hardware" || ok "has $h: no without the hardware"; done
+$PCTL has toaster >/dev/null 2>&1; [ $? = 2 ] && ok "has of an unknown name: exit 2" || bad "has of an unknown name"
+# events: the present values first, then a line for each change
+printf 'want 10 20 30\n' > "$T/run/ledbar.state"; printf 'led 128 day\nlast home short 12:00:01\n' > "$T/run/buttons.state"
+echo "on 17" > "$T/idled.state"; printf 'raw 12.50\nreport 12.5\nauto on\n' > "$T/run/als.state"
+( sleep 0.7; printf 'led 128 day\nlast power long 12:00:09\n' > "$T/run/buttons.state"; sleep 0.5; echo blank > "$T/idled.state" ) &
+EV=$(env TSX_EVENTS_POLL=0.2 TSX_EVENTS_MAX=8 TSX_RUN_DIR="$T/run" TSX_IDLED_STATE="$T/idled.state" timeout 10 busybox sh "$SCRIPT" events)
+echo "$EV" | head -n 4 | grep -qx 'lux 12.5' && echo "$EV" | grep -qx 'als-auto on' && echo "$EV" | grep -qx 'screen on 17' && echo "$EV" | grep -qx 'ledbar 10 20 30' && echo "$EV" | grep -qx 'keypad-led 128 day' \
+	&& ok "events: the present values come first" || bad "events start: $EV"
+echo "$EV" | grep -q 'button home' && bad "events: the old key press came out as an event" || ok "events: the key press of before the start is not an event"
+echo "$EV" | grep -qx 'button power long' && ok "events: a new key press is 'button NAME TYPE'" || bad "events: no button event: $EV"
+echo "$EV" | grep -qx 'screen blank' && ok "events: a screen change is an event" || bad "events: no screen event: $EV"
+
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-panelctl || echo FAIL test-panelctl
 exit $F

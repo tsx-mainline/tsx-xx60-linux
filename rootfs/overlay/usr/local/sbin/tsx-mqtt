@@ -33,8 +33,14 @@
 # Key presses come from the "last" line of /run/tsx/buttons.state
 # (tsx-buttons). Two identical presses within the same second are one event.
 #
+# This program is part of the Home Assistant layer (tsx-ha). It does not touch
+# the hardware. Every command goes to the base system through tsx-panelctl
+# (`tsx-panelctl send ...`), and so do the volume and the LED bar check
+# (`tsx-panelctl get volume`, `tsx-panelctl has ledbar`). It reads the state
+# files under /run/tsx, which are the event interface of the base system.
+#
 # Env overrides for tests: TSX_MQTT_CONF, TSX_RUN_DIR, TSX_IDLED_STATE,
-# TSX_BUTTONS_CONF, TSX_KIOSK_CONF, TSX_BACKLIGHT_DIR, TSX_MQTT_DRY=1 (print
+# TSX_BUTTONS_CONF, TSX_KIOSK_CONF, TSX_PANELCTL_BIN, TSX_MQTT_DRY=1 (print
 # instead of publish, read commands from stdin, one pass).
 # TSX_MQTT_PUB_TIMEOUT=seconds limits each mosquitto_pub connect+publish
 # (default 5), so an unreachable broker cannot hang the script. See pub()
@@ -47,8 +53,7 @@ BCONF=${TSX_BUTTONS_CONF:-/etc/tsx/buttons.conf}
 KCONF=${TSX_KIOSK_CONF:-/etc/kiosk.conf}
 ACONF=${TSX_ALS_CONF:-/etc/tsx/als.conf}
 . "${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}"
-CARD=$TSX_SOUND_CARD
-ASOUND=${TSX_ASOUND_DIR:-/proc/asound}
+PCTL=${TSX_PANELCTL_BIN:-tsx-panelctl}   # the hardware interface of the base system
 DRY=${TSX_MQTT_DRY:-0}
 PUBTO=${TSX_MQTT_PUB_TIMEOUT:-5}
 LASTPUBOK=1   # 0 after a publish fails or times out. The stop trap then skips the LWT offline publish
@@ -107,7 +112,8 @@ BL_MAX=23
 # hardware only some panels have: an entity is announced only when it is
 # there, and its discovery topic is cleared otherwise (so Home Assistant
 # drops an entity an older build announced)
-has_ledbar() { command -v "${TSX_LEDBAR:-tsx-ledbar}" >/dev/null 2>&1; }
+has_ledbar() { "$PCTL" has ledbar >/dev/null 2>&1; }
+has_sound() { "$PCTL" has sound >/dev/null 2>&1; }
 has_keypad() { [ -r "$BCONF" ]; }
 has_als() { [ -r "$ACONF" ] || [ -r "$R/als.state" ]; }
 has_emmc() { [ -r "$R/emmc.state" ]; }
@@ -144,7 +150,7 @@ discovery() {
 		done
 		pub -r "$DP/sensor/$NODE/emmc_eol/config" "{\"name\":\"eMMC end of life\",\"uniq_id\":\"${NODE}_emmc_eol\",\"stat_t\":\"$BASE/emmc/eol\",\"ent_cat\":\"diagnostic\",\"icon\":\"mdi:harddisk-remove\",$AV,$DEV}"
 	fi
-	if [ -e "$ASOUND/$CARD" ]; then
+	if has_sound; then
 		pub -r "$DP/number/$NODE/volume/config" "{\"name\":\"Volume\",\"uniq_id\":\"${NODE}_volume\",\"cmd_t\":\"$BASE/volume/set\",\"stat_t\":\"$BASE/volume/state\",\"min\":0,\"max\":100,\"step\":1,\"unit_of_meas\":\"%\",\"mode\":\"slider\",\"icon\":\"mdi:volume-high\",$AV,$DEV}"
 	fi
 	pub -r "$DP/update/$NODE/update/config" "{\"name\":\"Update\",\"uniq_id\":\"${NODE}_update\",\"cmd_t\":\"$BASE/update/set\",\"stat_t\":\"$BASE/update/state\",\"icon\":\"mdi:package-up\",$AV,$DEV}"
@@ -194,8 +200,7 @@ als_state() {  # "LUX ON|OFF" from tsx-als (lux with a reporting deadband)
 }
 
 volume_state() {  # "NN" percent of the Master softvol
-	[ -e "$ASOUND/$CARD" ] || return 0
-	amixer -c "$CARD" sget Master 2>/dev/null | sed -n 's/.*\[\([0-9]\{1,3\}\)%\].*/\1/p' | head -1
+	"$PCTL" get volume 2>/dev/null || true
 }
 
 emmc_life() {  # emmc_life a|b -> percent (upper bound of the JEDEC band), or none
@@ -243,7 +248,7 @@ publish_states() {  # $1 = force
 # ---- commands --------------------------------------------------------------
 # HA rgb "r,g,b" 0..255 + brightness 0..255 -> bar 0..100 per channel
 ledbar_set() {  # r g b bri
-	tsx-ledbar set $(( ($1 * $4 * 100 + 32512) / 65025 )) $(( ($2 * $4 * 100 + 32512) / 65025 )) $(( ($3 * $4 * 100 + 32512) / 65025 ))
+	"$PCTL" send ledbar set $(( ($1 * $4 * 100 + 32512) / 65025 )) $(( ($2 * $4 * 100 + 32512) / 65025 )) $(( ($3 * $4 * 100 + 32512) / 65025 ))
 }
 led_rgb() { c=$(cat "$M/rgb" 2>/dev/null); echo "${c:-255,255,255}"; }
 split_rgb() { c=$1; r=${c%%,*}; c=${c#*,}; g=${c%%,*}; b=${c#*,}; }
@@ -254,10 +259,10 @@ handle() {  # topic payload
 	case $t in
 	ledbar/set)
 		case $p in
-		OFF) tsx-ledbar off;;
+		OFF) "$PCTL" send ledbar off;;
 		ON)  if [ -e "$M/pending" ]; then rm -f "$M/pending"
 		     else
-			cur=$(ledbar_state); [ "${cur%% *}" = ON ] || tsx-ledbar on
+			cur=$(ledbar_state); [ "${cur%% *}" = ON ] || "$PCTL" send ledbar on
 		     fi;;
 		esac;;
 	ledbar/brightness/set)
@@ -272,30 +277,31 @@ handle() {  # topic payload
 		bri=$(led_bri); [ "$1" = ON ] && bri=$2; [ "$bri" -gt 0 ] || bri=255
 		ledbar_set "$r" "$g" "$b" "$bri"; : > "$M/pending";;
 	keypad/set)
-		case $p in OFF) tsx-keypad led off;; ON) tsx-keypad led auto;; esac;;
+		case $p in OFF) "$PCTL" send keypad led off;; ON) "$PCTL" send keypad led auto;; esac;;
 	keypad/brightness/set)
 		case $p in *[!0-9]*|'') return;; esac
-		tsx-keypad led "$p";;
+		[ "${#p}" -le 3 ] || return
+		if [ "$p" -le 0 ]; then "$PCTL" send keypad led off
+		else [ "$p" -le 255 ] || p=255; "$PCTL" send keypad led "$p"; fi;;
 	volume/set)
 		p=${p%%.*}; case $p in *[!0-9]*|'') return;; esac
 		[ "$p" -le 100 ] || p=100
-		amixer -q -c "$CARD" sset Master "$p%";;
+		"$PCTL" send volume "$p";;
 	als_auto/set)
-		case $p in ON) tsx-als auto on;; OFF) tsx-als auto off;; esac;;
+		case $p in ON) "$PCTL" send als auto on;; OFF) "$PCTL" send als auto off;; esac;;
 	screen/set)
-		case $p in ON) tsx-blank off;; OFF) tsx-blank on;; esac;;
+		case $p in ON) "$PCTL" send blank off;; OFF) "$PCTL" send blank on;; esac;;
 	backlight/set)
 		p=${p%%.*}; case $p in *[!0-9]*|'') return;; esac
-		[ "$p" -ge 1 ] || p=1; [ "$p" -le "$BL_MAX" ] || p=$BL_MAX
-		echo "$p" > "$R/brightness"          # tsx-idled level override (as the up/down keys)
-		s=; [ -r "$IDLED" ] && read -r s _ < "$IDLED"
-		if [ "$s" != blank ]; then for d in ${TSX_BACKLIGHT_DIR:-/sys/class/backlight}/*; do [ -w "$d/brightness" ] && echo "$p" > "$d/brightness"; break; done; fi;;
+		[ "${#p}" -le 5 ] || return
+		[ "$p" -ge 1 ] || p=1; [ "$p" -le "$BL_MAX" ] || p=$BL_MAX; [ "$p" -le 31 ] || p=31
+		"$PCTL" send backlight "$p";;      # the base system sets the tsx-idled override and the device
 	blank_timeout/set)
 		p=${p%%.*}; case $p in *[!0-9]*|'') return;; esac
 		[ "${#p}" -le 5 ] && [ "$p" -le 86400 ] || return
-		tsx-config set BLANK_TIMEOUT "$p" && tsx-config apply;;
+		"$PCTL" send blank-timeout "$p";;
 	update/set)
-		command -v tsx-autoupdate >/dev/null 2>&1 && tsx-autoupdate now &;;
+		"$PCTL" send update-install;;
 	*) return;;
 	esac
 	: > "$M/poke"

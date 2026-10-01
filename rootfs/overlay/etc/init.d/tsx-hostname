@@ -49,6 +49,8 @@ start() {
 	tsx_board_load 2>/dev/null || ewarn "board data not read (fw_printenv failed or timed out): falling back to <model>-<MAC>/tsx-kiosk"
 	lh=$(tsx_board_hostname_hint)
 	model=$(tsx_board_model)
+	# The login banner of the console profile (tsx-banner) shows the model.
+	if [ -n "$model" ]; then mkdir -p /run/tsx && echo "$model" > /run/tsx/model; fi
 
 	if [ -z "$name" ]; then
 		valid "$lh" && name=$lh

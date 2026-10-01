@@ -54,6 +54,60 @@ _tcp_ask() {
 	done
 }
 
+# _tcp_hash_password PASSWORD: print the sha512-crypt hash of PASSWORD. The
+# password goes to the hash tool on its standard input, never as an argument,
+# so it does not show in the process list. It tries openssl, mkpasswd, and the
+# crypt module of python3, in that order. It prints nothing and fails when the
+# host has none of them. Test hook: TSX_HASH_DISABLE=1 acts as if none is there.
+_tcp_hash_password() {
+	local h=
+	[ "${TSX_HASH_DISABLE:-}" != 1 ] || return 1
+	if command -v openssl >/dev/null 2>&1 && printf 'x\n' | openssl passwd -6 -stdin >/dev/null 2>&1; then
+		h=$(printf '%s\n' "$1" | openssl passwd -6 -stdin 2>/dev/null)
+	elif command -v mkpasswd >/dev/null 2>&1; then
+		h=$(printf '%s\n' "$1" | mkpasswd -m sha-512 -s 2>/dev/null)
+	elif command -v python3 >/dev/null 2>&1; then
+		h=$(printf '%s\n' "$1" | python3 -c 'import crypt, sys; print(crypt.crypt(sys.stdin.readline().rstrip("\n"), crypt.mksalt(crypt.METHOD_SHA512)))' 2>/dev/null)
+	fi
+	case "$h" in \$6\$*) printf '%s\n' "$h";; *) return 1;; esac
+}
+
+# _tcp_ask_root_password: ask for the root password (twice, with no echo) and
+# store only its hash as ROOT_PASSWORD_HASH. A blank answer sets none. Then the
+# first login on the panel console asks for a new password, and ssh takes keys
+# only until then (docs/rootfs.md "Root login"). On a reinstall, a blank answer
+# keeps the saved hash. The function never prints or logs the password.
+_tcp_ask_root_password() {
+	local saved pw pw2 hash
+	saved=$(_tcp_default ROOT_PASSWORD_HASH)
+	while :; do
+		read -r -s -p "Root password, 8 characters or more${saved:+ [saved; Enter keeps it]} (blank = none: the first login on the panel asks for one): " pw; echo >&2
+		if [ -z "$pw" ]; then
+			if [ -n "$saved" ]; then
+				TSX_CONF="$OUTFILE" "$TSX_CONFIG_BIN" set ROOT_PASSWORD_HASH "$saved"
+				echo "  keeping the saved root password" >&2
+			else
+				echo "  no root password. The first login on the panel console asks for one, and ssh takes keys only until then" >&2
+			fi
+			return 0
+		fi
+		if [ "${#pw}" -lt 8 ]; then
+			echo "  too short: use 8 characters or more, or leave it blank for none" >&2; continue
+		fi
+		read -r -s -p "Root password again: " pw2; echo >&2
+		if [ "$pw" != "$pw2" ]; then
+			echo "  the two entries differ, try again" >&2; continue
+		fi
+		if hash=$(_tcp_hash_password "$pw"); then
+			pw= pw2=
+			TSX_CONF="$OUTFILE" "$TSX_CONFIG_BIN" set ROOT_PASSWORD_HASH "$hash" && return 0
+			echo "  the hash was not accepted, try again" >&2; continue
+		fi
+		pw= pw2=
+		echo "  this host has no tool to hash a password (openssl, mkpasswd or python3). Install one and run this again, or leave the answer blank" >&2
+	done
+}
+
 tsx_config_prompt() {
 	OUTFILE=$1; TCP_DEFAULTS=${2:-}
 	: > "$OUTFILE"; chmod 600 "$OUTFILE"
@@ -141,10 +195,27 @@ tsx_config_prompt() {
 	# --kernel of the installer (already required and validated). So panel.conf
 	# never disagrees with the kernel that --kernel installs.
 
-	_tcp_ask SSH_AUTHORIZED_KEY "SSH public key to add to root's authorized_keys (blank = password login only)"
+	_tcp_ask_root_password
+	_tcp_ask SSH_AUTHORIZED_KEY "SSH public key to add to root's authorized_keys (blank = none)"
 
 	echo "== panel.conf built (secrets masked): ==" >&2
 	TSX_CONF="$OUTFILE" "$TSX_CONFIG_BIN" show >&2
+}
+
+# tsx_config_print_root_login CONFIG: tell which root login case applies to the
+# panel.conf that the install carries. It prints to stderr only.
+tsx_config_print_root_login() {
+	[ -n "${1:-}" ] && [ -f "$1" ] || return 0
+	local hash key
+	hash=$(TSX_CONF="$1" "$TSX_CONFIG_BIN" get ROOT_PASSWORD_HASH 2>/dev/null || true)
+	key=$(TSX_CONF="$1" "$TSX_CONFIG_BIN" get SSH_AUTHORIZED_KEY 2>/dev/null || true)
+	if [ -n "$hash" ]; then
+		echo "== Root login: the password that you gave is set at the first boot of the panel." >&2
+	else
+		echo "== Root login: no root password was set. The first login on the panel console asks for a new one." >&2
+		if [ -n "$key" ]; then echo "   Until then, ssh accepts the SSH key that you gave." >&2
+		else echo "   Until then, ssh accepts no login at all, because no SSH key was given." >&2; fi
+	fi
 }
 
 # tsx_config_print_api_key PANEL: show the key that tsx_config_prompt

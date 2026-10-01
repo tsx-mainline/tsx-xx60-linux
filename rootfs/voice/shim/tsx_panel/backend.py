@@ -8,34 +8,36 @@ stays POSIX sh (busybox-only panel shell) while this is Python (the voice
 satellite's own language), so the sharing is at the state-file/CLI level, not
 literally one source file.
 
+The seam to the base system: this module is part of the Home Assistant layer
+(tsx-ha) and never touches the hardware itself. Every command goes to
+tsx-panelctl, and the one value that needs a tool (the volume) comes from
+`tsx-panelctl get`. The base system owns tsx-panelctl
+(rootfs/overlay/usr/local/sbin/tsx-panelctl, docs/rootfs.md "Profiles").
+The state files that tsx-buttons, tsx-als, tsx-ledbard and tsx-idled write
+under /run/tsx are the event interface, and this module reads them directly.
+
 Privilege: reads never need root (every state file/sysfs node the panel
-already creates world-readable, and "kiosk" is in the "audio" group for
-ALSA). Writes are different: tsx-blank signals tsx-idled (root, pkill only
-works same-UID-or-root), tsx-keypad/tsx-buttons.ctl and /run/tsx/brightness
-are root:root 0600/0755 (checked in rootfs/src/tsx-buttons.c and
-tsx-idled.c), and tsx-config apply refuses to run non-root. tsx-esphome runs
-as root (like tsx-mqtt) so it calls the CLIs directly; the voice satellite
-(tsx-voice) runs as kiosk:audio (least privilege for an always-on, network
--facing audio process) and cannot, so its plugin routes writes through the
-tsx-panelctl FIFO -- a small, fixed-command root helper, the same shape as
-the tsx-buttons.ctl FIFO already used by tsx-keypad. See
-rootfs/overlay/usr/local/sbin/tsx-panelctl.
+already creates world-readable). Writes are different: tsx-blank signals
+tsx-idled (root, pkill only works same-UID-or-root), tsx-keypad/
+tsx-buttons.ctl and /run/tsx/brightness are root:root 0600/0755 (checked in
+rootfs/src/tsx-buttons.c and tsx-idled.c), and tsx-config apply refuses to run
+non-root. So the writes go through the tsx-panelctl FIFO, a small root helper
+with a fixed command set. The FIFO is writable for root and for the group
+kiosk, so tsx-esphome (root) and the voice satellite (tsx-voice, kiosk:audio)
+use the same path.
 
 Env overrides (all also read by tsx-mqtt; new ones only for this module):
   TSX_RUN_DIR (/run/tsx), TSX_IDLED_STATE (/run/tsx-idled.state),
   TSX_BUTTONS_CONF (/etc/tsx/buttons.conf), TSX_KIOSK_CONF (/etc/kiosk.conf),
-  TSX_ALS_CONF (/etc/tsx/als.conf), TSX_SOUND_CARD (the board's `tsx-board get TSX_SOUND_CARD`),
+  TSX_ALS_CONF (/etc/tsx/als.conf),
   TSX_BOARD_BIN (tsx-board),
   TSX_ASOUND_DIR (/proc/asound), TSX_BACKLIGHT_DIR (/sys/class/backlight),
   TSX_THERMAL_ZONE (/sys/class/thermal/thermal_zone0/temp),
   TSX_DEVTOOLS (127.0.0.1:9222, as buttons.conf's DEVTOOLS=),
-  TSX_PANELCTL (/run/tsx/panelctl), TSX_BOOT_VERBOSE_FLAG (/etc/tsx/
+  TSX_PANELCTL (/run/tsx/panelctl), TSX_PANELCTL_BIN (tsx-panelctl: the
+  client of the base system for `get` and `has`), TSX_BOOT_VERBOSE_FLAG (/etc/tsx/
   boot-verbose, the flag file `tsx-config apply` leaves for BOOT_VERBOSE=1;
   the initramfs reads the same file, see tsx-config's own comment),
-  TSX_PANEL_DIRECT=1 (tests only: run
-  privileged commands directly even when not root),
-  TSX_LEDBAR/TSX_KEYPAD/TSX_BLANK/TSX_ALS_BIN/TSX_CONFIG_BIN/TSX_REBOOT_BIN/
-  TSX_AMIXER/TSX_UPDATE_BIN (binary names, for test fixtures on $PATH).
   TSX_ORIENTATION_FILE (/etc/tsx/orientation: the screen orientation as
   `tsx-config apply` leaves it for the initramfs and the kiosk; absent =
   landscape).
@@ -100,60 +102,36 @@ class PanelBackend:
         self.buttons_conf = Path(_env("TSX_BUTTONS_CONF", "/etc/tsx/buttons.conf"))
         self.kiosk_conf = Path(_env("TSX_KIOSK_CONF", "/etc/kiosk.conf"))
         self.als_conf = Path(_env("TSX_ALS_CONF", "/etc/tsx/als.conf"))
-        self.card = board_value("TSX_SOUND_CARD")
-        self.asound_dir = Path(_env("TSX_ASOUND_DIR", "/proc/asound"))
         self.orientation_file = Path(_env("TSX_ORIENTATION_FILE", "/etc/tsx/orientation"))
         self.backlight_dir = Path(_env("TSX_BACKLIGHT_DIR", "/sys/class/backlight"))
         self.thermal_zone = Path(_env("TSX_THERMAL_ZONE", "/sys/class/thermal/thermal_zone0/temp"))
         self.devtools = _env("TSX_DEVTOOLS", "127.0.0.1:9222")
         self.panelctl = Path(_env("TSX_PANELCTL", str(self.run_dir / "panelctl")))
         self.boot_verbose_flag = Path(_env("TSX_BOOT_VERBOSE_FLAG", "/etc/tsx/boot-verbose"))
-        self.ledbar_bin = _env("TSX_LEDBAR", "tsx-ledbar")
-        self.keypad_bin = _env("TSX_KEYPAD", "tsx-keypad")
-        self.blank_bin = _env("TSX_BLANK", "tsx-blank")
-        self.als_bin = _env("TSX_ALS_BIN", "tsx-als")
-        self.config_bin = _env("TSX_CONFIG_BIN", "tsx-config")
-        self.reboot_bin = _env("TSX_REBOOT_BIN", "reboot")
-        self.amixer_bin = _env("TSX_AMIXER", "amixer")
-        self.update_bin = _env("TSX_UPDATE_BIN", "tsx-autoupdate")
+        self.panelctl_bin = _env("TSX_PANELCTL_BIN", "tsx-panelctl")
         self._orientation_pending: Optional[Tuple[str, float]] = None
         self._last_key: Optional[Tuple[str, str]] = None
         self._blank_timeout_pending: Optional[Tuple[int, float]] = None
         self._verbose_boot_pending: Optional[Tuple[bool, float]] = None
 
-    # ---- privilege boundary -------------------------------------------------
-    def _privileged(self) -> bool:
-        return os.geteuid() == 0 or _env("TSX_PANEL_DIRECT", "0") == "1"
-
-    def _run(self, *args) -> None:
+    # ---- the seam: tsx-panelctl ---------------------------------------------
+    def _panelctl(self, *args, timeout=5):
+        """Run the client of tsx-panelctl (`get`, `has`). Returns (ok, text)."""
         try:
-            subprocess.run(args, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+            res = subprocess.run(
+                [self.panelctl_bin, *args], check=False, capture_output=True, text=True, timeout=timeout,
+            )
         except Exception:  # noqa: BLE001
-            _LOGGER.warning("command failed: %s", args, exc_info=True)
-
-    def _spawn(self, *args) -> None:
-        """Like _run but does not wait for it to finish: "tsx-autoupdate
-        now" can run an apk upgrade for minutes, and this is called from the
-        ESPHome connection's own thread/loop (tsx-esphome runs privileged
-        commands directly), so waiting on it would stall every other
-        command and poll tick until the upgrade completes. Same fire-and-
-        forget shape as tsx-mqtt's "tsx-autoupdate now &".
-        """
-        try:
-            subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:  # noqa: BLE001
-            _LOGGER.warning("command failed to start: %s", args, exc_info=True)
+            return False, ""
+        return res.returncode == 0, res.stdout.strip()
 
     def _ctl(self, *words) -> None:
-        """Privileged command: run it directly (root) or hand it to the
-        tsx-panelctl FIFO (one whitespace-separated line; see that script for
-        the whitelist). Never blocks: a missing reader makes the non-blocking
-        open fail immediately (ENXIO), logged and otherwise ignored -- the
-        panel keeps working, just without that one command applied.
+        """Hand one command to the tsx-panelctl FIFO (one whitespace-separated
+        line; see that script for the whitelist). Never blocks: a missing
+        reader makes the non-blocking open fail immediately (ENXIO), logged
+        and otherwise ignored -- the panel keeps working, just without that
+        one command applied.
         """
-        if self._privileged():
-            self._run_privileged(*words)
-            return
         line = " ".join(words) + "\n"
         try:
             fd = os.open(str(self.panelctl), os.O_WRONLY | os.O_NONBLOCK)
@@ -165,51 +143,10 @@ class PanelBackend:
         finally:
             os.close(fd)
 
-    def _run_privileged(self, *words) -> None:
-        cmd = words[0]
-        rest = list(words[1:])
-        if cmd == "ledbar":
-            self._run(self.ledbar_bin, *rest)
-        elif cmd == "keypad":
-            self._run(self.keypad_bin, *rest)
-        elif cmd == "blank":
-            self._run(self.blank_bin, *rest)
-        elif cmd == "als":
-            self._run(self.als_bin, *rest)
-        elif cmd == "brightness":
-            try:
-                (self.run_dir / "brightness").write_text(rest[0] + "\n", encoding="utf-8")
-            except OSError:
-                _LOGGER.warning("could not write %s/brightness", self.run_dir, exc_info=True)
-        elif cmd == "blank-timeout":
-            # persisted in panel.conf; `apply` writes /run/tsx/blank-timeout,
-            # which tsx-idled watches (same as tsx-panelctl's blank-timeout)
-            self._run(self.config_bin, "set", "BLANK_TIMEOUT", rest[0])
-            self._run(self.config_bin, "apply")
-        elif cmd == "orientation":
-            # persisted in panel.conf; `apply` turns the running kiosk
-            self._run(self.config_bin, "set", "ORIENTATION", rest[0])
-            self._run(self.config_bin, "apply")
-        elif cmd == "volume":
-            self._run(self.amixer_bin, "-q", "-c", self.card, "sset", "Master", rest[0] + "%")
-        elif cmd == "config-url":
-            self._run(self.config_bin, "set", "KIOSK_URL", rest[0])
-            self._run(self.config_bin, "apply")
-        elif cmd == "verbose-boot":
-            self._run(self.config_bin, "set", "BOOT_VERBOSE", "1" if rest[0] == "on" else "0")
-            self._run(self.config_bin, "apply")
-        elif cmd == "reboot":
-            self._run(self.reboot_bin)
-        elif cmd == "update-install":
-            self._spawn(self.update_bin, "now")
-        else:
-            _LOGGER.warning("tsx-panelctl: unknown command %r", cmd)
-
     # ---- LED bar -------------------------------------------------------------
     def ledbar_present(self) -> bool:
-        """The USB LED bar tool is installed."""
-        import shutil  # noqa: WPS433
-        return shutil.which(self.ledbar_bin) is not None
+        """The panel has a USB LED bar (tsx-panelctl has ledbar)."""
+        return self._panelctl("has", "ledbar")[0]
 
     def get_ledbar(self):
         """(on, brightness 0..255, r,g,b 0..255), from ledbar.state "want R G B" 0..100."""
@@ -360,25 +297,17 @@ class PanelBackend:
 
     # ---- volume ------------------------------------------------------------
     def sound_card_present(self) -> bool:
-        return (self.asound_dir / self.card).exists()
+        return self._panelctl("has", "sound")[0]
 
     def get_volume(self) -> float:
-        if not self.sound_card_present():
+        """The Master volume in percent, from `tsx-panelctl get volume`."""
+        ok, out = self._panelctl("get", "volume")
+        if not ok:
             return 0.0
         try:
-            out = subprocess.run(
-                [self.amixer_bin, "-c", self.card, "sget", "Master"],
-                check=False, capture_output=True, text=True, timeout=5,
-            ).stdout
-        except Exception:  # noqa: BLE001
+            return float(out.split()[0])
+        except (ValueError, IndexError):
             return 0.0
-        for tok in out.split():
-            if tok.startswith("[") and tok.endswith("%]"):
-                try:
-                    return float(tok[1:-2])
-                except ValueError:
-                    continue
-        return 0.0
 
     def set_volume(self, percent: float) -> None:
         percent = max(0, min(100, int(round(percent))))

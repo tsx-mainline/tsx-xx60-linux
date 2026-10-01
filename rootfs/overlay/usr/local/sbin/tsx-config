@@ -606,7 +606,9 @@ apply() {
 			mkdir -p "$PREFIX/etc/tsx" && : > "$PREFIX/etc/tsx/boot-verbose" \
 				&& log "BOOT_VERBOSE=1: boot text on the screen from the next boot on"
 		fi
-	elif [ -e "$PREFIX/etc/tsx/boot-verbose" ]; then
+	elif [ -e "$PREFIX/etc/tsx/boot-verbose" ] && [ "$(cat "$PREFIX/etc/tsx/profile" 2>/dev/null)" != console ]; then
+		# The console profile (/etc/tsx/profile) always shows the text console
+		# and keeps the flag file. It never shows the splash.
 		rm -f "$PREFIX/etc/tsx/boot-verbose" && log "BOOT_VERBOSE off: boot splash from the next boot on"
 	fi
 
@@ -645,14 +647,27 @@ apply() {
 		fi
 	fi
 
+	# ROOT_PASSWORD_HASH (set by the installer or the setup page) goes into
+	# /etc/shadow when it is new to this panel, or when root has no usable
+	# password (an empty or locked field: a fresh image, or a reinstall).
+	# After that, a password that a person sets on the console with `passwd`
+	# stays: the next boot does not put the old hash back. The state file
+	# keeps the checksum of the hash that apply used last. It never holds
+	# the hash itself.
 	hash=$(cfg_get ROOT_PASSWORD_HASH) || hash=
 	if [ -n "$hash" ] && [ -r "$PREFIX/etc/shadow" ]; then
 		cur=$(awk -F: '$1=="root"{print $2}' "$PREFIX/etc/shadow")
-		if [ "$cur" != "$hash" ]; then
+		hsum=$(printf '%s' "$hash" | sha256sum | cut -d' ' -f1)
+		hold=; [ -r "$STATE/.root-hash-applied" ] && hold=$(cat "$STATE/.root-hash-applied")
+		usable=1; case "$cur" in ''|'!'*|'*'*) usable=0;; esac
+		if [ "$cur" != "$hash" ] && { [ "$hsum" != "$hold" ] || [ "$usable" = 0 ]; }; then
 			tmp="$PREFIX/etc/shadow.tmp.$$"
 			(umask 077; awk -F: -v h="$hash" 'BEGIN{OFS=":"} { if ($1=="root") $2=h; print }' "$PREFIX/etc/shadow" > "$tmp") \
 				&& cat "$tmp" > "$PREFIX/etc/shadow" && rm -f "$tmp" \
 				&& log "root password hash updated from panel.conf"
+		fi
+		if [ "$hsum" != "$hold" ]; then
+			mkdir -p "$STATE" && (umask 077; printf '%s' "$hsum" > "$STATE/.root-hash-applied")
 		fi
 	fi
 

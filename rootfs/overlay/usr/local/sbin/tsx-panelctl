@@ -1,5 +1,33 @@
 #!/bin/sh
-# tsx-panelctl: the ONLY privileged surface of the panel for the
+# tsx-panelctl: the hardware interface of the panel for the layers above the
+# base system, first of all the Home Assistant layer (tsx-ha: tsx-esphome,
+# tsx-mqtt, the voice satellite). Those programs reach the buttons, the light
+# sensor, the LED bar, the volume and the display power only through this
+# program. This is the seam between the base and the Home Assistant layer
+# (docs/rootfs.md "Profiles"). It has four faces:
+#
+#   tsx-panelctl                      the daemon: it reads whitelisted commands
+#                                     from a FIFO (below)
+#   tsx-panelctl send CMD [ARG...]    write one command to the FIFO and return.
+#                                     It fails when no daemon reads the FIFO.
+#   tsx-panelctl get NAME             print one value: volume (percent), lux,
+#                                     als-auto (on or off), screen, ledbar
+#                                     (R G B, 0 to 100), keypad-led, last-key.
+#                                     It prints nothing and fails when the panel
+#                                     has no value (no sound card, no sensor).
+#   tsx-panelctl has NAME             exit 0 when the panel has that hardware:
+#                                     ledbar, keypad, als or sound
+#   tsx-panelctl events               print a line when a value changes, until it
+#                                     is stopped: "button NAME short|long|hold",
+#                                     "lux N", "als-auto on|off", "screen ...",
+#                                     "ledbar R G B", "keypad-led N". It first
+#                                     prints the present values (not a button).
+#
+# The files that hold these values are /run/tsx/*.state and
+# /run/tsx-idled.state (written by tsx-buttons, tsx-als, tsx-ledbard and
+# tsx-idled). A program that only needs to read may read them directly.
+#
+# The daemon is the ONLY privileged surface of the panel for the
 # unprivileged Home Assistant ESPHome plugin (docs/ha.md "One Home Assistant device"). It runs
 # as root and reads fixed, whitelisted commands from a FIFO that the group
 # "kiosk" can write. It runs them with the existing root-only CLIs
@@ -41,8 +69,10 @@
 #
 # Env overrides for tests: TSX_RUN_DIR, TSX_PANELCTL, TSX_LEDBAR, TSX_KEYPAD,
 # TSX_BLANK, TSX_ALS_BIN, TSX_CONFIG_BIN, TSX_REBOOT_BIN, TSX_AMIXER,
-# TSX_SOUND_CARD, TSX_UPDATE_BIN, TSX_PANELCTL_ONESHOT=1 (handle exactly one
-# line, then exit. Tests only).
+# TSX_SOUND_CARD, TSX_UPDATE_BIN, TSX_IDLED_STATE, TSX_BUTTONS_CONF,
+# TSX_ALS_CONF, TSX_ASOUND_DIR, TSX_BACKLIGHT_DIR, TSX_EVENTS_POLL (seconds
+# between two reads of `events`), TSX_EVENTS_MAX (stop `events` after that many
+# lines), TSX_PANELCTL_ONESHOT=1 (handle exactly one line, then exit. Tests only).
 set -u -f
 R=${TSX_RUN_DIR:-/run/tsx}
 FIFO=${TSX_PANELCTL:-$R/panelctl}
@@ -57,6 +87,11 @@ AMIXER=${TSX_AMIXER:-amixer}
 CARD=$TSX_SOUND_CARD
 UPDATE_BIN=${TSX_UPDATE_BIN:-tsx-autoupdate}
 ONESHOT=${TSX_PANELCTL_ONESHOT:-0}
+IDLED_STATE=${TSX_IDLED_STATE:-/run/tsx-idled.state}
+BUTTONS_CONF=${TSX_BUTTONS_CONF:-/etc/tsx/buttons.conf}
+ALS_CONF=${TSX_ALS_CONF:-/etc/tsx/als.conf}
+ASOUND=${TSX_ASOUND_DIR:-/proc/asound}
+BL_DIR=${TSX_BACKLIGHT_DIR:-/sys/class/backlight}
 
 log() { echo "$(date '+%F %T') tsx-panelctl: $*"; }
 
@@ -74,6 +109,86 @@ in_range() { is_uint "$1" && [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]; }
 
 reject() { log "rejected: $(safe "$*")"; }
 
+# ---- the client side: send, get, has, events -------------------------------
+field() {  # field FILE KEY: the rest of the first line "KEY ..."
+	[ -r "$1" ] && sed -n "s/^$2 //p" "$1" | head -n 1
+}
+
+# get_value NAME: print the value. Fail with nothing printed when the panel has none.
+get_value() {
+	v=
+	case "$1" in
+	volume)
+		[ -e "$ASOUND/$CARD" ] || return 1
+		v=$("$AMIXER" -c "$CARD" sget Master 2>/dev/null | sed -n 's/.*\[\([0-9]\{1,3\}\)%\].*/\1/p' | head -n 1);;
+	lux) v=$(field "$R/als.state" report);;
+	als-auto) v=$(field "$R/als.state" auto);;
+	screen) v=$(head -n 1 "$IDLED_STATE" 2>/dev/null);;
+	ledbar) v=$(field "$R/ledbar.state" want);;
+	keypad-led) v=$(field "$R/buttons.state" led);;
+	last-key) v=$(field "$R/buttons.state" last);;
+	*) echo "tsx-panelctl: unknown value '$1'" >&2; return 2;;
+	esac
+	[ -n "$v" ] || return 1
+	printf '%s\n' "$v"
+}
+
+has_hw() {
+	case "$1" in
+	ledbar) command -v "$LEDBAR" >/dev/null 2>&1;;
+	keypad) [ -r "$BUTTONS_CONF" ];;
+	als) [ -r "$ALS_CONF" ] || [ -r "$R/als.state" ];;
+	sound) [ -e "$ASOUND/$CARD" ];;
+	*) echo "tsx-panelctl: unknown hardware '$1'" >&2; return 2;;
+	esac
+}
+
+# send_line CMD...: one line for the FIFO. A writer waits for the daemon, so a
+# missing daemon ends the wait after 3 s.
+send_line() {
+	[ $# -gt 0 ] || { echo "usage: tsx-panelctl send CMD [ARG...]" >&2; return 2; }
+	line="$*"
+	case "$line" in
+	*[![:print:]]*) echo "tsx-panelctl: control characters in the command" >&2; return 2;;
+	esac
+	[ "${#line}" -le 200 ] || { echo "tsx-panelctl: command too long" >&2; return 2; }
+	[ -p "$FIFO" ] || { echo "tsx-panelctl: no daemon ($FIFO)" >&2; return 1; }
+	timeout 3 sh -c 'printf "%s\n" "$1" > "$2"' sh "$line" "$FIFO" || { echo "tsx-panelctl: the daemon does not answer" >&2; return 1; }
+}
+
+cmd_events() {
+	poll=${TSX_EVENTS_POLL:-1}; max=${TSX_EVENTS_MAX:-0}; count=0
+	p_lux= p_auto= p_scr= p_led= p_kl= p_key=; first=1
+	emit() { printf '%s\n' "$*"; count=$((count + 1)); if [ "$max" -gt 0 ] && [ "$count" -ge "$max" ]; then exit 0; fi; }
+	while :; do
+		v=$(get_value lux 2>/dev/null) || v=; [ "$v" = "$p_lux" ] || { p_lux=$v; [ -z "$v" ] || emit "lux $v"; }
+		v=$(get_value als-auto 2>/dev/null) || v=; [ "$v" = "$p_auto" ] || { p_auto=$v; [ -z "$v" ] || emit "als-auto $v"; }
+		v=$(get_value screen 2>/dev/null) || v=; [ "$v" = "$p_scr" ] || { p_scr=$v; [ -z "$v" ] || emit "screen $v"; }
+		v=$(get_value ledbar 2>/dev/null) || v=; [ "$v" = "$p_led" ] || { p_led=$v; [ -z "$v" ] || emit "ledbar $v"; }
+		v=$(get_value keypad-led 2>/dev/null) || v=; [ "$v" = "$p_kl" ] || { p_kl=$v; [ -z "$v" ] || emit "keypad-led $v"; }
+		# a key press is an event only after the first read
+		v=$(get_value last-key 2>/dev/null) || v=
+		if [ "$v" != "$p_key" ]; then
+			p_key=$v
+			if [ "$first" = 0 ] && [ -n "$v" ]; then
+				set -- $v
+				case "${1:-}" in ''|none) ;; *) [ $# -ge 2 ] && emit "button $1 $2";; esac
+			fi
+		fi
+		first=0
+		sleep "$poll"
+	done
+}
+
+case "${1:-}" in
+send) shift; send_line "$@"; exit $?;;
+get) [ $# = 2 ] || { echo "usage: tsx-panelctl get NAME" >&2; exit 2; }; get_value "$2"; exit $?;;
+has) [ $# = 2 ] || { echo "usage: tsx-panelctl has NAME" >&2; exit 2; }; has_hw "$2"; exit $?;;
+events) cmd_events; exit $?;;
+'') ;;
+*) sed -n '2,28p' "$0" >&2; exit 2;;
+esac
+
 mkdir -p "$R"
 if [ ! -p "$FIFO" ]; then rm -f "$FIFO"; mkfifo "$FIFO" || { log "mkfifo $FIFO failed"; exit 1; }; fi
 chown root:kiosk "$FIFO" 2>/dev/null || true
@@ -90,12 +205,16 @@ handle() {
 	ledbar)
 		if [ "$a1" = off ] && [ -z "$a2$a3$a4$rest" ]; then
 			log "ledbar off"; "$LEDBAR" off
+		elif [ "$a1" = on ] && [ -z "$a2$a3$a4$rest" ]; then
+			log "ledbar on"; "$LEDBAR" on
 		elif [ "$a1" = set ] && in_range "$a2" 0 100 && in_range "$a3" 0 100 && in_range "$a4" 0 100 && [ -z "$rest" ]; then
 			log "ledbar set $a2 $a3 $a4"; "$LEDBAR" set "$a2" "$a3" "$a4"
 		else reject "ledbar $a1 $a2 $a3 $a4 $rest"; fi;;
 	keypad)
 		if [ "$a1" = led ] && [ "$a2" = off ] && [ -z "$a3$a4$rest" ]; then
 			log "keypad led off"; "$KEYPAD" led off
+		elif [ "$a1" = led ] && [ "$a2" = auto ] && [ -z "$a3$a4$rest" ]; then
+			log "keypad led auto"; "$KEYPAD" led auto
 		elif [ "$a1" = led ] && in_range "$a2" 1 255 && [ -z "$a3$a4$rest" ]; then
 			log "keypad led $a2"; "$KEYPAD" led "$a2"
 		else reject "keypad $a1 $a2 $a3 $a4 $rest"; fi;;
@@ -111,6 +230,22 @@ handle() {
 		if in_range "$a1" 1 31 && [ -z "$a2$a3$a4$rest" ]; then
 			log "brightness $a1"; echo "$a1" > "$R/brightness"
 		else reject "brightness $a1 $a2 $a3 $a4 $rest"; fi;;
+	backlight)
+		# A level for the backlight at once, as the up and down keys give it:
+		# the override file for tsx-idled, and the backlight device itself
+		# while the screen is lit.
+		if in_range "$a1" 1 31 && [ -z "$a2$a3$a4$rest" ]; then
+			log "backlight $a1"; echo "$a1" > "$R/brightness"
+			s=; [ -r "$IDLED_STATE" ] && read -r s _ < "$IDLED_STATE"
+			if [ "$s" != blank ]; then
+				set +f
+				for d in "$BL_DIR"/*; do
+					[ -w "$d/brightness" ] && echo "$a1" > "$d/brightness"
+					break
+				done
+				set -f
+			fi
+		else reject "backlight $a1 $a2 $a3 $a4 $rest"; fi;;
 	brightness-offset)
 		# The local manual setting (the slider of tsx-overlay): signed steps
 		# on top of ALS or the schedule. It replaces an absolute override

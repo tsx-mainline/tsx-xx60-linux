@@ -21,6 +21,12 @@ privilege at all. It serves a small, dark, touch-friendly page:
     does not even listen on a LAN-reachable address (ServerManager below
     rebinds to loopback only). It does not just refuse at the HTTP layer.
 
+The page has the fields of the base system: the page URL, the panel name,
+the time zone, the display, the root login and the updates. Other packages add
+their fields with a plugin file in /usr/local/share/tsx/setup.d (see "plugins"
+below). The Home Assistant fields (the HA URL and login, voice, MQTT) are the
+plugin of tsx-ha. Without it, this page never names Home Assistant.
+
 Every privileged action goes through tsx-setup-helper. These actions are:
 read or write panel.conf (mode 600, owned by root), apply it, restart the
 kiosk, and change the root password. tsx-setup-helper is a small root daemon
@@ -37,30 +43,27 @@ already set, never its value. It reuses the masking of `tsx-config show`
 and does not reimplement it. The daemon never logs anything about a POST
 body.
 
-On a panel without a microphone or a Bluetooth module (government=1, the
-TSW-760-NC: /run/tsx/hw.conf from tsx-hw), the page shows the voice
-assistant and the Bluetooth proxy as not available. A submit then leaves
-VOICE and WAKE_WORD as they are. The same holds for the light sensor
-settings (AUTO_BRIGHTNESS and ALS_SCALE) on a panel with ALS=no in hw.conf.
+On a panel with no light sensor (ALS=no in /run/tsx/hw.conf from tsx-hw), the
+page shows the light sensor settings (AUTO_BRIGHTNESS and ALS_SCALE) as not
+available. A submit then leaves them as they are. A plugin can report more
+settings in the same way (tsx-ha: no microphone, no Bluetooth module on the
+TSW-760-NC).
 
 Env overrides for host tests (rootfs/tests/test-setup.sh): TSX_SETUP_PORT,
 TSX_SETUP_CONF, TSX_HW_CONF, TSX_RUN_DIR, TSX_CONFIG_BIN, TSX_SETUP_HELPER_REQ,
-TSX_SETUP_HELPER_RESP, TSX_ZONEINFO_DIR, TSX_SETUP_NO_ZEROCONF=1.
+TSX_SETUP_HELPER_RESP, TSX_ZONEINFO_DIR, TSX_SETUP_NO_ZEROCONF=1,
+TSX_SETUP_PLUGIN_DIR (default /usr/local/share/tsx/setup.d).
 """
+import importlib.util
 import json
 import os
-import re
 import secrets
 import select
-import socket
-import ssl
 import subprocess
 import sys
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 TSX_CONFIG_BIN = os.environ.get("TSX_CONFIG_BIN", "tsx-config")
@@ -70,6 +73,7 @@ HW_CONF_PATH = os.environ.get("TSX_HW_CONF", os.path.join(RUN_DIR, "hw.conf"))
 CONF_PATH = os.environ.get("TSX_SETUP_CONF", "/etc/tsx/setup.conf")
 KIOSK_CONF_PATH = os.environ.get("TSX_KIOSK_CONF", "/etc/kiosk.conf")
 NO_ZEROCONF = os.environ.get("TSX_SETUP_NO_ZEROCONF", "0") == "1"
+PLUGIN_DIR = os.environ.get("TSX_SETUP_PLUGIN_DIR", "/usr/local/share/tsx/setup.d")
 
 
 def load_conf(path):
@@ -342,135 +346,6 @@ def zone_list():
     return _TZ_FALLBACK
 
 
-# ---- Home Assistant discovery (best effort) --------------------------
-
-def discover_ha(timeout=1.8):
-    if NO_ZEROCONF:
-        return None
-    try:
-        from zeroconf import Zeroconf, ServiceBrowser
-    except ImportError:
-        return None
-    found = {}
-
-    class _Listener:
-        def add_service(self, zc, type_, name):
-            try:
-                info = zc.get_service_info(type_, name, timeout=1200)
-            except Exception:
-                info = None
-            if info is not None:
-                found["info"] = info
-
-        def remove_service(self, *a, **k):
-            pass
-
-        def update_service(self, *a, **k):
-            pass
-
-    zc = None
-    try:
-        zc = Zeroconf()
-        ServiceBrowser(zc, "_home-assistant._tcp.local.", _Listener())
-        time.sleep(timeout)
-    except Exception:
-        return None
-    finally:
-        if zc is not None:
-            try:
-                zc.close()
-            except Exception:
-                pass
-    info = found.get("info")
-    if info is None:
-        return None
-    props = {}
-    try:
-        for k, v in (info.properties or {}).items():
-            k = k.decode(errors="replace") if isinstance(k, bytes) else k
-            v = v.decode(errors="replace") if isinstance(v, bytes) else v
-            props[k] = v
-    except Exception:
-        pass
-    base = props.get("base_url") or props.get("internal_url") or props.get("external_url")
-    if base:
-        return base
-    try:
-        addr = None
-        if hasattr(info, "parsed_addresses"):
-            addrs = info.parsed_addresses()
-            addr = addrs[0] if addrs else None
-        if not addr and getattr(info, "addresses", None):
-            addr = socket.inet_ntoa(info.addresses[0])
-        if addr:
-            return "http://%s:%s" % (addr, info.port)
-    except Exception:
-        pass
-    return None
-
-
-# ---- checking a Home Assistant URL from the panel ----------------------
-
-class _SchemeLockedRedirect(urllib.request.HTTPRedirectHandler):
-    """Follow at most a few redirects, and never to a scheme other than
-    http/https (a plain urllib opener has no handler installed for
-    file:/ftp:/etc. anyway, so those already fail -- this also refuses a
-    redirect to something like data: or a custom scheme some server might
-    offer, and caps the hop count tighter than urllib's default of 10)."""
-    max_redirections = 4
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        scheme = urllib.parse.urlsplit(newurl).scheme.lower()
-        if scheme not in ("http", "https"):
-            raise urllib.error.HTTPError(newurl, code, "refusing a redirect to a non-http(s) URL", headers, fp)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
-_HA_CHECK_OPENER = urllib.request.build_opener(_SchemeLockedRedirect)
-
-
-def check_ha_url(url):
-    url = (url or "").strip()
-    if not re.match(r"^https?://[^\s]+$", url):
-        return {"ok": False, "kind": "invalid", "message": "must start with http:// or https://"}
-    target = url.rstrip("/") + "/manifest.json"
-    req = urllib.request.Request(target, headers={"User-Agent": "tsx-setupd"})
-    try:
-        with _HA_CHECK_OPENER.open(req, timeout=5) as resp:
-            # Use a small cap, whatever Content-Length claims. read() on an
-            # HTTPResponse stops at n bytes even if the server keeps sending.
-            # So a server cannot trick this code into buffering more.
-            body = resp.read(4096)
-            looks_like_ha = b"Home Assistant" in body
-            msg = "Reachable" if looks_like_ha else \
-                "Reachable, but the response did not look like Home Assistant's manifest"
-            return {"ok": True, "kind": "ok", "matched_ha": looks_like_ha, "message": msg}
-    except ssl.SSLError as e:
-        return {"ok": False, "kind": "tls", "message": "TLS error: %s" % e}
-    except urllib.error.HTTPError as e:
-        if e.code in (401, 403):
-            return {"ok": True, "kind": "ok", "matched_ha": False,
-                    "message": "Reachable (HTTP %d); it asked for auth, which is normal" % e.code}
-        return {"ok": False, "kind": "http", "message": "HTTP %d from the server" % e.code}
-    except urllib.error.URLError as e:
-        reason = e.reason
-        if isinstance(reason, ssl.SSLError):
-            return {"ok": False, "kind": "tls", "message": "TLS error: %s" % reason}
-        if isinstance(reason, socket.gaierror):
-            return {"ok": False, "kind": "dns", "message": "could not resolve that host name"}
-        if isinstance(reason, socket.timeout):
-            return {"ok": False, "kind": "timeout", "message": "timed out waiting for a response"}
-        if isinstance(reason, ConnectionRefusedError) or "refused" in str(reason).lower():
-            return {"ok": False, "kind": "refused", "message": "connection refused: nothing is listening there"}
-        return {"ok": False, "kind": "network", "message": str(reason)[:200]}
-    except socket.timeout:
-        return {"ok": False, "kind": "timeout", "message": "timed out waiting for a response"}
-    except ValueError as e:
-        return {"ok": False, "kind": "invalid", "message": str(e)[:200]}
-    except Exception as e:  # never let a check crash the request handler
-        return {"ok": False, "kind": "error", "message": str(e)[:200]}
-
-
 # ---- LAN pairing (loopback never needs any of this) --------------------
 
 class Pairing:
@@ -525,70 +400,125 @@ PAIRING = Pairing()
 # Fields that tsx-config itself owns. Blank means "leave as it is", unless
 # the key is in CLEARABLE_BLANK. There, the own validation of tsx-config
 # already treats an empty value as meaningful ("off" or "allow any").
-# KIOSK_URL and HA_LOGIN_METHOD/HA_TOKEN are handled separately below
-# (required, and a client-side choice "form" that is not a real panel.conf
-# value).
-SIMPLE_KEYS = ["PANEL_NAME", "TZ_NAME", "VOICE", "WAKE_WORD", "MQTT_HOST",
-               "MQTT_PORT", "MQTT_USER", "MQTT_PASSWORD", "SSH_AUTHORIZED_KEY",
-               "KERNEL_FLAVOR", "BLANK_TIMEOUT", "ORIENTATION",
-               "AUTO_BRIGHTNESS", "ALS_SCALE"]
+# KIOSK_URL is handled separately below (required). These are the keys of the
+# base system. A plugin adds its own keys (see "plugins" below).
+BASE_SIMPLE_KEYS = ["PANEL_NAME", "TZ_NAME", "SSH_AUTHORIZED_KEY",
+                    "KERNEL_FLAVOR", "BLANK_TIMEOUT", "ORIENTATION",
+                    "AUTO_BRIGHTNESS", "ALS_SCALE"]
 # Empty = cleared. The page pre-fills these keys, so an empty one was cleared
-# on purpose, and the script removes the key. MQTT_PASSWORD is not one of
-# them. The page never pre-fills it ("already set; leave blank to keep"), so
-# empty = no change.
-CLEARABLE_BLANK = {"MQTT_HOST", "MQTT_PORT", "MQTT_USER", "AUTO_BRIGHTNESS",
-                   "ALS_SCALE"}
+# on purpose, and the script removes the key.
+BASE_CLEARABLE_BLANK = {"AUTO_BRIGHTNESS", "ALS_SCALE"}
+# the settings of the base that a panel can lack: name -> the keys that a save
+# leaves as they are
+BASE_UNAVAILABLE_DROPS = {"AUTO_BRIGHTNESS": ("AUTO_BRIGHTNESS", "ALS_SCALE")}
+BASE_STATE_KEYS = ["KIOSK_URL"] + BASE_SIMPLE_KEYS
+
+# ---- plugins -------------------------------------------------------------------
+# A package that adds fields to the page ships one Python file in PLUGIN_DIR.
+# The file says which keys it owns, gives the HTML and the script of its
+# fields, and checks its own values. The contract is in the docstring of
+# rootfs/overlay/usr/local/share/tsx/setup.d/ha.py. A plugin that fails to load
+# is skipped, and the page works without it.
+
+
+class _Ctx:
+    """What a plugin may use of this program."""
+    no_zeroconf = NO_ZEROCONF
+
+    @staticmethod
+    def validate(key, val):
+        return tcfg_validate(key, val)
+
+    @staticmethod
+    def show():
+        return tcfg_show()
+
+
+def load_plugins(path=None):
+    plugins = []
+    path = path or PLUGIN_DIR
+    try:
+        names = sorted(n for n in os.listdir(path) if n.endswith(".py") and not n.startswith("_"))
+    except OSError:
+        return plugins
+    for n in names:
+        try:
+            spec = importlib.util.spec_from_file_location("tsx_setup_plugin_" + n[:-3], os.path.join(path, n))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            if hasattr(mod, "init"):
+                mod.init(_Ctx)
+        except Exception as e:  # a broken plugin must not stop the page
+            sys.stderr.write("tsx-setupd: plugin %s skipped: %s\n" % (n, e))
+            continue
+        plugins.append(mod)
+    return plugins
+
+
+PLUGINS = load_plugins()
+SIMPLE_KEYS = BASE_SIMPLE_KEYS + [k for p in PLUGINS for k in getattr(p, "SIMPLE_KEYS", [])]
+CLEARABLE_BLANK = set(BASE_CLEARABLE_BLANK).union(*[set(getattr(p, "CLEARABLE_BLANK", ())) for p in PLUGINS])
+STATE_KEYS = set(BASE_STATE_KEYS).union(*[set(getattr(p, "STATE_KEYS", getattr(p, "SIMPLE_KEYS", ()))) for p in PLUGINS])
+UNAVAILABLE_DROPS = dict(BASE_UNAVAILABLE_DROPS)
+for _p in PLUGINS:
+    UNAVAILABLE_DROPS.update(getattr(_p, "UNAVAILABLE_DROPS", {}))
+
+_TEXT_DEFAULTS = {
+    "url_label": "Page URL",
+    "url_placeholder": "https://example.org",
+    "url_required": "the page URL is required",
+    "submit_label": "Save",
+    "done_text": "Saved. This panel will load the page now.",
+}
+
+
+def page_text(name):
+    for p in PLUGINS:
+        v = getattr(p, "TEXT", {}).get(name)
+        if v:
+            return v
+    return _TEXT_DEFAULTS[name]
 
 
 def hw_unavailable():
     """The settings that this panel cannot use, with the reason
     (hw.conf of tsx-hw. A missing file = a panel with all parts)."""
     hw = load_conf(HW_CONF_PATH)
-    gov = hw.get("GOVERNMENT", "unknown")
     out = {}
-    if hw.get("MIC") == "no":
-        out["VOICE"] = "no microphone on this panel (government=%s)" % gov
-    if hw.get("BT") == "no":
-        out["BT_PROXY"] = "no Bluetooth module on this panel (government=%s)" % gov
     if hw.get("ALS") == "no":
         out["AUTO_BRIGHTNESS"] = "no ambient light sensor on this panel"
+    for p in PLUGINS:
+        if hasattr(p, "unavailable"):
+            out.update(p.unavailable(hw))
     return out
 
 
 def handle_submit(fields):
     errors = {}
-    if "VOICE" in hw_unavailable():
-        # Not available on this panel: the page does not send them. Keep
-        # what panel.conf has (tsx-config apply treats VOICE=on as off).
-        fields = {k: v for k, v in fields.items() if k not in ("VOICE", "WAKE_WORD")}
-    if "AUTO_BRIGHTNESS" in hw_unavailable():
-        # Same for the light sensor settings.
-        fields = {k: v for k, v in fields.items() if k not in ("AUTO_BRIGHTNESS", "ALS_SCALE")}
+    # A setting that this panel cannot use is not sent by the page. Keep what
+    # panel.conf has (tsx-config apply treats VOICE=on as off).
+    for name in hw_unavailable():
+        drop = UNAVAILABLE_DROPS.get(name, ())
+        fields = {k: v for k, v in fields.items() if k not in drop}
     to_set = {}
     to_unset = []
+    post_unset = []
 
     url = fields.get("KIOSK_URL")
     if not isinstance(url, str) or not url.strip():
-        errors["KIOSK_URL"] = "the Home Assistant URL is required"
+        errors["KIOSK_URL"] = page_text("url_required")
     elif not tcfg_validate("KIOSK_URL", url.strip()):
         errors["KIOSK_URL"] = "must be a valid http(s) URL with no spaces"
     else:
         to_set["KIOSK_URL"] = url.strip()
 
-    method = fields.get("HA_LOGIN_METHOD")
-    if method not in ("form", "token", "trusted"):
-        errors["HA_LOGIN_METHOD"] = "choose a login method"
-    elif method in ("token", "trusted"):
-        to_set["HA_LOGIN_METHOD"] = method
-        if method == "token":
-            tok = fields.get("HA_TOKEN") or ""
-            if tok:
-                if tcfg_validate("HA_TOKEN", tok):
-                    to_set["HA_TOKEN"] = tok
-                else:
-                    errors["HA_TOKEN"] = "does not look like a long-lived access token"
-            elif not tcfg_show().get("HA_TOKEN"):
-                errors["HA_TOKEN"] = "a long-lived access token is required for this login method"
+    for p in PLUGINS:
+        if hasattr(p, "submit"):
+            p_set, p_unset, p_err, p_post = p.submit(fields)
+            to_set.update(p_set)
+            to_unset.extend(p_unset)
+            errors.update(p_err)
+            post_unset.extend(p_post)
 
     for key in SIMPLE_KEYS:
         if key not in fields:
@@ -627,9 +557,8 @@ def handle_submit(fields):
             errors[key] = err or "failed to save"
     for key in to_unset:
         tcfg_unset(key)
-    if method == "form":
-        tcfg_unset("HA_LOGIN_METHOD")
-        tcfg_unset("HA_TOKEN")
+    for key in post_unset:
+        tcfg_unset(key)
     if errors:
         return 400, {"errors": errors}
 
@@ -722,19 +651,24 @@ class Handler(BaseHTTPRequestHandler):
             if not self._loopback() and not lan_allowed():
                 self._send_html(403, PAGE_UNAVAILABLE)
                 return
-            self._send_html(200, PAGE_MAIN)
+            self._send_html(200, PAGE)
             return
         if path == "/setup/api/state":
             self._api_state()
             return
-        if path == "/setup/api/discover":
-            self._api_discover()
-            return
+        for p in PLUGINS:
+            fn = getattr(p, "GET_ROUTES", {}).get(path)
+            if fn:
+                fn(self)
+                return
         self.send_error(404)
 
     def do_POST(self):
         path = urllib.parse.urlsplit(self.path).path
-        if path not in ("/setup/api/pair", "/setup/api/check-url", "/setup/api/submit"):
+        routes = {}
+        for p in PLUGINS:
+            routes.update(getattr(p, "POST_ROUTES", {}))
+        if path not in ("/setup/api/pair", "/setup/api/submit") and path not in routes:
             self.send_error(404)
             return
         data, code = self._read_json_body()
@@ -743,10 +677,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/setup/api/pair":
             self._api_pair(data)
-        elif path == "/setup/api/check-url":
-            self._api_check_url(data)
-        else:
+        elif path == "/setup/api/submit":
             self._api_submit(data)
+        else:
+            routes[path](self, data)
 
     def _api_state(self):
         loop = self._loopback()
@@ -759,6 +693,8 @@ class Handler(BaseHTTPRequestHandler):
         shown = tcfg_show()
         fields = {}
         for k, v in shown.items():
+            if k not in STATE_KEYS:
+                continue    # a key of a package that this panel does not have
             if v == "********":
                 fields[k] = None
                 fields[k + "__set"] = True
@@ -780,16 +716,6 @@ class Handler(BaseHTTPRequestHandler):
             resp["pairing_code_remaining"] = max(0, int(WINDOW - (time.monotonic() - code_at)))
         self._send_json(200, resp)
 
-    def _api_discover(self):
-        if not self._authorized():
-            self._send_json(403, {"error": "not authorized"})
-            return
-        try:
-            url = discover_ha()
-        except Exception:
-            url = None
-        self._send_json(200, {"url": url})
-
     def _api_pair(self, data):
         if self._loopback():
             self._send_json(200, {"ok": True})
@@ -808,12 +734,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         cookie = "tsxsetup=%s; Path=/setup; HttpOnly; SameSite=Strict; Max-Age=%d" % (token, WINDOW)
         self._send_json(200, {"ok": True}, set_cookie=cookie)
-
-    def _api_check_url(self, data):
-        if not self._authorized():
-            self._send_json(403, {"error": "not authorized"})
-            return
-        self._send_json(200, check_ha_url(str(data.get("url", ""))))
 
     def _api_submit(self, data):
         if not self._authorized():
@@ -917,39 +837,25 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
 
   <form id="form">
     <div class="card">
-      <label for="f-url">Home Assistant URL</label>
-      <input id="f-url" name="KIOSK_URL" type="url" placeholder="https://homeassistant.local:8123" required>
-      <div class="row" style="margin-top:8px">
-        <button type="button" id="discover-btn" class="secondary">Find it automatically</button>
-        <button type="button" id="check-btn" class="secondary">Check</button>
-      </div>
+      <label for="f-url">@@URL_LABEL@@</label>
+      <input id="f-url" name="KIOSK_URL" type="url" placeholder="@@URL_PLACEHOLDER@@" required>
+      <!--SLOT:url_buttons-->
       <div id="url-status" class="status"></div>
     </div>
+    <!--SLOT:after_url-->
 
-    <h2>How this panel logs in</h2>
-    <div class="card">
-      <label class="choice"><input type="radio" name="HA_LOGIN_METHOD" value="form" checked>
-        <div><b>Show the Home Assistant login form</b>
-        <span>Log in on the panel once with the on-screen keyboard, like any browser.</span></div></label>
-      <label class="choice"><input type="radio" name="HA_LOGIN_METHOD" value="token">
-        <div><b>Long-lived access token</b>
-        <span>Paste a token from your Home Assistant profile; the panel logs in by itself.</span></div></label>
-      <label class="choice"><input type="radio" name="HA_LOGIN_METHOD" value="trusted">
-        <div><b>Trusted network</b>
-        <span>No password: Home Assistant must have this panel's address in its trusted_networks.</span></div></label>
-      <div id="token-wrap" style="display:none">
-        <label for="f-token">Long-lived access token</label>
-        <input id="f-token" name="HA_TOKEN" type="password" autocomplete="off">
-        <div class="hint">Never shown again once saved.</div>
-      </div>
-    </div>
-
-    <h2>Panel</h2>
+    <h2>Network</h2>
     <div class="card">
       <label for="f-name">Panel name</label>
       <input id="f-name" name="PANEL_NAME" type="text" placeholder="(default: model-MAC)" maxlength="63">
+      <div class="hint">The name of the panel on the network. It is also the host name.</div>
       <label for="f-tz">Time zone</label>
       <select id="f-tz" name="TZ_NAME"></select>
+      <!--SLOT:panel-->
+    </div>
+
+    <h2>Display</h2>
+    <div class="card">
       <label for="f-orient">Screen orientation</label>
       <select id="f-orient" name="ORIENTATION">
         <option value="landscape">Landscape (keys right of the screen)</option>
@@ -958,15 +864,8 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
         <option value="portrait-flipped">Portrait, flipped (keys above)</option>
       </select>
       <div class="hint">How the panel hangs on the wall. The screen turns as soon as you save.</div>
-      <div class="toggle" style="margin-top:14px">
-        <input id="f-voice" name="VOICE" type="checkbox">
-        <label for="f-voice" style="margin:0">Voice assistant</label>
-      </div>
-      <div id="wake-wrap" style="display:none">
-        <label for="f-wake">Wake word</label>
-        <input id="f-wake" name="WAKE_WORD" type="text" placeholder="okay_nabu" maxlength="32">
-      </div>
-      <div class="hint" id="hw-hint" style="display:none"></div>
+      <label for="f-blank">Screen blank timeout (seconds, 0 = never)</label>
+      <input id="f-blank" name="BLANK_TIMEOUT" type="number" min="0" max="86400">
     </div>
 
     <details id="sensors-wrap"><summary>Sensors</summary>
@@ -983,29 +882,18 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
       </div>
     </details>
 
-    <details><summary>MQTT (optional)</summary>
-      <div class="card">
-        <label for="f-mqtt-host">Broker host</label>
-        <input id="f-mqtt-host" name="MQTT_HOST" type="text">
-        <label for="f-mqtt-port">Broker port</label>
-        <input id="f-mqtt-port" name="MQTT_PORT" type="number" min="0" max="65535" placeholder="1883">
-        <label for="f-mqtt-user">User</label>
-        <input id="f-mqtt-user" name="MQTT_USER" type="text" autocomplete="off">
-        <label for="f-mqtt-pass">Password</label>
-        <input id="f-mqtt-pass" name="MQTT_PASSWORD" type="password" autocomplete="off">
-      </div>
-    </details>
+    <!--SLOT:details-->
 
     <h2>Access</h2>
     <div class="card">
       <label for="f-rootpw">Root password</label>
       <input id="f-rootpw" name="ROOT_PASSWORD" type="password" autocomplete="new-password" minlength="8">
-      <div class="hint">Strongly suggested: the default password is well known. Leave blank to keep it.</div>
+      <div class="hint">8 characters or more. Leave blank to keep the present password. A panel that has none asks for one at the first login on its screen.</div>
       <label for="f-sshkey">SSH public key (optional)</label>
       <textarea id="f-sshkey" name="SSH_AUTHORIZED_KEY" rows="2" placeholder="ssh-ed25519 AAAA... you@host"></textarea>
     </div>
 
-    <details><summary>Advanced</summary>
+    <details><summary>Updates</summary>
       <div class="card">
         <label for="f-kernel">Kernel flavor</label>
         <select id="f-kernel" name="KERNEL_FLAVOR">
@@ -1013,19 +901,18 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
           <option value="lts">LTS (default, recommended)</option>
           <option value="stable">Stable (latest)</option>
         </select>
-        <label for="f-blank">Screen blank timeout (seconds, 0 = never)</label>
-        <input id="f-blank" name="BLANK_TIMEOUT" type="number" min="0" max="86400">
+        <div class="hint">The panel installs updates of this flavor by itself (docs/updates.md).</div>
       </div>
     </details>
 
     <div class="row" style="margin-top:20px">
-      <button id="submit-btn" type="submit">Save and open Home Assistant</button>
+      <button id="submit-btn" type="submit">@@SUBMIT_LABEL@@</button>
     </div>
     <div id="submit-status" class="status"></div>
   </form>
 
   <div id="done" class="card">
-    <p>Saved. This panel will load Home Assistant now.</p>
+    <p>@@DONE_TEXT@@</p>
   </div>
 </div>
 <script>
@@ -1076,36 +963,17 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
     if (fields.ORIENTATION) $("f-orient").value = fields.ORIENTATION;
     if (fields.AUTO_BRIGHTNESS) $("f-autobri").value = fields.AUTO_BRIGHTNESS;
     if (fields.ALS_SCALE) $("f-alsscale").value = fields.ALS_SCALE;
-    if (fields.VOICE === "on") { $("f-voice").checked = true; $("wake-wrap").style.display = "block"; }
-    if (fields.WAKE_WORD) $("f-wake").value = fields.WAKE_WORD;
-    if (fields.MQTT_HOST) $("f-mqtt-host").value = fields.MQTT_HOST;
-    if (fields.MQTT_PORT) $("f-mqtt-port").value = fields.MQTT_PORT;
-    if (fields.MQTT_USER) $("f-mqtt-user").value = fields.MQTT_USER;
-    if (fields.MQTT_PASSWORD__set) $("f-mqtt-pass").placeholder = "(already set; leave blank to keep)";
-    if (fields.HA_TOKEN__set) $("f-token").placeholder = "(already set; leave blank to keep)";
     if (fields.SSH_AUTHORIZED_KEY__set) $("f-sshkey").placeholder = "(a key is already set; leave blank to keep it)";
-    if (fields.HA_LOGIN_METHOD) {
-      var r = document.querySelector('input[name=HA_LOGIN_METHOD][value="' + fields.HA_LOGIN_METHOD + '"]');
-      if (r) { r.checked = true; }
-    }
-    $("token-wrap").style.display =
-      (document.querySelector('input[name=HA_LOGIN_METHOD]:checked') || {}).value === "token" ? "block" : "none";
+    /*SLOT:apply*/
     populateTz(fields.tz_list, fields.TZ_NAME);
   }
 
   function applyUnavailable(u){
-    var notes = [];
-    if (u.VOICE) {
-      $("f-voice").checked = false; $("f-voice").disabled = true;
-      $("wake-wrap").style.display = "none";
-      notes.push("Voice assistant: not available, " + u.VOICE + ".");
-    }
     if (u.AUTO_BRIGHTNESS) {
       $("f-autobri").disabled = true; $("f-alsscale").disabled = true;
       $("als-hint").textContent = "Not available on this panel: " + u.AUTO_BRIGHTNESS + ".";
     }
-    if (u.BT_PROXY) notes.push("Bluetooth proxy: not available, " + u.BT_PROXY + ".");
-    if (notes.length) { $("hw-hint").textContent = notes.join(" "); $("hw-hint").style.display = "block"; }
+    /*SLOT:unavailable*/
   }
 
   function loadState(){
@@ -1138,69 +1006,32 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
     });
   });
 
-  document.querySelectorAll('input[name=HA_LOGIN_METHOD]').forEach(function(r){
-    r.addEventListener("change", function(){
-      $("token-wrap").style.display = r.value === "token" && r.checked ? "block" : "none";
-    });
-  });
-  $("f-voice").addEventListener("change", function(){
-    $("wake-wrap").style.display = $("f-voice").checked ? "block" : "none";
-  });
-
   function setUrlStatus(cls, text){
     var el = $("url-status");
     el.className = "status " + cls;
     el.textContent = text;
   }
 
-  $("discover-btn").addEventListener("click", function(){
-    setUrlStatus("", "Looking on the network...");
-    api("GET", "/setup/api/discover").then(function(r){
-      if (r.body && r.body.url) {
-        $("f-url").value = r.body.url;
-        setUrlStatus("ok", "Found " + r.body.url);
-      } else {
-        setUrlStatus("warn", "Nothing found automatically; type the URL.");
-      }
-    });
-  });
-
-  $("check-btn").addEventListener("click", function(){
-    var url = $("f-url").value.trim();
-    if (!url) { setUrlStatus("bad", "enter a URL first"); return; }
-    setUrlStatus("", "Checking...");
-    api("POST", "/setup/api/check-url", {url: url}).then(function(r){
-      var b = r.body || {};
-      setUrlStatus(b.ok ? "ok" : "bad", b.message || "unknown error");
-    });
-  });
+  /*SLOT:init*/
 
   $("form").addEventListener("submit", function(ev){
     ev.preventDefault();
     var btn = $("submit-btn");
     btn.disabled = true;
     document.querySelectorAll(".status.bad").forEach(function(e){ e.textContent=""; e.className="status"; });
-    var method = (document.querySelector('input[name=HA_LOGIN_METHOD]:checked') || {}).value;
     var payload = {
       KIOSK_URL: $("f-url").value.trim(),
-      HA_LOGIN_METHOD: method,
-      HA_TOKEN: $("f-token").value,
       PANEL_NAME: $("f-name").value.trim(),
       TZ_NAME: $("f-tz").value,
       ORIENTATION: $("f-orient").value,
       AUTO_BRIGHTNESS: $("f-autobri").disabled ? undefined : $("f-autobri").value,
       ALS_SCALE: $("f-alsscale").disabled ? undefined : $("f-alsscale").value.trim(),
-      VOICE: $("f-voice").disabled ? undefined : ($("f-voice").checked ? "on" : "off"),
-      WAKE_WORD: $("f-voice").disabled ? undefined : $("f-wake").value.trim(),
-      MQTT_HOST: $("f-mqtt-host").value.trim(),
-      MQTT_PORT: $("f-mqtt-port").value.trim(),
-      MQTT_USER: $("f-mqtt-user").value.trim(),
-      MQTT_PASSWORD: $("f-mqtt-pass").value,
       ROOT_PASSWORD: $("f-rootpw").value,
       SSH_AUTHORIZED_KEY: $("f-sshkey").value.trim(),
       KERNEL_FLAVOR: $("f-kernel").value,
       BLANK_TIMEOUT: $("f-blank").value.trim()
     };
+    /*SLOT:payload*/
     api("POST", "/setup/api/submit", payload).then(function(r){
       btn.disabled = false;
       if (r.status === 200) {
@@ -1251,6 +1082,30 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
 </script>
 </body></html>
 """
+
+
+def build_page(template, plugins):
+    """Put the words, the HTML and the script of the plugins into the slots of
+    the template. A slot that no plugin fills stays empty."""
+    def words(name):
+        for p in plugins:
+            v = getattr(p, "TEXT", {}).get(name)
+            if v:
+                return v
+        return _TEXT_DEFAULTS[name]
+
+    out = template
+    for key, name in (("@@URL_LABEL@@", "url_label"), ("@@URL_PLACEHOLDER@@", "url_placeholder"),
+                      ("@@SUBMIT_LABEL@@", "submit_label"), ("@@DONE_TEXT@@", "done_text")):
+        out = out.replace(key, words(name))
+    for slot in ("url_buttons", "after_url", "panel", "details"):
+        out = out.replace("<!--SLOT:%s-->" % slot, "".join(getattr(p, "HTML", {}).get(slot, "") for p in plugins))
+    for slot in ("apply", "unavailable", "payload", "init"):
+        out = out.replace("/*SLOT:%s*/" % slot, "".join(getattr(p, "JS", {}).get(slot, "") for p in plugins))
+    return out
+
+
+PAGE = build_page(PAGE_MAIN, PLUGINS)
 
 
 # ---- listening address: loopback-only unless a LAN window is open --------

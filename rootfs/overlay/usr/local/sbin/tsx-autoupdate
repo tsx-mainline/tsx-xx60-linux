@@ -50,7 +50,7 @@
 # Env overrides (for host tests only. See rootfs/tests/test-autoupdate*.sh):
 #   TSX_AUTOUPDATE_CONF TSX_RUN_DIR TSX_STATE_DIR TSX_LOG TSX_IDLED_STATE
 #   TSX_KIOSK_CONF TSX_WORLD TSX_SIGS TSX_PATCH_TOOL TSX_ES2_MARKER
-#   TSX_CHROMIUM_BIN TSX_BUILD_ID_FILE
+#   TSX_CHROMIUM_BIN TSX_BUILD_ID_FILE TSX_INITD
 #
 # __in_window, __needs_reboot, __chromium_decision and __write_status are
 # internal. They call the matching shell function directly. The host tests
@@ -463,7 +463,10 @@ cmd_healthcheck() {
 	[ -e "$STATE/reboot-marker" ] || return 0
 	rm -f "$STATE/reboot-marker"
 	ok=1 msg=
-	if command -v rc-service >/dev/null 2>&1; then
+	# The kiosk is not in every image profile (docs/rootfs.md "Profiles"). The
+	# console profile has no kiosk service and no page to reach.
+	has_kiosk=0; [ -e "${TSX_INITD:-/etc/init.d}/kiosk" ] && has_kiosk=1
+	if [ "$has_kiosk" = 1 ] && command -v rc-service >/dev/null 2>&1; then
 		rc-service kiosk status >/dev/null 2>&1 || { ok=0; msg="kiosk service not running"; }
 	fi
 	url=; [ -r "$KIOSK_CONF" ] && . "$KIOSK_CONF" 2>/dev/null
@@ -471,6 +474,7 @@ cmd_healthcheck() {
 	# same precedence as in kiosk-session -- docs/rootfs.md "Panel configuration"
 	[ -r "$RUN/kiosk.conf" ] && . "$RUN/kiosk.conf" 2>/dev/null
 	url=${KIOSK_URL:-$url}
+	[ "$has_kiosk" = 1 ] || url=
 	if [ -n "$url" ] && command -v curl >/dev/null 2>&1; then
 		code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "$url" 2>/dev/null)
 		case $code in 2??|3??) ;; *) ok=0; msg="${msg:+$msg; }page not reachable (http ${code:-?})";; esac

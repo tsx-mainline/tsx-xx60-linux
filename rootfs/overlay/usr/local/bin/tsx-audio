@@ -175,6 +175,16 @@ voice_handover() {  # $1 = add|del
 }
 
 cmd_enable() {  # $1 = add|del, $2 = sendspin|voice
+	# Sendspin and the voice satellite belong to the Home Assistant layer
+	# (docs/rootfs.md "Profiles"). An image without it has no such service.
+	# Then "disable" has nothing to do, and "enable" says why it cannot.
+	case ${2:-} in
+	sendspin|voice)
+		if [ ! -e "${TSX_INITD:-/etc/init.d}/tsx-$2" ]; then
+			[ "$1" = del ] && return 0
+			echo "tsx-audio: no tsx-$2 service in this image (it is not in this profile)" >&2; exit 1
+		fi;;
+	esac
 	case ${2:-} in
 	sendspin) if [ "$1" = add ]; then svc_enable add dbus avahi-daemon tsx-sendspin
 		  else svc_enable del tsx-sendspin; fi;;

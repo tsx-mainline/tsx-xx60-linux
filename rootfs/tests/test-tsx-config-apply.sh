@@ -304,6 +304,14 @@ grep -qx 'PROXY="on"' "$FX3/run/tsx/bt.conf" && grep -qx 'tsx-audio enable voice
 	&& ok "no hw.conf: a panel with all parts" || bad "no hw.conf: bt.conf $(cat "$FX3/run/tsx/bt.conf")"
 rm -f "$W/bin/tsx-audio" "$W/audio.log"
 
+echo "== BOOT_VERBOSE: the console profile keeps the flag (/etc/tsx/profile) =="
+printf 'console\n' > "$FX/etc/tsx/profile"; : > "$FX/etc/tsx/boot-verbose"
+TSX_CONF="$CFG" busybox sh "$SCRIPT" unset BOOT_VERBOSE >/dev/null; applyb
+[ -e "$FX/etc/tsx/boot-verbose" ] && ok "console profile: the flag stays with BOOT_VERBOSE unset" || bad "console profile: apply removed the flag"
+printf 'kiosk\n' > "$FX/etc/tsx/profile"; applyb
+[ ! -e "$FX/etc/tsx/boot-verbose" ] && ok "kiosk profile: the flag goes as before" || bad "kiosk profile: the flag stayed"
+rm -f "$FX/etc/tsx/profile"
+
 echo "== unconfigured panel (no KIOSK_URL, no TZ_NAME): apply runs to the end =="
 CFG2="$W/panel-unconf.conf"; FX2="$W/fx-unconf"; mkdir -p "$FX2/run" "$FX2/etc"
 printf '# header only\nKERNEL_FLAVOR="stable"\n' > "$CFG2"

@@ -62,7 +62,7 @@ ROOTSH="$INSTALLER/steps/rootsh"
 MKPANELFETCH="$INSTALLER/steps/mkpanelfetch.sh"
 CRESTRONADMIN="$INSTALLER/steps/crestron-admin"
 INSTALLER_REL=tsx-install/android/tsx-android-install.sh
-MAINLINE_PW=${TSX_MAINLINE_PW:-tsx}
+MAINLINE_PW=${TSX_MAINLINE_PW:-}   # no fixed root password on the installed system: this, else the ssh key
 
 usage() { sed -n '2,54p' "$0" >&2; }
 log() { local ts; ts=$(date '+%Y-%m-%d %H:%M:%S'); printf '[%s] %s\n' "$ts" "$*" | tee -a "$RESULTS" >&2; }
@@ -207,7 +207,8 @@ else
 fi
 
 # --- small helpers used by steps 2-7 --------------------------------------
-MSSH="sshpass -p $MAINLINE_PW ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$PANEL"
+MSSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8"
+if [ -n "$MAINLINE_PW" ]; then MSSH="sshpass -p $MAINLINE_PW ssh $MSSH_OPTS root@$PANEL"; else MSSH="ssh -o BatchMode=yes $MSSH_OPTS root@$PANEL"; fi
 is_mainline() {
 	local out; out=$($MSSH uname -r 2>/dev/null) || return 1
 	case "$out" in [6-9].*|[1-9][0-9].*) return 0;; *) return 1;; esac   # 6.x LTS, 7.x stable, ...

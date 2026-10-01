@@ -26,6 +26,7 @@
 #  - a save lands in a temp panel.conf
 #  - no secret ever appears in a JSON response or in the log of either daemon
 set -uo pipefail
+export PYTHONDONTWRITEBYTECODE=1   # the test imports tsx-setupd: no .pyc next to it
 # The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
 export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
 export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
@@ -60,8 +61,10 @@ busybox sh -n "$HELPER" && ok "busybox sh -n tsx-setup-helper" || bad "busybox s
 busybox sh -n "$HERE/overlay/etc/init.d/tsx-setupd" && ok "busybox sh -n init.d/tsx-setupd" || bad "busybox sh -n init.d/tsx-setupd"
 busybox sh -n "$HERE/overlay/etc/init.d/tsx-setup-helper" && ok "busybox sh -n init.d/tsx-setup-helper" || bad "busybox sh -n init.d/tsx-setup-helper"
 busybox sh -n "$SBIN/tsx-panelctl" && ok "busybox sh -n tsx-panelctl" || bad "busybox sh -n tsx-panelctl"
-python3 -m py_compile "$SETUPD" && ok "python3 -m py_compile tsx-setupd" || bad "py_compile tsx-setupd"
-find "$HERE" -name __pycache__ -exec rm -rf {} + 2>/dev/null
+# py_compile writes next to the source by default, and another test that
+# reads the overlay at the same time sees the stray file. Write to $T.
+python3 -c 'import py_compile, sys; py_compile.compile(sys.argv[1], cfile=sys.argv[2], doraise=True)' "$SETUPD" "$T/setupd.pyc" \
+	&& ok "python3 -m py_compile tsx-setupd" || bad "py_compile tsx-setupd"
 
 echo "== tsx-setupd runs as an unprivileged user, not root =="
 grep -q '^command_user="tsx-setup:tsx-setup"$' "$HERE/overlay/etc/init.d/tsx-setupd" \
@@ -71,9 +74,9 @@ grep -q 'adduser -D -H -s /sbin/nologin.*tsx-setup' "$HERE/mkrootfs.sh" \
 	&& ok "mkrootfs.sh creates the tsx-setup system user" \
 	|| bad "mkrootfs.sh does not create a tsx-setup user"
 for s in tsx-setup-helper tsx-setupd; do
-	grep -E '^for s in networking .* kiosk ' "$HERE/mkrootfs.sh" | grep -qw "$s" \
-		&& ok "mkrootfs.sh enables $s in the default runlevel" \
-		|| bad "mkrootfs.sh does not enable $s in the default runlevel (no setup page on the panel)"
+	sh "$HERE/profile.sh" has kiosk svc "$s" \
+		&& ok "the kiosk and ha profiles enable $s in the default runlevel" \
+		|| bad "the kiosk profile does not enable $s in the default runlevel (no setup page on the panel)"
 done
 grep -q 'checkpath -f -o tsx-setup:tsx-setup .*/var/log/tsx-setupd.log' "$HERE/overlay/etc/init.d/tsx-setupd" \
 	&& ok "init.d/tsx-setupd gives tsx-setup its own log file (supervise-daemon opens it as that user)" \
@@ -257,6 +260,7 @@ grep -q "listening on" "$T/helper.log" 2>/dev/null || { echo "FAIL: tsx-setup-he
 
 TSX_CONFIG_BIN="$T/bin/tsx-config" TSX_RUN_DIR="$RUNDIR" TSX_ZONEINFO_DIR="$T/zoneinfo" \
 TSX_SETUP_CONF="$T/setup.conf" TSX_SETUP_NO_ZEROCONF=1 TSX_KIOSK_CONF="$T/kiosk.conf" \
+TSX_SETUP_PLUGIN_DIR="$HERE/overlay/usr/local/share/tsx/setup.d" \
 	python3 "$SETUPD" > "$T/setupd.log" 2>&1 &
 SETUPD_PID=$!
 for _ in $(seq 1 50); do grep -q "listening on" "$T/setupd.log" 2>/dev/null && break; sleep 0.1; done
@@ -297,7 +301,7 @@ if [ -n "$LANIP" ]; then
 	[ "$(status_of "$out")" = 200 ] && ok "correct pairing code accepted" || bad "pair failed: $out"
 	TOKEN=$(cookie_of "$out")
 	[ -n "$TOKEN" ] && ok "pairing issued a session token" || bad "no session token issued"
-	out=$(call GET /setup/api/state --source "$LANIP" --cookie "$TOKEN"); body=$(body_of "$out")
+	out=$(call GET /setup/api/state --source "$LANIP" --cookie="$TOKEN"); body=$(body_of "$out")
 	[ "$(jget need_pairing <<<"$body")" = False ] && ok "paired LAN session no longer needs pairing" || bad "still need_pairing after pairing: $body"
 	[ "$(jget pairing_code <<<"$body")" = "" ] && ok "paired LAN session still never sees the code" || bad "paired LAN state leaked the code: $body"
 
@@ -438,6 +442,7 @@ fi
 # /proc/uptime, not wall-clock time -- docs/rootfs.md "Setup page")
 echo "== tsx-config setup (monotonic window, PATH has a deliberately broken date) =="
 BEFORE_UPTIME=$(awk '{print int($1)}' /proc/uptime)
+KR0=$(grep -c 'kiosk-restart' "$T/helper.log" 2>/dev/null || true)
 PATH="$T/bin:$PATH" TSX_CONF="$CONF" TSX_RUN="$RUNBASE" TSX_APPLY_ALLOW_NONROOT=1 \
 	busybox sh "$TSXCONFIG" setup >/dev/null 2>&1
 [ -s "$RUNDIR/setup-open" ] && ok "tsx-config setup wrote /run/tsx/setup-open" || bad "setup-open flag missing"
@@ -455,8 +460,12 @@ if [ -n "$LANIP" ]; then
 	out=$(call GET /setup --source "$LANIP")
 	[ "$(status_of "$out")" = 200 ] && ok "LAN reachable again during the reopened window" || bad "LAN still refused during the reopened window: $(status_of "$out")"
 fi
-KR0=$(grep -c 'kiosk-restart' "$T/helper.log" 2>/dev/null || true)
-sleep 7
+# The window is 6 s of whole seconds and the daemon polls once a second.
+# Wait for the expiry, not a fixed time, so a slow host does not fail here.
+for _ in $(seq 1 100); do
+	[ "$(grep -c 'kiosk-restart' "$T/helper.log" 2>/dev/null || true)" -gt "$KR0" ] && [ ! -e "$RUNDIR/setup-open" ] && break
+	sleep 0.2
+done
 KR1=$(grep -c 'kiosk-restart' "$T/helper.log" 2>/dev/null || true)
 [ "$KR1" -gt "$KR0" ] && ok "the expired window asks the helper to restart the kiosk (back to Home Assistant)" || bad "window expired but the kiosk was not restarted (setup page stays up): $KR0 -> $KR1"
 [ ! -e "$RUNDIR/setup-open" ] && ok "the expired window's flag is removed" || bad "setup-open left behind after expiry"
@@ -527,6 +536,71 @@ print(d.is_configured())' "$SETUPD" "$1" 2>/dev/null
 [ "$(isconf "" 'KIOSK_URL=""')" = False ] && ok "no URL anywhere: unconfigured" || bad "no URL anywhere should be unconfigured"
 [ "$(isconf "" 'KIOSK_URL="https://ha.example.org"')" = True ] && ok "URL only in /etc/kiosk.conf: configured (LAN setup closed)" || bad "a kiosk.conf URL left the panel unconfigured (LAN setup open while the kiosk shows HA)"
 [ "$(isconf "https://ha.example.org" '# KIOSK_URL="https://x.example.org"')" = True ] && ok "panel.conf URL: configured" || bad "panel.conf URL should be configured"
+
+# ---- 10. the fields per package: the base page, and the plugin of tsx-ha -------
+echo "== the setup page of the base has no Home Assistant, MQTT or voice field =="
+# Both instances share the one response channel of tsx-setup-helper, so only
+# one runs at a time. The first one stops here and starts again below.
+kill "$SETUPD_PID" 2>/dev/null; wait "$SETUPD_PID" 2>/dev/null; SETUPD_PID=
+PORT2=$(get_free_port)
+sed "s/TSX_SETUP_PORT=.*/TSX_SETUP_PORT=$PORT2/" "$T/setup.conf" > "$T/setup2.conf"
+mkdir -p "$T/noplugins"
+TSX_CONFIG_BIN="$T/bin/tsx-config" TSX_RUN_DIR="$RUNDIR" TSX_ZONEINFO_DIR="$T/zoneinfo" \
+TSX_SETUP_CONF="$T/setup2.conf" TSX_SETUP_NO_ZEROCONF=1 TSX_KIOSK_CONF="$T/kiosk.conf" TSX_SETUP_PLUGIN_DIR="$T/noplugins" \
+	python3 "$SETUPD" > "$T/setupd2.log" 2>&1 &
+SETUPD2_PID=$!
+for _ in $(seq 1 50); do grep -q "listening on" "$T/setupd2.log" 2>/dev/null && break; sleep 0.1; done
+PORT_HA=$PORT; PORT=$PORT2
+out=$(call GET /setup); page=$(body_of "$out")
+[ "$(status_of "$out")" = 200 ] && ok "base page: GET /setup 200" || bad "base page: $(status_of "$out")"
+for want in 'name="KIOSK_URL"' 'name="PANEL_NAME"' 'name="TZ_NAME"' 'name="ORIENTATION"' 'name="BLANK_TIMEOUT"' 'name="AUTO_BRIGHTNESS"' 'name="ALS_SCALE"' 'name="ROOT_PASSWORD"' 'name="SSH_AUTHORIZED_KEY"' 'name="KERNEL_FLAVOR"' '<h2>Network</h2>' '<h2>Display</h2>' '<summary>Updates</summary>'; do
+	case "$page" in *"$want"*) ok "base page has $want";; *) bad "base page lacks $want";; esac
+done
+for nope in HA_LOGIN_METHOD HA_TOKEN '"VOICE"' WAKE_WORD MQTT_ 'Home Assistant' homeassistant 'Voice assistant' 'discover' 'check-url' '@@' 'SLOT'; do
+	case "$page" in *"$nope"*) bad "base page has $nope";; *) ok "base page has no $nope";; esac
+done
+case "$page" in *'id="submit-btn" type="submit">Save</button>'*) ok "base page: the button says Save";; *) bad "base page: button text";; esac
+out=$(call GET /setup/api/state); body=$(body_of "$out")
+[ "$(jget fields.KIOSK_URL <<<"$body")" != "" ] && ok "base state: reports KIOSK_URL" || bad "base state lacks KIOSK_URL"
+TSX_CONF="$CONF" busybox sh "$TSXCONFIG" set MQTT_HOST 192.0.2.7 >/dev/null 2>&1; TSX_CONF="$CONF" busybox sh "$TSXCONFIG" set VOICE on >/dev/null 2>&1
+out=$(call GET /setup/api/state); body=$(body_of "$out")
+[ "$(jget fields.MQTT_HOST <<<"$body")" = "" ] && [ "$(jget fields.VOICE <<<"$body")" = "" ] && ok "base state: reports no MQTT or voice key" || bad "base state shows HA keys: $body"
+out=$(call GET /setup/api/discover); [ "$(status_of "$out")" = 404 ] && ok "base: no /setup/api/discover" || bad "base: discover exists: $(status_of "$out")"
+out=$(call POST /setup/api/check-url --data '{"url":"https://ha.example.org"}'); [ "$(status_of "$out")" = 404 ] && ok "base: no /setup/api/check-url" || bad "base: check-url exists: $(status_of "$out")"
+# a submit with no login method works, and the HA keys that a client sends are ignored
+HAKEYS_BEFORE=$(grep -E '^(HA_LOGIN_METHOD|HA_TOKEN|MQTT_HOST|MQTT_PORT|VOICE|WAKE_WORD)=' "$CONF")
+out=$(call POST /setup/api/submit --data '{"KIOSK_URL":"https://example.org/page","PANEL_NAME":"BASE-PANEL","HA_LOGIN_METHOD":"trusted","MQTT_HOST":"198.51.100.9","VOICE":"off"}')
+[ "$(status_of "$out")" = 200 ] && ok "base: a submit without a login method is saved" || bad "base submit: $out"
+grep -q '^KIOSK_URL="https://example.org/page"$' "$CONF" && grep -q '^PANEL_NAME="BASE-PANEL"$' "$CONF" && ok "base: the page URL and the panel name are saved" || bad "base submit did not save: $(grep -E '^(KIOSK_URL|PANEL_NAME)=' "$CONF" | tr '\n' ' ')"
+HAKEYS_AFTER=$(grep -E '^(HA_LOGIN_METHOD|HA_TOKEN|MQTT_HOST|MQTT_PORT|VOICE|WAKE_WORD)=' "$CONF")
+[ "$HAKEYS_BEFORE" = "$HAKEYS_AFTER" ] && grep -q '^MQTT_HOST="192.0.2.7"$' "$CONF" && ok "base: the keys of the Home Assistant layer are not written or changed" || bad "base submit touched HA keys: $HAKEYS_AFTER"
+out=$(call POST /setup/api/submit --data '{"KIOSK_URL":""}')
+[ "$(jget errors.KIOSK_URL <<<"$(body_of "$out")")" = "the page URL is required" ] && ok "base: the URL message does not name Home Assistant" || bad "base URL message: $(body_of "$out")"
+kill "$SETUPD2_PID" 2>/dev/null; wait "$SETUPD2_PID" 2>/dev/null
+PORT=$PORT_HA
+TSX_CONFIG_BIN="$T/bin/tsx-config" TSX_RUN_DIR="$RUNDIR" TSX_ZONEINFO_DIR="$T/zoneinfo" \
+TSX_SETUP_CONF="$T/setup.conf" TSX_SETUP_NO_ZEROCONF=1 TSX_KIOSK_CONF="$T/kiosk.conf" \
+TSX_SETUP_PLUGIN_DIR="$HERE/overlay/usr/local/share/tsx/setup.d" \
+	python3 "$SETUPD" > "$T/setupd3.log" 2>&1 &
+SETUPD_PID=$!
+for _ in $(seq 1 50); do grep -q "listening on" "$T/setupd3.log" 2>/dev/null && break; sleep 0.1; done
+
+echo "== the page with the plugin of tsx-ha has the Home Assistant fields too =="
+out=$(call GET /setup); page=$(body_of "$out")
+for want in 'name="HA_LOGIN_METHOD"' 'name="HA_TOKEN"' 'name="VOICE"' 'name="WAKE_WORD"' 'name="MQTT_HOST"' 'name="MQTT_PASSWORD"' 'id="discover-btn"' 'Save and open Home Assistant' 'name="PANEL_NAME"' 'name="KERNEL_FLAVOR"'; do
+	case "$page" in *"$want"*) ok "ha page has $want";; *) bad "ha page lacks $want";; esac
+done
+case "$page" in *'@@'*|*'SLOT'*) bad "ha page has a slot left";; *) ok "ha page: every slot is filled";; esac
+out=$(call POST /setup/api/submit --data '{"KIOSK_URL":"https://ha.example.org/x"}')
+[ "$(jget errors.HA_LOGIN_METHOD <<<"$(body_of "$out")")" = "choose a login method" ] && ok "ha: a submit needs a login method" || bad "ha: login method not required"
+out=$(call GET /setup/api/discover); [ "$(status_of "$out")" = 200 ] && ok "ha: /setup/api/discover exists" || bad "ha: no discover"
+out=$(call POST /setup/api/check-url --data '{"url":"ftp://x"}'); [ "$(jget kind <<<"$(body_of "$out")")" = invalid ] && ok "ha: /setup/api/check-url exists" || bad "ha: no check-url: $out"
+# a broken plugin is skipped
+mkdir -p "$T/badplug"; printf 'raise RuntimeError("boom")\n' > "$T/badplug/bad.py"
+n=$(TSX_SETUP_PLUGIN_DIR="$T/badplug" TSX_SETUP_CONF="$T/setup.conf" TSX_RUN_DIR="$T/ic-run" python3 -c 'import sys, importlib.machinery as m
+d = m.SourceFileLoader("setupd", sys.argv[1]).load_module()
+print(len(d.PLUGINS), "boom" in d.PAGE)' "$SETUPD" 2>"$T/badplug.err")
+[ "$n" = "0 False" ] && grep -q 'plugin bad.py skipped' "$T/badplug.err" && ok "a plugin that fails to load is skipped, the page still builds" || bad "broken plugin: $n $(cat "$T/badplug.err")"
 
 echo "== $N ok, $F failed =="
 [ "$F" = 0 ] && echo PASS test-setup || echo FAIL test-setup

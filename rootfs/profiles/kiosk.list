@@ -1,0 +1,62 @@
+# Profile "kiosk": console plus the Chromium kiosk on any URL (KIOSK_URL),
+# screen blanking, the on-screen keyboard and the setup page. The kiosk owns
+# the screen, so this profile has no getty on tty1. Format: see console.list.
+
+overlay etc/chromium/policies/managed/tsx-kiosk.json
+overlay etc/init.d/kiosk
+overlay etc/init.d/tsx-setupd
+overlay etc/init.d/tsx-setup-helper
+overlay etc/inittab
+overlay etc/logrotate.d/tsx-kiosk
+overlay etc/motd
+overlay etc/tsx/setup.conf
+overlay usr/local/bin/kiosk-session
+overlay usr/local/bin/tsx-kiosk-reveal
+overlay usr/local/bin/tsx-kiosk-url
+overlay usr/local/bin/tsx-orientation
+overlay usr/local/bin/tsx-osk
+overlay usr/local/sbin/tsx-chromium-es2
+overlay usr/local/sbin/tsx-setupd
+overlay usr/local/sbin/tsx-setup-helper
+
+built /usr/bin/cage
+built /usr/local/bin/tsx-overlay
+built /usr/local/share/tsx/chromium-es2/patch-chromium.py
+built /usr/share/tsx-cage.version
+tree /usr/share/tsx/cursors
+step compile-kiosk
+step cursors
+step chromium-es2
+
+pkg seatd
+pkg seatd-openrc
+pkg wlroots0.20
+pkg sway
+pkg swaybg
+pkg squeekboard
+pkg wvkbd-mobintl
+pkg cairo
+pkg wayland-libs-client
+pkg chromium
+pkg font-dejavu
+pkg libinput
+pkg mesa-dri-gallium
+pkg mesa-egl
+pkg mesa-gles
+pkg mesa-gbm
+pkg kmscube
+pkg libdrm-tests
+pkg mesa-utils
+pkg wlr-randr
+pkg grim
+pkg wayland-utils
+pkg tsx-xx60-chromium
+pkg tsx-xx60-wlroots0.20
+
+svc default seatd
+svc default tsx-setup-helper
+svc default tsx-setupd
+svc default kiosk
+
+user kiosk
+user tsx-setup

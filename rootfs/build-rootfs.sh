@@ -29,6 +29,15 @@
 # works without modules. The modules are extras (USB, sound, ...).
 # Downloads: only Alpine packages from dl-cdn.alpinelinux.org (branch $ALPINE)
 # and the alpine:3.24 docker image. out/rootfs.manifest records the versions.
+# PROFILE (default ha) is what the image holds: console (text login and SSH),
+# kiosk (console plus the browser kiosk) or ha (kiosk plus the Home Assistant
+# layer). rootfs/profiles/*.list name the files, packages and services of each
+# profile (docs/rootfs.md "Profiles").
+# TSX_DEV_ROOT_HASH (optional) is a crypt(3) hash for the root password of the
+# image, for our own test builds only. Without it, the image has no root
+# password and the first login on the panel console sets one (docs/rootfs.md
+# "Root login"). A public image never uses it. Example:
+#   TSX_DEV_ROOT_HASH=$(openssl passwd -6 mypassword) ./build-rootfs.sh rootfs
 # CHROMIUM_ES2_PATCH (default 1) patches the Chromium ES3 to ES2 fallback gate
 # (src/chromium-es2/). 0 gives the stock binary. TSX_APK_LOCAL disables it.
 # This project's apk repository is tsx-aports (docs/updates.md).
@@ -108,7 +117,7 @@ rootfs() {
 		mnt+=(-v "$(cd "$TSX_APK_LOCAL" && pwd):/aports:ro"); apk=(-e TSX_APK_LOCAL=/aports)
 	fi
 	docker run --rm --platform linux/arm/v7 -v "$HERE:/w" "${mnt[@]}" "${apk[@]}" \
-		-e ALPINE="$ALPINE" -e KVER="$KVER" -e OUT=/w/out -e UIDGID="$UIDGID" -e IMG_MB="$IMG_MB" -e CHROMIUM_ES2_PATCH="${CHROMIUM_ES2_PATCH:-1}" \
+		-e ALPINE="$ALPINE" -e PROFILE="${PROFILE:-ha}" -e TSX_DEV_ROOT_HASH="${TSX_DEV_ROOT_HASH:-}" -e KVER="$KVER" -e OUT=/w/out -e UIDGID="$UIDGID" -e IMG_MB="$IMG_MB" -e CHROMIUM_ES2_PATCH="${CHROMIUM_ES2_PATCH:-1}" \
 		-e TSX_APK_URL="${TSX_APK_URL:-https://tsx-aports.unexceptional.net}" \
 		-e TFA_VENDOR_FETCH="${TFA_VENDOR_FETCH:-yes}" \
 		"$IMAGE" /w/mkrootfs.sh

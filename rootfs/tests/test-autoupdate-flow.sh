@@ -54,13 +54,14 @@ printf '{"x":{"package":"chromium-2.0.0-r0 (Alpine v3.24 community, armv7)"}}\n'
 printf 'ENABLED=1\nWINDOW=03:00-05:00\nHOLD_DAYS=7\nREBOOT=auto\n' > "$T/autoupdate.conf"
 echo blank > "$T/idled"
 echo 'KIOSK_URL="https://ha.example.org"' > "$T/kiosk.conf"
+mkdir -p "$T/initd"; : > "$T/initd/kiosk"   # the kiosk service exists (the kiosk and ha profiles)
 
 run() {  # run SUBCOMMAND  (env NOWDATE/NOWHHMM/APK_UPGRADE_RC/etc already exported)
 	PATH="$T/bin:$PATH" \
 	TSX_AUTOUPDATE_CONF="$T/autoupdate.conf" TSX_RUN_DIR="$T/run" TSX_STATE_DIR="$T/state" \
 	TSX_LOG="$T/tsx-autoupdate.log" TSX_IDLED_STATE="$T/idled" TSX_KIOSK_CONF="$T/kiosk.conf" \
 	TSX_WORLD="$T/world" TSX_SIGS="$T/sigs.json" TSX_PATCH_TOOL="$T/nopatch.py" \
-	TSX_ES2_MARKER="$T/es2marker" TSX_CHROMIUM_BIN="$T/chromium-bin" TSX_BUILD_ID_FILE="$T/buildid" \
+	TSX_ES2_MARKER="$T/es2marker" TSX_CHROMIUM_BIN="$T/chromium-bin" TSX_BUILD_ID_FILE="$T/buildid" TSX_INITD="$T/initd" \
 	sh "$BIN" "$@"
 }
 jf() { jq -r "$2" "$1"; }   # jf FILE .jqfilter
@@ -155,6 +156,15 @@ chk "$(jf "$T/run/update.json" .health)" OK "9: healthy after reboot"
 NOWDATE=2026-01-09 NOWHHMM=04:00 CURL_CODE=000 RC_SERVICE_RC=1 run healthcheck >/dev/null
 h=$(jf "$T/run/update.json" .health)
 case $h in FAILED*) : ;; *) echo "FAIL: 9: expected a FAILED health after a bad reboot, got '$h'"; fail=1;; esac
+
+# ---- 9a: the console profile has no kiosk service: no check of it, no page
+rm -f "$T/initd/kiosk"; reset_calls
+: > "$T/state/reboot-marker"
+NOWDATE=2026-01-09 NOWHHMM=04:00 CURL_CODE=000 RC_SERVICE_RC=1 run healthcheck >/dev/null
+chk "$(jf "$T/run/update.json" .health)" OK "9a: no kiosk service: healthy without it"
+grep -q '^CALL rc-service kiosk status' "$T/calls" && { echo "FAIL: 9a: asked for a kiosk service that the profile lacks"; fail=1; }
+grep -q '^CALL curl' "$T/calls" && { echo "FAIL: 9a: reached for a page without a kiosk"; fail=1; }
+: > "$T/initd/kiosk"; reset_calls
 
 # ---- 9b: panel.conf override (/run/tsx/kiosk.conf) wins over KIOSK_CONF for
 # the health-check URL, same precedence as kiosk-session
