@@ -5,10 +5,12 @@ library Home Assistant's ESPHome integration uses) and exercises the panel
 entity list of the panel: list entities, toggle the LED bar
 light, set the kiosk URL text, receive a key-press event.
 
-  esphome-check.py PORT [--key BASE64] [--name N] [--friendly F] [--voice]
+  esphome-check.py PORT [--key BASE64] [--name N] [--friendly F] [--voice] [--bare]
 
 --key connects with ESPHome's noise encryption (HA_API_KEY), --voice also
 requires the voice satellite's own entities (esphome-lva-harness.py).
+--bare: a panel without front keys, an LED bar or an eMMC that reports its
+wear: those entities must be absent, and their checks are skipped.
 """
 import argparse
 import asyncio
@@ -31,16 +33,23 @@ async def main(args) -> int:
         entities, _services = await client.list_entities_services()
         by_id = {e.object_id: e for e in entities}
         want = {
-            "ledbar", "keypad", "screen", "backlight", "kiosk_url",
+            "screen", "backlight", "kiosk_url",
             "reload_page", "reboot", "cpu_temp", "uptime", "ip_address",
-            "touched_recently", "key_power", "key_home", "update", "blank_timeout",
+            "touched_recently", "update", "blank_timeout",
             "verbose_boot",
         }
+        optional = {"ledbar", "keypad", "key_power", "key_home", "emmc_life_a", "emmc_life_b", "emmc_eol"}
+        if not args.bare:
+            want |= optional
         if args.voice:
             want |= {"mute", "thinking_sound", "linux_voice_assistant_media_player"}
         missing = want - by_id.keys()
         assert not missing, f"missing entities: {missing}"
-        print(f"OK: {len(entities)} entities, all expected object_ids present")
+        if args.bare:
+            extra = optional & by_id.keys()
+            assert not extra, f"entities for hardware this panel does not have: {extra}"
+        print(f"OK: {len(entities)} entities, all expected object_ids present"
+              + (" (no LED bar, key LEDs, key events or eMMC health)" if args.bare else ""))
 
         states = {}
         got_state = asyncio.Event()
@@ -52,13 +61,22 @@ async def main(args) -> int:
         client.subscribe_states(on_state)
         await asyncio.sleep(0.5)
 
-        client.light_command(
-            key=by_id["ledbar"].key, state=True, rgb=(1.0, 0.0, 0.0), brightness=1.0, color_mode=35,
-        )
-        await asyncio.sleep(0.5)
-        light_state = states.get(by_id["ledbar"].key)
-        assert light_state is not None and light_state.state and light_state.red == 1.0, light_state
-        print("OK: LED bar light toggled on (red)")
+        if not args.bare:
+            client.light_command(
+                key=by_id["ledbar"].key, state=True, rgb=(1.0, 0.0, 0.0), brightness=1.0, color_mode=35,
+            )
+            await asyncio.sleep(0.5)
+            light_state = states.get(by_id["ledbar"].key)
+            assert light_state is not None and light_state.state and light_state.red == 1.0, light_state
+            print("OK: LED bar light toggled on (red)")
+
+            def state(oid):
+                return states.get(by_id[oid].key)
+
+            assert state("emmc_life_a").state == 10.0 and state("emmc_life_b").state == 20.0, (state("emmc_life_a"), state("emmc_life_b"))
+            assert state("emmc_eol").state == "normal", state("emmc_eol")
+            assert all(by_id[o].entity_category == 2 for o in ("emmc_life_a", "emmc_life_b", "emmc_eol"))
+            print("OK: eMMC life used 10 / 20 %, end of life normal (diagnostic entities)")
 
         text_state = states.get(by_id["kiosk_url"].key)
         assert text_state is not None and text_state.state == "https://ha.example.org/configured", text_state
@@ -124,14 +142,15 @@ async def main(args) -> int:
         # test-esphome.sh rewrites the fixture's buttons.state "last" line
         # after this point, to simulate a front-key press. Give the daemon's
         # 1 s poll loop a couple of ticks to notice it.
-        key_state = None
-        for _ in range(40):
-            await asyncio.sleep(0.25)
-            key_state = states.get(by_id["key_home"].key)
-            if key_state is not None:
-                break
-        assert key_state is not None and key_state.event_type == "long", key_state
-        print("OK: key_home press received as an event (long)")
+        if not args.bare:
+            key_state = None
+            for _ in range(40):
+                await asyncio.sleep(0.25)
+                key_state = states.get(by_id["key_home"].key)
+                if key_state is not None:
+                    break
+            assert key_state is not None and key_state.event_type == "long", key_state
+            print("OK: key_home press received as an event (long)")
     finally:
         await client.disconnect()
     return 0
@@ -144,4 +163,5 @@ if __name__ == "__main__":
     parser.add_argument("--name", default="test-panel")
     parser.add_argument("--friendly", default="Test-Panel")
     parser.add_argument("--voice", action="store_true")
+    parser.add_argument("--bare", action="store_true")
     sys.exit(asyncio.run(main(parser.parse_args())))

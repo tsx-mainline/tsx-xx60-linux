@@ -190,6 +190,11 @@ class PanelBackend:
             _LOGGER.warning("tsx-panelctl: unknown command %r", cmd)
 
     # ---- LED bar -------------------------------------------------------------
+    def ledbar_present(self) -> bool:
+        """The USB LED bar tool is installed."""
+        import shutil  # noqa: WPS433
+        return shutil.which(self.ledbar_bin) is not None
+
     def get_ledbar(self):
         """(on, brightness 0..255, r,g,b 0..255), from ledbar.state "want R G B" 0..100."""
         raw = _field(self.run_dir / "ledbar.state", "want") or "0 0 0"
@@ -217,6 +222,10 @@ class PanelBackend:
         self._ctl("ledbar", "set", str(rr), str(gg), str(bb))
 
     # ---- key LEDs --------------------------------------------------------------
+    def keypad_present(self) -> bool:
+        """Front keys with LEDs (buttons.conf)."""
+        return self.buttons_conf.is_file()
+
     def get_keypad(self):
         raw = _field(self.run_dir / "buttons.state", "led") or "0 unknown"
         try:
@@ -272,7 +281,8 @@ class PanelBackend:
 
     # ---- ambient light / auto-brightness -------------------------------------
     def als_present(self) -> bool:
-        return self.als_conf.is_file()
+        """The sensor (als.conf) or its state file (als.state)."""
+        return self.als_conf.is_file() or (self.run_dir / "als.state").is_file()
 
     def get_lux(self) -> float:
         raw = _field(self.run_dir / "als.state", "report") or "0"
@@ -310,6 +320,27 @@ class PanelBackend:
     def set_verbose_boot(self, on: bool) -> None:
         self._verbose_boot_pending = (on, time.monotonic())
         self._ctl("verbose-boot", "on" if on else "off")
+
+    # ---- eMMC health (tsx-emmc-state, every hour) ----------------------------------
+    def emmc_present(self) -> bool:
+        return (self.run_dir / "emmc.state").is_file()
+
+    def _emmc_code(self, key: str) -> Optional[int]:
+        raw = _field(self.run_dir / "emmc.state", key)
+        try:
+            return int(raw.split()[0], 16) if raw else None
+        except (ValueError, IndexError):
+            return None
+
+    def get_emmc_life(self, which: str) -> Optional[float]:
+        """Percent of the life used, as the upper bound of the JEDEC band:
+        0x01 = up to 10 %, ... 0x0a = up to 100 %, 0x0b = exceeded (110).
+        None when the eMMC does not report it (0x00)."""
+        code = self._emmc_code("life_" + which)
+        return None if not code or code > 0x0B else float(code * 10)
+
+    def get_emmc_eol(self) -> str:
+        return {1: "normal", 2: "warning", 3: "urgent"}.get(self._emmc_code("eol") or 0, "unknown")
 
     # ---- volume ------------------------------------------------------------
     def sound_card_present(self) -> bool:

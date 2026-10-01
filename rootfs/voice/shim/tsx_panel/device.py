@@ -22,6 +22,7 @@ from linux_voice_assistant.entity import LEDLightEntity
 
 from .backend import PanelBackend
 from .entities import (
+    ENTITY_CATEGORY_DIAGNOSTIC,
     BinarySensorEntity,
     ButtonEntity,
     KeyEventEntity,
@@ -55,8 +56,8 @@ class KeyCounter:
 class PanelDevice:
     backend: PanelBackend
     entities: List
-    ledbar: LEDLightEntity
-    keypad: LEDLightEntity
+    ledbar: Optional[LEDLightEntity]
+    keypad: Optional[LEDLightEntity]
     screen: SwitchEntity
     backlight: NumberEntity
     blank_timeout: NumberEntity
@@ -74,6 +75,9 @@ class PanelDevice:
     touched_recently: BinarySensorEntity
     update: UpdateEntity
     keys: List[KeyEventEntity]
+    emmc_life_a: Optional[SensorEntity] = None
+    emmc_life_b: Optional[SensorEntity] = None
+    emmc_eol: Optional[TextSensorEntity] = None
     _last_ledbar: Optional[tuple] = field(default=None, repr=False)
     _last_keypad: Optional[tuple] = field(default=None, repr=False)
     _pulse_since: float = field(default=0.0, repr=False)
@@ -90,38 +94,43 @@ def build_entities(server, backend: PanelBackend, key_base: int = 0) -> PanelDev
     entities: List = []
 
     # ---- LED bar (RGB light, + a cheap software "Pulse" effect) ------------
-    on, bri, r, g, b = backend.get_ledbar()
-    ledbar = LEDLightEntity(
-        server, next_key(), "LED bar", "ledbar",
-        effects=LEDBAR_EFFECTS, supports_rgb=True, supports_brightness=True,
-        icon="mdi:led-strip-variant",
-    )
-    ledbar.is_on, ledbar.brightness = on, bri / 255.0
-    if r or g or b:
-        ledbar.red, ledbar.green, ledbar.blue = r / 255.0, g / 255.0, b / 255.0
-
-    def ledbar_changed(_ledbar=ledbar):
-        backend.set_ledbar(
-            _ledbar.is_on, round(_ledbar.brightness * 255),
-            round(_ledbar.red * 255), round(_ledbar.green * 255), round(_ledbar.blue * 255),
+    # only where the panel has one (backend.ledbar_present)
+    ledbar = None
+    if backend.ledbar_present():
+        on, bri, r, g, b = backend.get_ledbar()
+        ledbar = LEDLightEntity(
+            server, next_key(), "LED bar", "ledbar",
+            effects=LEDBAR_EFFECTS, supports_rgb=True, supports_brightness=True,
+            icon="mdi:led-strip-variant",
         )
+        ledbar.is_on, ledbar.brightness = on, bri / 255.0
+        if r or g or b:
+            ledbar.red, ledbar.green, ledbar.blue = r / 255.0, g / 255.0, b / 255.0
 
-    ledbar.update_on_changed(ledbar_changed)
-    entities.append(ledbar)
+        def ledbar_changed(_ledbar=ledbar):
+            backend.set_ledbar(
+                _ledbar.is_on, round(_ledbar.brightness * 255),
+                round(_ledbar.red * 255), round(_ledbar.green * 255), round(_ledbar.blue * 255),
+            )
 
-    # ---- key LEDs (brightness-only light) ------------------------------------
-    kp_on, kp_bri = backend.get_keypad()
-    keypad = LEDLightEntity(
-        server, next_key(), "Key LEDs", "keypad",
-        supports_rgb=False, supports_brightness=True, icon="mdi:gesture-tap-button",
-    )
-    keypad.is_on, keypad.brightness = kp_on, kp_bri / 255.0
+        ledbar.update_on_changed(ledbar_changed)
+        entities.append(ledbar)
 
-    def keypad_changed(_keypad=keypad):
-        backend.set_keypad(_keypad.is_on, round(_keypad.brightness * 255))
+    # ---- key LEDs (brightness-only light; only with front keys) --------------
+    keypad = None
+    if backend.keypad_present():
+        kp_on, kp_bri = backend.get_keypad()
+        keypad = LEDLightEntity(
+            server, next_key(), "Key LEDs", "keypad",
+            supports_rgb=False, supports_brightness=True, icon="mdi:gesture-tap-button",
+        )
+        keypad.is_on, keypad.brightness = kp_on, kp_bri / 255.0
 
-    keypad.update_on_changed(keypad_changed)
-    entities.append(keypad)
+        def keypad_changed(_keypad=keypad):
+            backend.set_keypad(_keypad.is_on, round(_keypad.brightness * 255))
+
+        keypad.update_on_changed(keypad_changed)
+        entities.append(keypad)
 
     # ---- screen + backlight --------------------------------------------------
     screen = SwitchEntity(
@@ -231,6 +240,25 @@ def build_entities(server, backend: PanelBackend, key_base: int = 0) -> PanelDev
     )
     entities.append(update)
 
+    # ---- eMMC health: only where the eMMC reports it (tsx-emmc-state writes the file; docs/ha.md "Sensors")
+    emmc_life_a = emmc_life_b = emmc_eol = None
+    if backend.emmc_present():
+        emmc_life_a = SensorEntity(
+            server, next_key(), "eMMC life used A", "emmc_life_a",
+            get_state=lambda: backend.get_emmc_life("a"), unit="%", icon="mdi:harddisk",
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        )
+        emmc_life_b = SensorEntity(
+            server, next_key(), "eMMC life used B", "emmc_life_b",
+            get_state=lambda: backend.get_emmc_life("b"), unit="%", icon="mdi:harddisk",
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        )
+        emmc_eol = TextSensorEntity(
+            server, next_key(), "eMMC end of life", "emmc_eol",
+            get_state=backend.get_emmc_eol, icon="mdi:harddisk-remove", entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        )
+        entities += [emmc_life_a, emmc_life_b, emmc_eol]
+
     # ---- front-key events (one HA `event` entity per key, like tsx-mqtt) -------
     keys = []
     for name in backend.key_names():
@@ -244,6 +272,7 @@ def build_entities(server, backend: PanelBackend, key_base: int = 0) -> PanelDev
         verbose_boot=verbose_boot, kiosk_url=kiosk_url, reload_button=reload_button, reboot_button=reboot_button,
         cpu_temp=cpu_temp, uptime=uptime, ip_address=ip_address, touched_recently=touched_recently,
         update=update, keys=keys, orientation=orientation, _pulse_since=time.time(),
+        emmc_life_a=emmc_life_a, emmc_life_b=emmc_life_b, emmc_eol=emmc_eol,
     )
 
 
@@ -263,13 +292,13 @@ def poll(device: PanelDevice, broadcast: Callable[[list], None]) -> None:
     # brightness the user set. No new hardware/firmware support needed),
     # else read back the hardware in case something else changed it (a
     # front-key action, the boot color, tsx-idled's blank dimming).
-    if device.ledbar.effect == "Pulse" and device.ledbar.is_on:
+    if device.ledbar is not None and device.ledbar.effect == "Pulse" and device.ledbar.is_on:
         phase = (time.time() % PULSE_PERIOD) / PULSE_PERIOD
         level = 0.2 + 0.8 * abs(1 - 2 * phase)  # 20%..100%..20% triangle wave
         peak_bri = device._last_ledbar[1] if device._last_ledbar else device.ledbar.brightness
         backend.set_ledbar(True, round(peak_bri * 255 * level),
                             round(device.ledbar.red * 255), round(device.ledbar.green * 255), round(device.ledbar.blue * 255))
-    else:
+    elif device.ledbar is not None:
         on, bri, r, g, b = backend.get_ledbar()
         cur = (on, round(bri / 255.0, 3), round(r / 255.0, 3), round(g / 255.0, 3), round(b / 255.0, 3))
         if cur != device._last_ledbar:
@@ -279,16 +308,17 @@ def poll(device: PanelDevice, broadcast: Callable[[list], None]) -> None:
                 device.ledbar.red, device.ledbar.green, device.ledbar.blue = r / 255.0, g / 255.0, b / 255.0
             msgs.append(device.ledbar._state_response())  # pylint: disable=protected-access
 
-    kp_on, kp_bri = backend.get_keypad()
-    kp_cur = (kp_on, round(kp_bri / 255.0, 3))
-    if kp_cur != device._last_keypad:
-        device._last_keypad = kp_cur
-        device.keypad.is_on, device.keypad.brightness = kp_on, kp_bri / 255.0
-        msgs.append(device.keypad._state_response())  # pylint: disable=protected-access
+    if device.keypad is not None:
+        kp_on, kp_bri = backend.get_keypad()
+        kp_cur = (kp_on, round(kp_bri / 255.0, 3))
+        if kp_cur != device._last_keypad:
+            device._last_keypad = kp_cur
+            device.keypad.is_on, device.keypad.brightness = kp_on, kp_bri / 255.0
+            msgs.append(device.keypad._state_response())  # pylint: disable=protected-access
 
     for entity in (device.screen, device.backlight, device.blank_timeout, device.als_auto, device.illuminance,
                    device.volume, device.verbose_boot, device.cpu_temp, device.uptime, device.ip_address,
-                   device.touched_recently, device.update):
+                   device.touched_recently, device.update, device.emmc_life_a, device.emmc_life_b, device.emmc_eol):
         if entity is None:
             continue
         before = getattr(entity, "_state", None)

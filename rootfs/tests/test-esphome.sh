@@ -75,6 +75,7 @@ cat > "$F/etc/tsx/buttons.conf" <<'EOF'
 button power  KEY_F13 led=1
 button home   KEY_F14 led=2
 EOF
+printf 'life_a 0x01\nlife_b 0x02\neol 0x01\n' > "$F/run/tsx/emmc.state"
 echo 40000 > "$F/sys/thermal/temp"
 for b in tsx-ledbar tsx-keypad tsx-blank tsx-config tsx-als tsx-autoupdate; do
 	cat > "$F/bin/$b" <<EOF
@@ -355,6 +356,18 @@ PYEOF
 st=0; wait "$GOVV_PID" || st=$?
 [ "$st" != 0 ] && grep -q 'no microphone on this panel (government=1 (TSW-760-NC)' "$T/voice-gov.log" \
 	&& echo "OK: the voice satellite does not start without a microphone ($st)" || { echo "FAIL: the voice satellite started without a microphone"; cat "$T/voice-gov.log"; rc=1; }
+
+# ---- a panel without front keys, LED bar and eMMC health: those entities are not announced
+BARE_PORT=$((API_PORT + 60))
+mkdir -p "$F/bare/run"
+cp -r "$F/run/tsx/." "$F/bare/run/"
+rm -f "$F/bare/run/emmc.state"
+date +%s > "$F/bare/run/last-input"
+start_server standalone "$T/server-bare.log" "$BARE_PORT" Bare-Panel TSX_HA_API_KEY= \
+	TSX_RUN_DIR="$F/bare/run" TSX_BUTTONS_CONF="$F/etc/tsx/buttons.conf.missing" TSX_LEDBAR=tsx-ledbar-not-installed
+wait_listening "$T/server-bare.log"
+echo "== tsx-esphome, no front keys, no LED bar, no eMMC health =="
+"$T/venv/bin/python3" "$HERE/esphome-check.py" "$BARE_PORT" --name bare-panel --friendly Bare-Panel --bare || rc=1
 
 # ---- a configured key that cannot be used: refuse to start, never plaintext
 echo "== unusable key file: fail closed =="

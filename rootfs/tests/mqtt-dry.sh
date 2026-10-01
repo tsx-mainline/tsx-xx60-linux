@@ -47,6 +47,42 @@ grep -q 'BLANK_TIMEOUT 99999' "$T/out" && { echo "FAIL: blank timeout above 8640
 [ "$(grep -c 'CALL tsx-ledbar' "$T/out")" = 3 ] || { echo "FAIL: ON after brightness must not send again"; fail=1; }
 [ "$(cat "$T/run/brightness")" = 23 ] || { echo "FAIL: backlight not clamped to BACKLIGHT_MAX"; fail=1; }
 [ "$(cat "$T/bl/x/brightness")" = 23 ] || { echo "FAIL: backlight sysfs not written"; fail=1; }
+# a panel without a LED bar tool, front keys and eMMC wear: those entities are
+# not announced, and an older discovery topic of them is cleared
+mkdir -p "$T/bin-bare"; for c in tsx-blank tsx-autoupdate tsx-config; do cp "$T/bin/$c" "$T/bin-bare/"; done
+PATH=$T/bin-bare:/usr/bin:/bin TSX_MQTT_DRY=1 TSX_MQTT_CONF=$T/mqtt.conf TSX_RUN_DIR=$T/run TSX_IDLED_STATE=$T/idled \
+	TSX_BUTTONS_CONF=$T/none TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_BACKLIGHT_DIR=$T/bl \
+	sh "$O/usr/local/sbin/tsx-mqtt" < /dev/null > "$T/outbare" 2>&1
+grep -qx 'PUB (retained) homeassistant/light/tsx-kiosk/ledbar/config ' "$T/outbare" || { echo "FAIL: bare: the LED bar entity is not cleared"; fail=1; }
+grep -qx 'PUB (retained) homeassistant/light/tsx-kiosk/keypad/config ' "$T/outbare" || { echo "FAIL: bare: the key LED entity is not cleared"; fail=1; }
+grep -q 'homeassistant/event/' "$T/outbare" && { echo "FAIL: bare: key events announced without keys"; fail=1; }
+grep -qE 'emmc|illuminance' "$T/outbare" && { echo "FAIL: bare: entities announced for parts this panel does not have"; fail=1; }
+grep '/config {' "$T/outbare" | while read -r _ _ t j; do echo "$j" | jq -e . >/dev/null || { echo "FAIL: bad JSON $t"; exit 1; }; done || fail=1
+grep -qE 'emmc' "$T/out" && { echo "FAIL: eMMC entities announced without emmc.state"; fail=1; }
+
+# eMMC health from /run/tsx/emmc.state (tsx-emmc-state)
+T3=$T/hw; mkdir -p "$T3/run"
+printf 'life_a 0x01\nlife_b 0x0b\neol 0x02\n' > "$T3/run/emmc.state"
+printf 'raw 12.50\nreport 12.5\nauto on\n' > "$T3/run/als.state"
+PATH=$T/bin:$PATH TSX_MQTT_DRY=1 TSX_MQTT_CONF=$T/mqtt.conf TSX_RUN_DIR=$T3/run TSX_IDLED_STATE=$T/idled \
+	TSX_BUTTONS_CONF=$O/etc/tsx/buttons.conf TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_BACKLIGHT_DIR=$T/bl \
+	sh "$O/usr/local/sbin/tsx-mqtt" < /dev/null > "$T3/out" 2>&1
+chk3() { grep -qF -- "$1" "$T3/out" || { echo "FAIL: emmc: missing: $1"; fail=1; }; }
+grep '/config {' "$T3/out" | while read -r _ _ t j; do echo "$j" | jq -e . >/dev/null || { echo "FAIL: bad JSON $t"; exit 1; }; done || fail=1
+for t in sensor/tsx-kiosk/emmc_life_a sensor/tsx-kiosk/emmc_life_b sensor/tsx-kiosk/emmc_eol sensor/tsx-kiosk/illuminance switch/tsx-kiosk/als_auto; do
+	chk3 "PUB (retained) homeassistant/$t/config {"
+done
+chk3 'PUB (retained) tsx/tsx-kiosk/emmc/life_a 10'
+chk3 'PUB (retained) tsx/tsx-kiosk/emmc/life_b 110'
+chk3 'PUB (retained) tsx/tsx-kiosk/emmc/eol warning'
+chk3 'PUB (retained) tsx/tsx-kiosk/als/lux 12.5'
+printf 'life_a 0x00\nlife_b 0x03\neol 0x03\n' > "$T3/run/emmc.state"
+PATH=$T/bin:$PATH TSX_MQTT_DRY=1 TSX_MQTT_CONF=$T/mqtt.conf TSX_RUN_DIR=$T3/run TSX_IDLED_STATE=$T/idled \
+	TSX_BUTTONS_CONF=$O/etc/tsx/buttons.conf TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_BACKLIGHT_DIR=$T/bl \
+	sh "$O/usr/local/sbin/tsx-mqtt" < /dev/null > "$T3/out2" 2>&1
+grep -qF 'PUB (retained) tsx/tsx-kiosk/emmc/life_a none' "$T3/out2" && grep -qF 'PUB (retained) tsx/tsx-kiosk/emmc/life_b 30' "$T3/out2" \
+	&& grep -qF 'PUB (retained) tsx/tsx-kiosk/emmc/eol urgent' "$T3/out2" || { echo "FAIL: emmc: unreported life must be none, 0x03 must be 30 and urgent"; fail=1; }
+
 # unconfigured: exits 0 quietly
 out=$(TSX_MQTT_CONF=/nonexistent sh "$O/usr/local/sbin/tsx-mqtt"); rc=$?
 [ $rc = 0 ] && echo "$out" | grep -q 'BROKER not set' || { echo "FAIL: unconfigured run rc=$rc '$out'"; fail=1; }

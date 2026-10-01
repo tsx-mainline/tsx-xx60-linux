@@ -257,15 +257,21 @@ class ButtonEntity(ESPHomeEntity):
             )
 
 
+ENTITY_CATEGORY_DIAGNOSTIC = 2
+
+
 class SensorEntity(ESPHomeEntity):
-    """A generic read-only numeric sensor (lux, CPU temp, uptime)."""
+    """A generic read-only numeric sensor (lux, CPU temp, uptime). A
+    get_state that returns None means "no value" (the distance sensor with
+    no target): Home Assistant shows it as unknown."""
 
     def __init__(self, server, key, name, object_id, get_state, unit="",
-                 device_class="", accuracy_decimals=0, icon=""):
+                 device_class="", accuracy_decimals=0, icon="", entity_category=0):
         ESPHomeEntity.__init__(self, server)
         self.key, self.name, self.object_id = key, name, object_id
         self._get_state = get_state
         self.unit, self.device_class, self.accuracy_decimals, self.icon = unit, device_class, accuracy_decimals, icon
+        self.entity_category = entity_category
         self._state = 0.0
 
     def handle_message(self, msg: message.Message) -> Iterable[message.Message]:
@@ -274,15 +280,19 @@ class SensorEntity(ESPHomeEntity):
                 object_id=self.object_id, key=self.key, name=self.name,
                 unit_of_measurement=self.unit, device_class=self.device_class,
                 accuracy_decimals=self.accuracy_decimals, icon=self.icon, state_class=1,  # STATE_CLASS_MEASUREMENT
+                entity_category=self.entity_category,
             )
         elif isinstance(msg, SubscribeHomeAssistantStatesRequest):
             yield self._state_msg()
 
     def _state_msg(self):
         try:
-            self._state = float(self._get_state())
+            value = self._get_state()
+            self._state = None if value is None else float(value)
         except Exception:  # noqa: BLE001
             _LOGGER.debug("%s: read failed", self.name, exc_info=True)
+        if self._state is None:
+            return SensorStateResponse(key=self.key, missing_state=True)
         return SensorStateResponse(key=self.key, state=self._state)
 
     def poll(self):
@@ -292,16 +302,18 @@ class SensorEntity(ESPHomeEntity):
 class TextSensorEntity(ESPHomeEntity):
     """A generic read-only text sensor (IP address)."""
 
-    def __init__(self, server, key, name, object_id, get_state, icon=""):
+    def __init__(self, server, key, name, object_id, get_state, icon="", entity_category=0):
         ESPHomeEntity.__init__(self, server)
         self.key, self.name, self.object_id = key, name, object_id
         self._get_state, self.icon = get_state, icon
+        self.entity_category = entity_category
         self._state = ""
 
     def handle_message(self, msg: message.Message) -> Iterable[message.Message]:
         if isinstance(msg, ListEntitiesRequest):
             yield ListEntitiesTextSensorResponse(
                 object_id=self.object_id, key=self.key, name=self.name, icon=self.icon,
+                entity_category=self.entity_category,
             )
         elif isinstance(msg, SubscribeHomeAssistantStatesRequest):
             yield self._state_msg()

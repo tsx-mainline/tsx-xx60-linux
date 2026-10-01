@@ -2,8 +2,10 @@
 # tsx-mqtt: MQTT bridge between the xx60 kiosk and Home Assistant.
 #
 # It publishes HA MQTT discovery (retained) for one device with:
-#   light  "LED bar"      RGB (tsx-ledbar. HA 0..255 <-> bar 0..100 per channel)
-#   light  "Key LEDs"     brightness 0..255 (tsx-keypad led N|off)
+#   light  "LED bar"      RGB (tsx-ledbar. HA 0..255 <-> bar 0..100 per channel.
+#                         Only where tsx-ledbar is installed)
+#   light  "Key LEDs"     brightness 0..255 (tsx-keypad led N|off. Only with
+#                         /etc/tsx/buttons.conf)
 #   switch "Screen"       ON = lit, OFF = blanked (tsx-blank)
 #   number "Backlight"    1..BACKLIGHT_MAX of /etc/kiosk.conf (tsx-idled override)
 #   number "Blank timeout"  seconds without input before the screen goes dark,
@@ -12,8 +14,11 @@
 #                         /run/tsx/last-input)
 #   event  "Key NAME"     per front-panel key: short / long / hold
 #   device triggers       per key: button_short_press / button_long_press
-#   sensor "Illuminance"  lux of the MAX44009 (tsx-als. Only with /etc/tsx/als.conf)
+#   sensor "Illuminance"  lux of the MAX44009 (tsx-als. Only with /etc/tsx/als.conf
+#                         or /run/tsx/als.state)
 #   switch "Auto brightness"  tsx-als auto on|off
+#   sensor "eMMC life used A/B", "eMMC end of life"  (diagnostic. Only with
+#                         /run/tsx/emmc.state, which tsx-emmc-state writes)
 #   number "Volume"       0..100 % of the ALSA "Master" softvol (only when the
 #                         TSW1060 sound card exists. /etc/asound.conf)
 #   update "Update"       status of tsx-autoupdate (installed and pending
@@ -98,6 +103,13 @@ pub() {  # pub [-r] TOPIC PAYLOAD
 BL_MAX=23
 [ -r "$KCONF" ] && BL_MAX=$(sed -n 's/^BACKLIGHT_MAX=\([0-9][0-9]*\).*/\1/p' "$KCONF" | tail -1)
 [ -n "$BL_MAX" ] || BL_MAX=23
+# hardware only some panels have: an entity is announced only when it is
+# there, and its discovery topic is cleared otherwise (so Home Assistant
+# drops an entity an older build announced)
+has_ledbar() { command -v "${TSX_LEDBAR:-tsx-ledbar}" >/dev/null 2>&1; }
+has_keypad() { [ -r "$BCONF" ]; }
+has_als() { [ -r "$ACONF" ] || [ -r "$R/als.state" ]; }
+has_emmc() { [ -r "$R/emmc.state" ]; }
 
 keys() {  # names of the "button NAME KEY" lines of buttons.conf
 	[ -r "$BCONF" ] && sed -n 's/^[[:space:]]*button[[:space:]]\{1,\}\([A-Za-z0-9_-]\{1,\}\)[[:space:]].*/\1/p' "$BCONF"
@@ -112,15 +124,24 @@ DEV="\"dev\":{\"ids\":[\"tsx_$NODE\"],\"name\":\"$DNAME\",\"mf\":\"Crestron\",\"
 AV="\"avty_t\":\"$BASE/availability\""
 
 discovery() {
-	pub -r "$DP/light/$NODE/ledbar/config" "{\"name\":\"LED bar\",\"uniq_id\":\"${NODE}_ledbar\",\"cmd_t\":\"$BASE/ledbar/set\",\"stat_t\":\"$BASE/ledbar/state\",\"bri_cmd_t\":\"$BASE/ledbar/brightness/set\",\"bri_stat_t\":\"$BASE/ledbar/brightness\",\"bri_scl\":255,\"rgb_cmd_t\":\"$BASE/ledbar/rgb/set\",\"rgb_stat_t\":\"$BASE/ledbar/rgb\",\"on_cmd_type\":\"last\",\"icon\":\"mdi:led-strip-variant\",$AV,$DEV}"
-	pub -r "$DP/light/$NODE/keypad/config" "{\"name\":\"Key LEDs\",\"uniq_id\":\"${NODE}_keypad\",\"cmd_t\":\"$BASE/keypad/set\",\"stat_t\":\"$BASE/keypad/state\",\"bri_cmd_t\":\"$BASE/keypad/brightness/set\",\"bri_stat_t\":\"$BASE/keypad/brightness\",\"bri_scl\":255,\"on_cmd_type\":\"brightness\",\"icon\":\"mdi:gesture-tap-button\",$AV,$DEV}"
+	if has_ledbar; then pub -r "$DP/light/$NODE/ledbar/config" "{\"name\":\"LED bar\",\"uniq_id\":\"${NODE}_ledbar\",\"cmd_t\":\"$BASE/ledbar/set\",\"stat_t\":\"$BASE/ledbar/state\",\"bri_cmd_t\":\"$BASE/ledbar/brightness/set\",\"bri_stat_t\":\"$BASE/ledbar/brightness\",\"bri_scl\":255,\"rgb_cmd_t\":\"$BASE/ledbar/rgb/set\",\"rgb_stat_t\":\"$BASE/ledbar/rgb\",\"on_cmd_type\":\"last\",\"icon\":\"mdi:led-strip-variant\",$AV,$DEV}"
+	else pub -r "$DP/light/$NODE/ledbar/config" ""; fi
+	if has_keypad; then pub -r "$DP/light/$NODE/keypad/config" "{\"name\":\"Key LEDs\",\"uniq_id\":\"${NODE}_keypad\",\"cmd_t\":\"$BASE/keypad/set\",\"stat_t\":\"$BASE/keypad/state\",\"bri_cmd_t\":\"$BASE/keypad/brightness/set\",\"bri_stat_t\":\"$BASE/keypad/brightness\",\"bri_scl\":255,\"on_cmd_type\":\"brightness\",\"icon\":\"mdi:gesture-tap-button\",$AV,$DEV}"
+	else pub -r "$DP/light/$NODE/keypad/config" ""; fi
 	pub -r "$DP/switch/$NODE/screen/config" "{\"name\":\"Screen\",\"uniq_id\":\"${NODE}_screen\",\"cmd_t\":\"$BASE/screen/set\",\"stat_t\":\"$BASE/screen/state\",\"icon\":\"mdi:monitor\",$AV,$DEV}"
 	pub -r "$DP/number/$NODE/backlight/config" "{\"name\":\"Backlight\",\"uniq_id\":\"${NODE}_backlight\",\"cmd_t\":\"$BASE/backlight/set\",\"stat_t\":\"$BASE/backlight/state\",\"min\":1,\"max\":$BL_MAX,\"step\":1,\"mode\":\"slider\",\"icon\":\"mdi:brightness-6\",$AV,$DEV}"
 	pub -r "$DP/number/$NODE/blank_timeout/config" "{\"name\":\"Blank timeout\",\"uniq_id\":\"${NODE}_blank_timeout\",\"cmd_t\":\"$BASE/blank_timeout/set\",\"stat_t\":\"$BASE/blank_timeout/state\",\"min\":0,\"max\":86400,\"step\":10,\"unit_of_meas\":\"s\",\"mode\":\"box\",\"icon\":\"mdi:timer-outline\",$AV,$DEV}"
 	pub -r "$DP/binary_sensor/$NODE/touched_recently/config" "{\"name\":\"Touched recently\",\"uniq_id\":\"${NODE}_touched_recently\",\"stat_t\":\"$BASE/touched_recently/state\",\"dev_cla\":\"motion\",\"icon\":\"mdi:gesture-tap\",$AV,$DEV}"
-	if [ -r "$ACONF" ]; then
+	if has_als; then
 		pub -r "$DP/sensor/$NODE/illuminance/config" "{\"name\":\"Illuminance\",\"uniq_id\":\"${NODE}_illuminance\",\"stat_t\":\"$BASE/als/lux\",\"dev_cla\":\"illuminance\",\"unit_of_meas\":\"lx\",\"stat_cla\":\"measurement\",$AV,$DEV}"
 		pub -r "$DP/switch/$NODE/als_auto/config" "{\"name\":\"Auto brightness\",\"uniq_id\":\"${NODE}_als_auto\",\"cmd_t\":\"$BASE/als_auto/set\",\"stat_t\":\"$BASE/als_auto/state\",\"icon\":\"mdi:brightness-auto\",$AV,$DEV}"
+	fi
+	if has_emmc; then
+		for w in a b; do
+			W=$(printf '%s' $w | tr a-z A-Z)
+			pub -r "$DP/sensor/$NODE/emmc_life_$w/config" "{\"name\":\"eMMC life used $W\",\"uniq_id\":\"${NODE}_emmc_life_$w\",\"stat_t\":\"$BASE/emmc/life_$w\",\"val_tpl\":\"{{ none if value == 'none' else value | int }}\",\"unit_of_meas\":\"%\",\"stat_cla\":\"measurement\",\"ent_cat\":\"diagnostic\",\"icon\":\"mdi:harddisk\",$AV,$DEV}"
+		done
+		pub -r "$DP/sensor/$NODE/emmc_eol/config" "{\"name\":\"eMMC end of life\",\"uniq_id\":\"${NODE}_emmc_eol\",\"stat_t\":\"$BASE/emmc/eol\",\"ent_cat\":\"diagnostic\",\"icon\":\"mdi:harddisk-remove\",$AV,$DEV}"
 	fi
 	if [ -e "$ASOUND/$CARD" ]; then
 		pub -r "$DP/number/$NODE/volume/config" "{\"name\":\"Volume\",\"uniq_id\":\"${NODE}_volume\",\"cmd_t\":\"$BASE/volume/set\",\"stat_t\":\"$BASE/volume/state\",\"min\":0,\"max\":100,\"step\":1,\"unit_of_meas\":\"%\",\"mode\":\"slider\",\"icon\":\"mdi:volume-high\",$AV,$DEV}"
@@ -176,14 +197,24 @@ volume_state() {  # "NN" percent of the Master softvol
 	amixer -c "$CARD" sget Master 2>/dev/null | sed -n 's/.*\[\([0-9]\{1,3\}\)%\].*/\1/p' | head -1
 }
 
+emmc_life() {  # emmc_life a|b -> percent (upper bound of the JEDEC band), or none
+	c=$(field "$R/emmc.state" "life_$1")
+	case $c in 0x0[1-9]) echo $(( ${c#0x0} * 10 ));; 0x0[aA]) echo 100;; 0x0[bB]) echo 110;; *) echo none;; esac
+}
+emmc_state() {  # "LIFE_A LIFE_B EOL"
+	e=$(field "$R/emmc.state" eol)
+	case $e in 0x01) e=normal;; 0x02) e=warning;; 0x03) e=urgent;; *) e=unknown;; esac
+	echo "$(emmc_life a) $(emmc_life b) $e"
+}
 update_state() {  # raw HA-ready JSON from tsx-autoupdate (same $R), or a safe default
 	if [ -r "$R/update-ha-state.json" ]; then cat "$R/update-ha-state.json"
 	else echo '{"installed_version":"unknown","latest_version":"unknown","title":"TSX packages","release_summary":"tsx-autoupdate has not run yet","in_progress":false}'
 	fi
 }
 
-P_LED= P_KP= P_SCR= P_BL= P_ALS= P_VOL= P_UPD= P_BT= P_TR=
+P_LED= P_KP= P_SCR= P_BL= P_ALS= P_VOL= P_UPD= P_BT= P_TR= P_EMMC=
 publish_states() {  # $1 = force
+	f=${1:-}
 	v=$(ledbar_state); if [ "$v" != "$P_LED" ] || [ -n "${1:-}" ]; then
 		set -- $v; pub -r "$BASE/ledbar/state" "$1"; pub -r "$BASE/ledbar/brightness" "$2"; pub -r "$BASE/ledbar/rgb" "$3"; P_LED=$v; fi
 	v=$(keypad_state); if [ "$v" != "$P_KP" ] || [ -n "${1:-}" ]; then
@@ -202,6 +233,10 @@ publish_states() {  # $1 = force
 		pub -r "$BASE/volume/state" "$v"; P_VOL=$v; fi
 	v=$(update_state); if [ "$v" != "$P_UPD" ] || [ -n "${1:-}" ]; then
 		pub -r "$BASE/update/state" "$v"; P_UPD=$v; fi
+	if has_emmc; then
+		v=$(emmc_state); if [ "$v" != "$P_EMMC" ] || [ -n "$f" ]; then
+			set -- $v; pub -r "$BASE/emmc/life_a" "$1"; pub -r "$BASE/emmc/life_b" "$2"; pub -r "$BASE/emmc/eol" "$3"; P_EMMC=$v; fi
+	fi
 }
 
 # ---- commands --------------------------------------------------------------

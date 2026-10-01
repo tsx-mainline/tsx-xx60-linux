@@ -1,0 +1,37 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+# tsx-emmc-state: copy the eMMC wear values into /run/tsx/emmc.state.
+# The file has this format:
+#   life_a 0x01       life_time, first value (0x01 = up to 10 percent used)
+#   life_b 0x01       life_time, second value
+#   eol 0x01          pre_eol_info (0x01 normal, 0x02 warning, 0x03 urgent)
+# tsx-mqtt and the ESPHome backend read this file. Without eMMC wear files
+# (a card, a virtual machine), or when the chip reports 0x00 in every field
+# (the values are not defined, as on the eMMC of the TSS-10), the script
+# writes nothing and exits 0, so no eMMC entity appears.
+# /etc/periodic/hourly runs it every hour. The tsx-config init script runs it
+# at boot, before tsx-mqtt and tsx-esphome start.
+# Env overrides for tests: TSX_EMMC_DIR, TSX_RUN_DIR.
+# The eMMC is the mmc device of type MMC. On the xx60, mmcblk0 is the SD card.
+D=${TSX_EMMC_DIR:-}
+if [ -z "$D" ]; then
+	for d in /sys/block/mmcblk*/device; do
+		[ "$(cat "$d/type" 2>/dev/null)" = MMC ] && { D=$d; break; }
+	done
+fi
+[ -n "$D" ] || exit 0
+R=${TSX_RUN_DIR:-/run/tsx}
+[ -d "$D" ] || exit 0
+set -- $(cat "$D/life_time" 2>/dev/null)
+a=${1:-}; b=${2:-}
+eol=$(cat "$D/pre_eol_info" 2>/dev/null); eol=${eol%% *}
+[ -n "$a" ] && [ -n "$b" ] || [ -n "$eol" ] || exit 0
+case "$a $b $eol" in "0x00 0x00 0x00"|"  0x00"|"0x00 0x00 ") exit 0;; esac
+mkdir -p "$R" || exit 0
+f=$R/emmc.state
+{
+	[ -n "$a" ] && [ -n "$b" ] && { echo "life_a $a"; echo "life_b $b"; }
+	[ -z "$eol" ] || echo "eol $eol"
+} > "$f.tmp.$$" && mv "$f.tmp.$$" "$f" || rm -f "$f.tmp.$$"
+case $eol in ''|0x00|0x01) ;; *) logger -t tsx-emmc-state "eMMC pre-EOL info $eol";; esac
+exit 0

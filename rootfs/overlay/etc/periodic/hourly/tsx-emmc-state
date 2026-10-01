@@ -1,0 +1,3 @@
+#!/bin/sh
+# Refresh /run/tsx/emmc.state once an hour (run by crond through /etc/periodic/hourly).
+exec /usr/local/sbin/tsx-emmc-state
