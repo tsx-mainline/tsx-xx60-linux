@@ -108,6 +108,76 @@ git -C "$W/xxl" worktree add -q -b wt-check "$W/xxl-wt" import
 out=$(run --repo xx60-linux="$W/xxl-wt" --skip-squash --squash-branch import 2>&1)
 echo "$out" | grep -q 'no repo at' && bad "a linked worktree was reported as \"no repo\"" || ok "a linked worktree scans normally (not skipped)"
 
+# --- --todo: one commit per group, merges and their side branches inside a
+# group, tree check at the end. Fixture: two merges. ------------------------
+mkrepo tdl; cd "$W/tdl"
+git checkout -q -b import
+gc() { GIT_AUTHOR_DATE="$2" GIT_COMMITTER_DATE="$2" git commit -q -m "$1"; }
+mg() { GIT_AUTHOR_DATE="$2" GIT_COMMITTER_DATE="$2" git merge -q --no-ff "$1" -m "merge $1"; }
+echo 1 > a; git add a; gc c1 "2026-01-01T10:00:00+00:00"
+git checkout -q -b side1; echo s1 > s1; git add s1; gc s1 "2026-01-02T10:00:00+00:00"
+git checkout -q import; mg side1 "2026-01-03T10:00:00+00:00"
+echo 2 >> a; git add a; gc c2 "2026-01-04T10:00:00+00:00"
+git checkout -q -b side2; echo s2 > s2; git add s2; gc s2 "2026-01-05T10:00:00+00:00"
+git checkout -q import; mg side2 "2026-01-06T10:00:00+00:00"
+echo 3 >> a; git add a; gc c3 "2026-01-07T10:00:00+00:00"
+h() { git rev-parse --short "$1"; }
+mkdir -p "$W/msgs"
+printf 'first: group one\n\nBody one.\n' > "$W/msgs/G01.txt"
+printf 'second: group two\n\nBody two.\n' > "$W/msgs/G02.txt"
+printf 'third: group three\n\nBody three.\n' > "$W/msgs/G03.txt"
+cat > "$W/todo.txt" <<TODO
+# Todo for the fixture
+# G01 [2 merges] first
+pick $(h import~4)
+fixup $(h side1)
+fixup $(h import~3)
+# G02 [x] second
+pick $(h import~2)
+fixup $(h side2)
+fixup $(h import~1)
+# G03 [x] third
+pick $(h import)
+TODO
+cd "$W"
+out=$(run --repo xx60-linux="$W/tdl" --squash-branch todo1 --todo "$W/todo.txt" --msg-dir "$W/msgs" --linux-branch tsx-xx60-7.2 2>&1); rc=$?
+[ "$(git -C "$W/tdl" rev-list --count todo1)" = 3 ] && ok "todo: three commits" || { bad "todo: wrong commit count"; echo "$out" | head -20; }
+git -C "$W/tdl" diff --quiet import todo1 && ok "todo: final tree equals import" || bad "todo: final tree differs from import"
+echo "$out" | grep -q 'tree check: todo1 has the tree of import' && ok "todo: tree check reported" || bad "todo: no tree check line"
+[ "$(git -C "$W/tdl" rev-parse 'todo1~2^{tree}')" = "$(git -C "$W/tdl" rev-parse 'import~3^{tree}')" ] && ok "todo: group one has the tree of its merge" || bad "todo: group one tree wrong"
+[ "$(git -C "$W/tdl" log -1 --format=%cI todo1~1)" = "2026-01-06T10:00:00Z" ] && [ "$(git -C "$W/tdl" log -1 --format=%aI todo1~2)" = "2026-01-03T10:00:00Z" ] \
+	&& ok "todo: commit dates come from the last old commit of each group" || bad "todo: commit dates wrong"
+[ "$(git -C "$W/tdl" log -1 --format='%an <%ae> %cn <%ce>' todo1~1)" = 'unex <7575866+unex@users.noreply.github.com> unex <7575866+unex@users.noreply.github.com>' ] \
+	&& ok "todo: author and committer are unex" || bad "todo: identity wrong"
+[ "$(git -C "$W/tdl" log -1 --format=%s todo1~2)" = "first: group one" ] && ok "todo: message comes from the msg dir" || bad "todo: message wrong"
+[ "$rc" = 0 ] && ok "todo: clean run exits 0" || bad "todo: expected exit 0, got $rc"
+
+# a group that cuts the side branch of a merge must fail
+cat > "$W/todo-bad.txt" <<TODO
+# G01 [x] first
+pick $(git -C "$W/tdl" rev-parse --short import~4)
+fixup $(git -C "$W/tdl" rev-parse --short import~3)
+# G02 [x] second
+pick $(git -C "$W/tdl" rev-parse --short side1)
+# G03 [x] rest
+pick $(git -C "$W/tdl" rev-parse --short import~2)
+fixup $(git -C "$W/tdl" rev-parse --short side2)
+fixup $(git -C "$W/tdl" rev-parse --short import~1)
+fixup $(git -C "$W/tdl" rev-parse --short import)
+TODO
+out=$(run --repo xx60-linux="$W/tdl" --squash-branch todo2 --todo "$W/todo-bad.txt" --msg-dir "$W/msgs" --linux-branch tsx-xx60-7.2 2>&1); rc=$?
+[ "$rc" = 1 ] && echo "$out" | grep -q 'does not close at a first-parent commit' && ok "todo: a group that cuts a merge is refused" || bad "todo: bad group not refused"
+
+# a missing message file must fail
+printf '# G09 [x] only\npick %s\n' "$(git -C "$W/tdl" rev-parse --short import~4)" > "$W/todo-nomsg.txt"
+out=$(run --repo xx60-linux="$W/tdl" --squash-branch todo3 --todo "$W/todo-nomsg.txt" --msg-dir "$W/msgs" --linux-branch tsx-xx60-7.2 2>&1); rc=$?
+[ "$rc" = 1 ] && echo "$out" | grep -q 'missing message file' && ok "todo: a missing message file is refused" || bad "todo: missing message not refused"
+
+# a todo that stops before the end of import fails the tree check
+printf '# G01 [x] one\npick %s\nfixup %s\nfixup %s\n' "$(git -C "$W/tdl" rev-parse --short import~4)" "$(git -C "$W/tdl" rev-parse --short side1)" "$(git -C "$W/tdl" rev-parse --short import~3)" > "$W/todo-short.txt"
+out=$(run --repo xx60-linux="$W/tdl" --squash-branch todo4 --todo "$W/todo-short.txt" --msg-dir "$W/msgs" --linux-branch tsx-xx60-7.2 2>&1); rc=$?
+[ "$rc" = 1 ] && echo "$out" | grep -q 'tree check FAILED' && ok "todo: a final tree that differs from import is refused" || bad "todo: tree check did not fail"
+
 # --- --leak-patterns is required -------------------------------------------
 "$SCRIPT" --repo xx60-linux="$W/xxl" >/tmp/pp-missing-arg.$$ 2>&1; rc=$?
 [ "$rc" != 0 ] && ok "refuses to run without --leak-patterns" || bad "ran without --leak-patterns"

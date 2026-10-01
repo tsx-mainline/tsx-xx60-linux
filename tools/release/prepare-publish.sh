@@ -1,10 +1,10 @@
 #!/bin/bash
-# Push-day prep. The script squashes the "import" branch tree of
-# tsx-xx60-linux into one clean commit. Then it scans every repo that a push
-# would send, for things that must never leave this workstation. It prints a
-# report and the exact push commands that a person would run. The script never
-# pushes, never adds a remote, and never touches an existing branch other than
-# the squash target.
+# Push-day prep. The script squashes the "import" branch of tsx-xx60-linux
+# into one clean commit, or into one commit per group of a todo file. Then it
+# scans every repo that a push would send, for things that must never leave
+# this workstation. It prints a report and the exact push commands that a
+# person would run. The script never pushes, never adds a remote, and never
+# touches an existing branch other than the squash target.
 #
 #   tools/release/prepare-publish.sh --leak-patterns PATH [options]
 #
@@ -19,6 +19,13 @@
 # Options:
 #   --squash-branch NAME   branch that this script (re)creates from the tree
 #                          of import (default: publish-candidate)
+#   --todo FILE            build the squash branch as a chain of commits, one
+#                          per group of FILE, and not as one commit. See below.
+#   --msg-dir DIR          directory with one message file per group, named
+#                          DIR/Gnn.txt (subject, blank line, body). Required
+#                          with --todo.
+#   --source-branch NAME   branch whose tree the last squash commit must equal
+#                          (default: import)
 #   --skip-squash          only scan, do not create or update the squash branch
 #   --max-blob-size BYTES  flag tracked blobs bigger than this (default: 2097152 = 2 MiB)
 #   --repo NAME=PATH       override a repo path (repeatable). NAME is one of
@@ -41,6 +48,16 @@
 #                          the org where this project already publishes docs.
 #                          See README.md and docs/kernel.md)
 #
+# Todo file: a line "# Gnn [text] subject" starts group Gnn. The lines
+# "pick HASH ..." and "fixup HASH ..." that follow list the old commits of that
+# group. Other comment lines and blank lines are ignored. The tree of a group
+# is the tree of its newest commit, so every new commit has a tree that the old
+# history had. Each group must be closed: its commits plus all earlier groups
+# must be exactly the history of its newest commit. A group cannot cut a
+# side branch of a merge. The new commit gets the date of the newest old
+# commit of its group. The last tree must equal the tree of the source branch.
+# New commits are signed when commit.gpgsign is true in the repo config.
+#
 # Exit status: 0 if the squash (unless skipped) succeeded and every scan came
 # back clean. 1 if any repo or category found something. In both cases the
 # script prints the full report. It pushes nothing and writes nothing beyond
@@ -51,6 +68,7 @@ REPO=$(cd "$HERE/../.." && pwd)          # .../tsx-xx60-linux
 TOP=$(cd "$REPO/.." && pwd)
 
 LEAKPATS= SQUASH_BRANCH=publish-candidate DO_SQUASH=1 MAXBLOB=2097152
+TODO= MSGDIR= SOURCE_BRANCH=import
 declare -A REPOPATH=( [xx60-linux]="$REPO" [aports]="$TOP/tsx-aports" [linux]="$TOP/linux" )
 declare -A PUSHURL=( [xx60-linux]="https://github.com/tsx-mainline/tsx-xx60-linux" \
                      [aports]="https://github.com/tsx-mainline/tsx-aports" \
@@ -62,6 +80,9 @@ LINUX_BRANCHES_SET=0 UPSTREAM_REMOTES_SET=0
 while [ $# -gt 0 ]; do case $1 in
 	--leak-patterns) LEAKPATS=$2; shift;;
 	--squash-branch) SQUASH_BRANCH=$2; shift;;
+	--todo) TODO=$2; shift;;
+	--msg-dir) MSGDIR=$2; shift;;
+	--source-branch) SOURCE_BRANCH=$2; shift;;
 	--skip-squash) DO_SQUASH=0;;
 	--max-blob-size) MAXBLOB=$2; shift;;
 	--repo) k=${2%%=*}; REPOPATH[$k]=${2#*=}; shift;;
@@ -72,11 +93,15 @@ while [ $# -gt 0 ]; do case $1 in
 	--linux-upstream-remote) [ "$UPSTREAM_REMOTES_SET" = 1 ] || { UPSTREAM_REMOTES=(); UPSTREAM_REMOTES_SET=1; }
 	                UPSTREAM_REMOTES+=("$2"); shift;;
 	--push-url) k=${2%%=*}; PUSHURL[$k]=${2#*=}; shift;;
-	-h|--help) sed -n '2,47p' "$0"; exit 0;;
+	-h|--help) sed -n '2,64p' "$0"; exit 0;;
 	*) echo "prepare-publish: unknown option $1" >&2; exit 1;; esac; shift; done
 
 [ -n "$LEAKPATS" ] || { echo "prepare-publish: --leak-patterns PATH is required" >&2; exit 1; }
 [ -r "$LEAKPATS" ] || { echo "prepare-publish: cannot read $LEAKPATS" >&2; exit 1; }
+if [ -n "$TODO" ]; then
+	[ -r "$TODO" ] || { echo "prepare-publish: cannot read $TODO" >&2; exit 1; }
+	[ -d "$MSGDIR" ] || { echo "prepare-publish: --todo needs --msg-dir DIR" >&2; exit 1; }
+fi
 
 say() { echo "[prepare-publish] $*"; }
 FAIL=0
@@ -102,20 +127,93 @@ anthropic\.com/claude
 AIPATS
 
 # ---------------------------------------------------------------------------
-# squash: tsx-xx60-linux only. Builds a brand-new commit (no parent) from
-# import's current tree with a clean message, and points $SQUASH_BRANCH at
-# it. Never checks out anything, so it never switches any worktree's branch
-# (several worktrees share this .git -- REPO-RULES.md).
+# squash: tsx-xx60-linux only. Without --todo it builds one new commit (no
+# parent) from the tree of the source branch and points $SQUASH_BRANCH at it.
+# With --todo it builds one commit per group (see "Todo file" above). It never
+# checks out anything, so it never switches any worktree's branch (several
+# worktrees share this .git -- REPO-RULES.md).
 # ---------------------------------------------------------------------------
+IDENT_NAME=unex IDENT_MAIL=7575866+unex@users.noreply.github.com
+
+# sign_args: "-S" when the repo config turns commit signing on. git commit-tree
+# does not read commit.gpgsign by itself.
+sign_args() {
+	[ "$(git -C "${REPOPATH[xx60-linux]}" config --type=bool --get commit.gpgsign 2>/dev/null)" = true ] && echo -S
+}
+
+# check_final_tree TIP: the last commit must have the tree of the source branch
+check_final_tree() {
+	local repo=${REPOPATH[xx60-linux]} want got
+	want=$(git -C "$repo" rev-parse "$SOURCE_BRANCH^{tree}") || { FAIL=1; return; }
+	got=$(git -C "$repo" rev-parse "$1^{tree}")
+	if [ "$want" = "$got" ]; then say "tree check: $SQUASH_BRANCH has the tree of $SOURCE_BRANCH"
+	else
+		echo "prepare-publish: tree check FAILED: $SQUASH_BRANCH differs from $SOURCE_BRANCH"
+		git -C "$repo" diff --stat "$SOURCE_BRANCH" "$1" | tail -5; FAIL=1
+	fi
+}
+
+squash_from_todo() {
+	local repo=${REPOPATH[xx60-linux]} line cmd hash num
+	tmp=$(mktemp -d); trap 'rm -rf "$tmp"; rm -f "$patf" "$aipatf"' EXIT
+	local -a gnum=()
+	local n=-1 total=0
+	while IFS= read -r line || [ -n "$line" ]; do
+		case $line in
+		'# G'[0-9]*) num=${line#\# }; num=${num%% *}; n=$((n+1)); gnum[$n]=$num; : > "$tmp/m.$n";;
+		pick\ *|fixup\ *)
+			[ "$n" -ge 0 ] || { echo "prepare-publish: $TODO: '$line' comes before a group header"; FAIL=1; return; }
+			set -- $line; hash=$2
+			git -C "$repo" rev-parse --verify -q "$hash^{commit}" >/dev/null \
+				|| { echo "prepare-publish: $TODO: no such commit '$hash'"; FAIL=1; return; }
+			git -C "$repo" rev-parse "$hash^{commit}" >> "$tmp/m.$n"; total=$((total+1));;
+		esac
+	done < "$TODO"
+	[ "$n" -ge 0 ] || { echo "prepare-publish: $TODO has no group"; FAIL=1; return; }
+	sort "$tmp"/m.* | uniq -d | grep -q . && { echo "prepare-publish: $TODO lists a commit twice"; FAIL=1; return; }
+
+	say "todo: $((n+1)) groups, $total old commits"
+	local i prev= tip tree msgf date commit cnt
+	: > "$tmp/seen"
+	for i in $(seq 0 "$n"); do
+		num=${gnum[$i]}; msgf=$MSGDIR/$num.txt
+		[ -s "$tmp/m.$i" ] || { echo "prepare-publish: group $num has no commits"; FAIL=1; return; }
+		[ -r "$msgf" ] || { echo "prepare-publish: missing message file $msgf"; FAIL=1; return; }
+		# the newest member: the one that no other member descends from
+		tip=$(git -C "$repo" merge-base --independent $(cat "$tmp/m.$i") | head -1)
+		cat "$tmp/m.$i" >> "$tmp/seen"
+		sort "$tmp/seen" > "$tmp/seen.s"
+		git -C "$repo" rev-list "$tip" | sort > "$tmp/hist.s"
+		if ! cmp -s "$tmp/seen.s" "$tmp/hist.s"; then
+			echo "prepare-publish: group $num does not close at a first-parent commit (members and earlier groups differ from the history of ${tip:0:7})"
+			diff "$tmp/seen.s" "$tmp/hist.s" | head -5; FAIL=1; return
+		fi
+		tree=$(git -C "$repo" rev-parse "$tip^{tree}")
+		date=$(git -C "$repo" log -1 --format=%cI "$tip")
+		commit=$(GIT_AUTHOR_NAME=$IDENT_NAME GIT_AUTHOR_EMAIL=$IDENT_MAIL GIT_AUTHOR_DATE=$date \
+		         GIT_COMMITTER_NAME=$IDENT_NAME GIT_COMMITTER_EMAIL=$IDENT_MAIL GIT_COMMITTER_DATE=$date \
+		         git -C "$repo" commit-tree $(sign_args) "$tree" ${prev:+-p $prev} -F "$msgf") \
+			|| { echo "prepare-publish: commit-tree failed for group $num"; FAIL=1; return; }
+		cnt=$(wc -l < "$tmp/m.$i")
+		say "group $num: ${commit:0:12} tree of ${tip:0:7} ($cnt old commits) $(head -1 "$msgf")"
+		prev=$commit
+	done
+	git -C "$repo" update-ref "refs/heads/$SQUASH_BRANCH" "$prev"
+	say "squash: refs/heads/$SQUASH_BRANCH -> $prev ($((n+1)) commits)"
+	check_final_tree "$prev"
+}
+
 squash_xx60_linux() {
 	local repo=${REPOPATH[xx60-linux]} tree commit
-	git -C "$repo" rev-parse --verify import >/dev/null 2>&1 || { echo "prepare-publish: $repo has no 'import' branch"; FAIL=1; return; }
-	tree=$(git -C "$repo" rev-parse import^{tree})
-	commit=$(GIT_AUTHOR_NAME=unex GIT_AUTHOR_EMAIL=7575866+unex@users.noreply.github.com \
-	         GIT_COMMITTER_NAME=unex GIT_COMMITTER_EMAIL=7575866+unex@users.noreply.github.com \
-	         git -C "$repo" commit-tree "$tree" -m "tsx-xx60-linux: mainline port for the Crestron TSW/TSS-x60 panels")
+	git -C "$repo" rev-parse --verify "$SOURCE_BRANCH" >/dev/null 2>&1 || { echo "prepare-publish: $repo has no '$SOURCE_BRANCH' branch"; FAIL=1; return; }
+	if [ -n "$TODO" ]; then squash_from_todo; return; fi
+	tree=$(git -C "$repo" rev-parse "$SOURCE_BRANCH^{tree}")
+	commit=$(GIT_AUTHOR_NAME=$IDENT_NAME GIT_AUTHOR_EMAIL=$IDENT_MAIL \
+	         GIT_COMMITTER_NAME=$IDENT_NAME GIT_COMMITTER_EMAIL=$IDENT_MAIL \
+	         git -C "$repo" commit-tree $(sign_args) "$tree" -m "tsx-xx60-linux: mainline port for the Crestron TSW/TSS-x60 panels")
 	git -C "$repo" update-ref "refs/heads/$SQUASH_BRANCH" "$commit"
-	say "squash: refs/heads/$SQUASH_BRANCH -> $commit (1 commit, import's current tree)"
+	say "squash: refs/heads/$SQUASH_BRANCH -> $commit (1 commit, tree of $SOURCE_BRANCH)"
+	check_final_tree "$commit"
 }
 
 # ---------------------------------------------------------------------------
