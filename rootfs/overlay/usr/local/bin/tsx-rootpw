@@ -1,34 +1,33 @@
 #!/bin/sh
 # tsx-rootpw: the root password state of the panel (docs/rootfs.md "Root login").
 #
-# A public image has no root password. The installer asks for one and stores its
-# hash in panel.conf (ROOT_PASSWORD_HASH). The first boot applies it
-# (tsx-config apply). With no password, the field of root in /etc/shadow is
-# empty. Then these rules hold:
-#   - the login on the panel screen and on the serial console lets root in, and
-#     /etc/profile.d/tsx.sh makes root choose a new password at once ("login")
-#   - sshd does not accept an empty password (PermitEmptyPasswords no), so SSH
-#     takes keys only until a password is set
+# A public image has no root password. The installer stops unless it gets a
+# root password or an SSH public key. It stores the hash of the password
+# (ROOT_PASSWORD_HASH) and the key (SSH_AUTHORIZED_KEY) in panel.conf, and the
+# first boot applies them (tsx-config apply). Until a password is set, the
+# field of root in /etc/shadow is locked ("*"). Then these rules hold:
+#   - the login on the panel screen and on the serial console does not let
+#     root in
+#   - SSH takes the key from panel.conf
+#   - after root sets a password over SSH (passwd), the console login works
 #
-#   tsx-rootpw state   print one word: set, none (empty field) or locked
-#                      (the field starts with ! or *: no password login at all).
-#                      It prints nothing when it cannot read /etc/shadow
-#                      (not root).
+#   tsx-rootpw state   print one word: set, locked (the field starts with ! or *:
+#                      no password login at all) or empty (the field has no
+#                      value: this is an error state). It prints nothing when
+#                      it cannot read /etc/shadow (not root).
 #   tsx-rootpw note    print the lines for the banner: which case applies
-#   tsx-rootpw login   while the state is none, ask for a new password (passwd).
-#                      After 3 failed tries it returns 1, and the caller ends
-#                      the login. It never prints a password.
-# Test hooks: TSX_SHADOW_FILE (default /etc/shadow), TSX_PASSWD_BIN (default passwd).
+# Test hooks: TSX_SHADOW_FILE (default /etc/shadow),
+# TSX_AUTH_KEYS_FILE (default /root/.ssh/authorized_keys).
 set -u
 SHADOW=${TSX_SHADOW_FILE:-/etc/shadow}
-PASSWD=${TSX_PASSWD_BIN:-passwd}
+KEYS=${TSX_AUTH_KEYS_FILE:-/root/.ssh/authorized_keys}
 
 state() {
 	[ -r "$SHADOW" ] || return 0
 	f=$(awk -F: '$1 == "root" { print "x" $2; found = 1 } END { if (!found) print "x!" }' "$SHADOW") || return 0
 	f=${f#x}
 	case "$f" in
-	'') echo none;;
+	'') echo empty;;
 	'!'*|'*'*) echo locked;;
 	*) echo set;;
 	esac
@@ -38,27 +37,17 @@ case "${1:-}" in
 state) state;;
 note)
 	case $(state) in
-	none)
-		echo "   root:     no password yet. Log in on this screen: it asks for a new one."
-		echo "             SSH accepts keys only until a password is set.";;
+	empty)
+		echo "   root:     WARNING: the password field is empty. Log in over SSH with a key and run passwd.";;
 	locked)
-		echo "   root:     password login is off. SSH accepts keys only.";;
+		if [ -s "$KEYS" ]; then
+			echo "   root:     no password is set, so the login on this screen is off."
+			echo "             Log in over SSH with your key and run passwd. Then this screen works."
+		else
+			echo "   root:     no password and no SSH key. Nobody can log in. Install again."
+		fi;;
 	set)
 		echo "   root:     password is set.";;
 	esac;;
-login)
-	[ "$(state)" = none ] || exit 0
-	echo
-	echo "This panel has no root password yet. Choose one now."
-	n=0
-	while [ "$n" -lt 3 ]; do
-		if "$PASSWD" root; then
-			[ "$(state)" = none ] || exit 0
-		fi
-		n=$((n + 1))
-		[ "$n" -lt 3 ] && echo "No password was set. Try again."
-	done
-	echo "No password was set. Logging out."
-	exit 1;;
-*) sed -n '2,24p' "$0" >&2; exit 2;;
+*) sed -n '2,20p' "$0" >&2; exit 2;;
 esac

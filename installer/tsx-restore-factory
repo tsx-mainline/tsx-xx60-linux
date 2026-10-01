@@ -84,7 +84,7 @@
 #   --env FILE  a 64 KiB env block instead of the live one
 #   --bundle DIR  --results FILE  --from-step N  --to-step N  --yes  --dry-run
 #   --rescue-ip IP  overrides the rescue-IP discovery in UART and network-only mode
-#   --port N (HTTP, 8081)  --ws-ip IP  --stable-min N  --rescue-pw PW (default tsx)
+#   --port N (HTTP, 8081)  --ws-ip IP  --stable-min N  --rescue-pw PW (default: your ssh key)
 #   --uart auto|yes|no  the default is auto. UART mode runs only if the serial
 #          logger runs and uc.sh exists. Otherwise steps 2, 6 and 7 fall back to
 #          the network-only checks described above. --uart yes or no forces
@@ -106,11 +106,14 @@
 # tools/bench/uc.sh. The rescue-IP sweep of network-only mode prefers fping if
 # it is installed.
 # Panel commands use this allowlisted form:
-#   sshpass -p tsx ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@IP '...'
+#   sshpass -p PASSWORD ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@IP '...'
+# The rescue has no fixed password (docs/recovery.md "Rescue login"): --rescue-pw
+# or $TSX_RESCUE_PW is the one-time password on the panel screen, or the panel's
+# root password. With none, the script uses your SSH key.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); WORK=$(cd "$HERE/.." && pwd)
 SERIALDIR=$WORK/tools/bench; UC=$SERIALDIR/uc.sh; SERLOG=${TSX_SERIAL_LOG:-$SERIALDIR/boot-2200.log}
-BUNDLE= PANEL= RESULTS= FROM_STEP=1 TO_STEP=7 YES=0 DRYRUN=0 PORT=8081 WSIP= STABLE_MIN=9 RPW=tsx RIP= UART=auto
+BUNDLE= PANEL= RESULTS= FROM_STEP=1 TO_STEP=7 YES=0 DRYRUN=0 PORT=8081 WSIP= STABLE_MIN=9 RPW=${TSX_RESCUE_PW:-} RIP= UART=auto
 PUF=${TSX_PUF:-} ENVFILE=
 ROOTSSH=1 ROOTSSH_SET=0 SSHSHELL=${SSHSHELL:-}   # rootsh patch by default
 PRISTINE_PUF_SHA=96438108e3175b66c09f1df284ded5fe155593ba06e069e154688b04f395e40b   # rootfs/vendor-fetch.sh TFA_PUF_SHA256
@@ -154,7 +157,7 @@ if [ "$ROOTSSH" = 1 ]; then
 fi
 RHOST=$PANEL
 ANDROID_IP=$PANEL
-set_rhost() { RHOST=$1; SSH="sshpass -p $RPW ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$RHOST"; }
+set_rhost() { RHOST=$1; RESCUE_SSH_PW=$RPW; SSH="tsx_rescue_ssh_cur -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$RHOST"; }
 set_rhost "$PANEL"
 rescue_ip_from_log() { tr -d '\0' < "$SERLOG" | grep -a -o 'tsx-rescue: network: eth0 [0-9.]*' | tail -n 1 | awk '{print $NF}'; }
 ssh_ok() { is_crestron_sshd "$RHOST" && return 1; $SSH true >/dev/null 2>&1; }

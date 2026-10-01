@@ -6,7 +6,9 @@
 # screen itself is tsx-rescue-status. U-Boot boots the rescue image when
 # boot_retry passes 9: the kiosk failed 5 times in a row (hook guard
 # "fallback"), then the stock eMMC Android failed 4 times. The rescue only
-# starts the network and dropbear (root / tsx) and shows the IP. It never runs
+# starts the network and dropbear and shows the IP. The login comes from
+# tsx-rescue-login (the panel's password hash and key, or a one-time password
+# on the screen). It never runs
 # switch_root, never runs the installer and never formats anything.
 #
 #   tsx-rescue status        env counters, card layout, p5 label
@@ -32,7 +34,7 @@ banner)
 	msg="
 ==== TSX RESCUE SYSTEM (golden slot) ====
 reason : $(cat /run/rescue-reason 2>/dev/null)
-network: eth0 ${ip:-no address yet (DHCP)}   ssh root@${ip%/*} (password tsx)
+network: eth0 ${ip:-no address yet (DHCP)}   ssh root@${ip%/*}
 eth0 MAC $mac ($macnote)
 u-boot : boot_retry=$br
 (U-Boot: after 5 failed kiosk boots and 4 stock-Android boots, or by hand)

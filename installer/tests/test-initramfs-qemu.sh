@@ -16,6 +16,9 @@
 #     banner with the IP, dropbear. Over ssh: tsx-rescue/tsx-boot-ok present,
 #     tsx-rescue done refuses (no TSX disk under qemu), p5 not mounted, nothing written.
 # Initramfs are taken out of the boot images, so the test checks what goes to p1.
+# The images carry no fixed password. Build the rootfs with TSX_DEV_ROOT_HASH and
+# the initramfs with TSX_DEV_RESCUE_HASH, both the hash of the same test password,
+# and give that password in TSX_TEST_PW (default: tsx). Test images only.
 set -euo pipefail
 INSTALLER_DIR=$(cd "$(dirname "$0")/.." && pwd); ROOTFS_DIR=$(cd "$INSTALLER_DIR/../rootfs" && pwd)
 KERNEL=$ROOTFS_DIR/build-virt/arch/arm/boot/zImage
@@ -27,7 +30,7 @@ pad = lambda n: (n + ps - 1) // ps * ps; open(sys.argv[2], 'wb').write(d[ps + pa
 PY
 }
 rd_of "$INSTALLER_DIR/out/tsxboot-audio-autoinstall.img" "$W/auto.gz"; rd_of "$INSTALLER_DIR/out/tsx-rescue-tsw1060.img" "$W/rescue.gz"
-SSH=(sshpass -p tsx ssh -p 2229 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 root@127.0.0.1)
+SSH=(sshpass -p "${TSX_TEST_PW:-tsx}" ssh -p 2229 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 root@127.0.0.1)
 N=0 F=0; ok() { echo "  ok: $*"; N=$((N+1)); }; bad() { echo "  FAIL: $*"; F=$((F+1)); }
 boot() {   # boot NAME INITRD MODE(root|rescue) [DISK] [full] [DATADISK]
 	DISK=${4:-$ROOTFS_DIR/out/rootfs.ext4} DATADISK=${6:-}

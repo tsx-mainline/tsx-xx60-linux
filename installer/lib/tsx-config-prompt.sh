@@ -73,28 +73,29 @@ _tcp_hash_password() {
 }
 
 # _tcp_ask_root_password: ask for the root password (twice, with no echo) and
-# store only its hash as ROOT_PASSWORD_HASH. A blank answer sets none. Then the
-# first login on the panel console asks for a new password, and ssh takes keys
-# only until then (docs/rootfs.md "Root login"). On a reinstall, a blank answer
-# keeps the saved hash. The function never prints or logs the password.
+# store only its hash as ROOT_PASSWORD_HASH. A blank answer sets no password.
+# Then the install needs an SSH key (tsx_config_prompt asks for it next), and
+# the root password stays locked until a person sets one over ssh
+# (docs/rootfs.md "Root login"). On a reinstall, a blank answer keeps the
+# saved hash. The function never prints or logs the password.
 _tcp_ask_root_password() {
 	local saved pw pw2 hash
 	saved=$(_tcp_default ROOT_PASSWORD_HASH)
 	while :; do
-		read -r -s -p "Root password, 8 characters or more${saved:+ [saved; Enter keeps it]} (blank = none: the first login on the panel asks for one): " pw; echo >&2
+		read -r -s -p "Root password, 8 characters or more${saved:+ [saved; Enter keeps it]} (blank = SSH key only, you give the key next): " pw || return 1; echo >&2
 		if [ -z "$pw" ]; then
 			if [ -n "$saved" ]; then
 				TSX_CONF="$OUTFILE" "$TSX_CONFIG_BIN" set ROOT_PASSWORD_HASH "$saved"
 				echo "  keeping the saved root password" >&2
 			else
-				echo "  no root password. The first login on the panel console asks for one, and ssh takes keys only until then" >&2
+				echo "  no root password. The install then needs an SSH key. The password stays locked until you set one over ssh" >&2
 			fi
 			return 0
 		fi
 		if [ "${#pw}" -lt 8 ]; then
-			echo "  too short: use 8 characters or more, or leave it blank for none" >&2; continue
+			echo "  too short: use 8 characters or more, or leave it blank for an SSH key only" >&2; continue
 		fi
-		read -r -s -p "Root password again: " pw2; echo >&2
+		read -r -s -p "Root password again: " pw2 || return 1; echo >&2
 		if [ "$pw" != "$pw2" ]; then
 			echo "  the two entries differ, try again" >&2; continue
 		fi
@@ -104,8 +105,24 @@ _tcp_ask_root_password() {
 			echo "  the hash was not accepted, try again" >&2; continue
 		fi
 		pw= pw2=
-		echo "  this host has no tool to hash a password (openssl, mkpasswd or python3). Install one and run this again, or leave the answer blank" >&2
+		echo "  this host has no tool to hash a password (openssl, mkpasswd or python3). Install one and run this again, or leave the answer blank and give an SSH key" >&2
 	done
+}
+
+# tsx_config_has_root_login CONFIG: true when the panel.conf CONFIG has a root
+# password hash or an SSH key. The install stops without one of them.
+tsx_config_has_root_login() {
+	[ -n "${1:-}" ] && [ -f "$1" ] || return 1
+	local hash key
+	hash=$(TSX_CONF="$1" "$TSX_CONFIG_BIN" get ROOT_PASSWORD_HASH 2>/dev/null || true)
+	key=$(TSX_CONF="$1" "$TSX_CONFIG_BIN" get SSH_AUTHORIZED_KEY 2>/dev/null || true)
+	[ -n "$hash" ] || [ -n "$key" ]
+}
+
+# tsx_config_root_login_message: the text of the stop when there is neither.
+tsx_config_root_login_message() {
+	echo "No root password and no SSH public key. The install needs at least one of them, because a panel with no way to log in cannot be used."
+	echo "Give a password hash (ROOT_PASSWORD_HASH) or a public key (SSH_AUTHORIZED_KEY) in the panel.conf (installer/panel.conf.example), or answer the two prompts."
 }
 
 tsx_config_prompt() {
@@ -195,8 +212,16 @@ tsx_config_prompt() {
 	# --kernel of the installer (already required and validated). So panel.conf
 	# never disagrees with the kernel that --kernel installs.
 
-	_tcp_ask_root_password
-	_tcp_ask SSH_AUTHORIZED_KEY "SSH public key to add to root's authorized_keys (blank = none)"
+	# The install needs a root password or an SSH key. Ask again until it has
+	# one. Without a terminal (a script that feeds answers) there is no second
+	# round, and the function fails.
+	while :; do
+		_tcp_ask_root_password || return 1
+		_tcp_ask SSH_AUTHORIZED_KEY "SSH public key for root's authorized_keys (needed when there is no password)"
+		tsx_config_has_root_login "$OUTFILE" && break
+		tsx_config_root_login_message >&2
+		[ -t 0 ] || return 1
+	done
 
 	echo "== panel.conf built (secrets masked): ==" >&2
 	TSX_CONF="$OUTFILE" "$TSX_CONFIG_BIN" show >&2
@@ -211,10 +236,12 @@ tsx_config_print_root_login() {
 	key=$(TSX_CONF="$1" "$TSX_CONFIG_BIN" get SSH_AUTHORIZED_KEY 2>/dev/null || true)
 	if [ -n "$hash" ]; then
 		echo "== Root login: the password that you gave is set at the first boot of the panel." >&2
+		[ -z "$key" ] || echo "   ssh also accepts the SSH key that you gave." >&2
+	elif [ -n "$key" ]; then
+		echo "== Root login: no root password was set. ssh accepts the SSH key that you gave." >&2
+		echo "   The login on the panel screen and the serial port stays off. Log in over ssh and run passwd to open it." >&2
 	else
-		echo "== Root login: no root password was set. The first login on the panel console asks for a new one." >&2
-		if [ -n "$key" ]; then echo "   Until then, ssh accepts the SSH key that you gave." >&2
-		else echo "   Until then, ssh accepts no login at all, because no SSH key was given." >&2; fi
+		echo "== Root login: this install has no root password and no SSH key." >&2
 	fi
 }
 

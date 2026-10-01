@@ -12,7 +12,7 @@ OUTF=${1:-$HERE/../out/initramfs-switchroot-autoinstall.cpio.gz}
 mkdir -p "$(dirname "$OUTF")"; OD=$(cd "$(dirname "$OUTF")" && pwd); ON=$(basename "$OUTF")
 "$HERE/integrate.sh" --check | grep -q "MISSING or differs" && { echo "overlay not in sync: run initramfs/integrate.sh first"; exit 1; }
 ALPINE=${ALPINE:-v3.24}
-docker run --rm --platform linux/arm/v7 -v "$ROOTFS_DIR:/w:ro" -v "$OD:/o" -e ALPINE="$ALPINE" alpine:3.24 sh -euc "
+docker run --rm --platform linux/arm/v7 -v "$ROOTFS_DIR:/w:ro" -v "$OD:/o" -e ALPINE="$ALPINE" -e TSX_DEV_RESCUE_HASH="${TSX_DEV_RESCUE_HASH:-}" alpine:3.24 sh -euc "
 	printf 'https://dl-cdn.alpinelinux.org/alpine/%s/main\nhttps://dl-cdn.alpinelinux.org/alpine/%s/community\n' $ALPINE $ALPINE > /etc/apk/repositories
 	apk add -q --no-cache cpio mkpasswd >/dev/null
 	/w/initramfs/mkinitramfs-switchroot.sh /o/$ON /w/authorized_keys

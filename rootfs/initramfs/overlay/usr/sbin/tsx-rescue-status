@@ -29,6 +29,10 @@
 #   /run/rescue-reason        why the rescue started. The screen does not show it.
 #                             The shell prints it when it opens, and so does
 #                             `tsx-rescue status`.
+#   /run/tsx-rescue-login     panel|onetime|build|none: which login the rescue
+#                             accepts (tsx-rescue-login, run by rcS).
+#   /run/tsx-rescue-otp       the one-time password. Only this screen shows it.
+#                             It never goes to /dev/kmsg, the network or a log.
 #   /run/tsx-eth0-mac-src     uboot|random (rootfs/initramfs/overlay/etc/init.d/rcS).
 #                             Absent: rcS has not set the MAC yet ("starting").
 #   /etc/tsx/rescue-version   the version line of the rescue image (absent in the initramfs rescue)
@@ -158,8 +162,15 @@ frame_text() {
 	echo "kernel       : $kver"
 	echo "network      : eth0 ${ip:-$noaddr} ($method${mac:+, MAC $mac}${macsrc:+, $macsrc})"
 	tsx_board_rescue_extra
-	if [ -n "$ip" ]; then echo "repair shell : ssh root@$ip   (password: tsx)"
-	else echo "repair shell : ssh root@<ip once DHCP/static assigns one>  (password: tsx)"; fi
+	if [ -n "$ip" ]; then echo "repair shell : ssh root@$ip"
+	else echo "repair shell : ssh root@<ip once DHCP/static assigns one>"; fi
+	case $(cat "$RUN/tsx-rescue-login" 2>/dev/null) in
+	panel) echo "login        : the root password or SSH key of this panel";;
+	onetime) echo "login        : root, one-time password $(cat "$RUN/tsx-rescue-otp" 2>/dev/null)";;
+	build) echo "login        : root, the password of this test build";;
+	none) echo "login        : NONE. The rescue could not make a password";;
+	*) echo "login        : starting";;
+	esac
 	echo "----------------------------------------------------------------"
 	case $OP_KIND in
 	running)

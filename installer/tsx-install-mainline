@@ -59,6 +59,16 @@
 # it over with --wipe-data. The resulting file becomes /data/tsx/panel.conf on
 # the panel (installer/steps/tsx-rescue-install writes it onto tsxdata).
 #
+# ROOT LOGIN (docs/rootfs.md "Root login"): the install stops unless the
+# panel.conf has a root password hash (ROOT_PASSWORD_HASH) or an SSH public key
+# (SSH_AUTHORIZED_KEY). This holds for --config, for the prompts and for --yes.
+# With --yes and no --config, only a reinstall of a mainline panel passes, and
+# only when that panel's own panel.conf has one of them. With a key and no
+# password, root has a locked password: ssh takes the key. The login on the
+# panel screen opens after you set a password over ssh. A test build with
+# TSX_DEV_ROOT_HASH has its own password: give it in $TSX_MAINLINE_PW and the
+# check is skipped.
+#
 # PAYLOAD DIR: build it ahead of time (see installer/emmc/mk-tsxroot-emmc.sh,
 # installer/emmc/mk-v2-bundle.sh and installer/rescue-v2/mkrescue-v2.sh).
 #   rescue.img (+.sha256)          the v2 rescue image (golden slot / one-shot target)
@@ -95,8 +105,9 @@
 # the .puf download, and debugfs (e2fsprogs) only for the PSR file from it.
 # Without that download, a panel that has no DSP files gets no vendor speaker
 # tuning. The panel must be able to connect back to this
-# host (HTTP on ports 8079 and 8081). Panel logins: rescue root/tsx. The
-# installed system has no fixed root password (docs/rootfs.md "Root login"),
+# host (HTTP on ports 8079 and 8081). Rescue login: the root password or key of
+# the panel, or a one-time password that the rescue shows on the panel screen
+# (give it in $TSX_RESCUE_PW). The installed system has no fixed root password (docs/rootfs.md "Root login"),
 # so the script logs in to a running mainline panel with your ssh key. If the
 # panel has a root password, give it in $TSX_MAINLINE_PW (a test build with
 # TSX_DEV_ROOT_HASH=<hash of tsx>: TSX_MAINLINE_PW=tsx).
@@ -126,6 +137,7 @@ case "$TFA_SOURCE" in auto|panel|puf|none) ;; *) echo "--tfa-source must be auto
 case "$PSR_SOURCE" in auto|panel|puf|none) ;; *) echo "--psr-source must be auto, panel, puf, or none" >&2; exit 2;; esac
 [ -z "$CONFIG" ] || [ -f "$CONFIG" ] || { echo "tsx-install-mainline: --config file not found: $CONFIG" >&2; exit 2; }
 TSX_CONFIG_BIN=$(cd "$HERE/../rootfs/overlay/usr/local/sbin" && pwd -P)/tsx-config
+. "$HERE/lib/tsx-config-prompt.sh"   # the prompts and the root login check
 [ -n "$RESULTS" ] || RESULTS="$HERE/results/tsx-install-mainline-$(date +%Y%m%d-%H%M).txt"
 mkdir -p "$(dirname "$RESULTS")"
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$RESULTS" >&2; }
@@ -139,10 +151,27 @@ for f in "$RESCUE_IMG" "$FLAVOR_DIR/manifest" "$FLAVOR_DIR/root.img" "$FLAVOR_DI
 done
 (cd "$FLAVOR_DIR" && sha256sum -c --quiet SHA256SUMS) || die "$FLAVOR_DIR/SHA256SUMS mismatch"
 [ ! -f "$RESCUE_IMG.sha256" ] || { GOT=$(sha256sum < "$RESCUE_IMG" | cut -d' ' -f1); WANT=$(awk '{print $1}' "$RESCUE_IMG.sha256"); [ "$GOT" = "$WANT" ] || die "$RESCUE_IMG sha256 mismatch"; }
+# Root login (docs/rootfs.md "Root login"): the install stops unless it has a
+# root password hash or an SSH public key. A test build with its own fixed
+# password (TSX_DEV_ROOT_HASH) is the one exception: give its password in
+# $TSX_MAINLINE_PW and the check is skipped.
+root_login_stop() { die "$(tsx_config_root_login_message | tr '\n' ' ')"; }
+if [ -n "${TSX_MAINLINE_PW:-}" ]; then ROOT_LOGIN_CHECK=skip
+elif [ -n "$CONFIG" ]; then
+	tsx_config_has_root_login "$CONFIG" || root_login_stop
+	ROOT_LOGIN_CHECK=done
+else ROOT_LOGIN_CHECK=later
+fi
 log "== tsx-install-mainline v2: PANEL=$PANEL PAYLOAD=$PAYLOAD KERNEL=$KERNEL uart=$UART_OPT tfa-source=$TFA_SOURCE psr-source=$PSR_SOURCE dry-run=$DRYRUN"
 
 MPW=${TSX_MAINLINE_PW:-}
-RPW=tsx   # the rescue's documented default (docs/recovery.md); never overridden here
+# The rescue has no fixed password (docs/recovery.md "Rescue login"). It takes the
+# root password or key of the panel from /data. Our ssh key works for that. If you
+# gave the panel's password in $TSX_MAINLINE_PW, the rescue takes it too. Else the
+# rescue shows a one-time password on the panel screen: give it in $TSX_RESCUE_PW
+# (or type it when this script asks). A test rescue (TSX_DEV_RESCUE_HASH) uses
+# $TSX_RESCUE_PW as well. An empty $RPW means: use the ssh key.
+RPW=${TSX_RESCUE_PW:-${TSX_MAINLINE_PW:-}}
 # No fixed root password on the installed system: use $TSX_MAINLINE_PW when it
 # is set, else the ssh key (BatchMode: never ask for a password).
 MSSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8"
@@ -201,6 +230,10 @@ if [ "$KEEP_DATA" = 1 ]; then log "== /data (card p4 tsxdata): kept if it is a c
 elif [ "$KIND" = mainline ] || [ "$KIND" = rescue ]; then log "== /data (card p4 tsxdata): --wipe-data: formatted again, only panel.conf is carried over"
 fi
 
+# --yes with no --config has no prompts. Only a reinstall of a mainline panel can
+# still get a root login: from the panel.conf of that panel (checked below).
+if [ "$ROOT_LOGIN_CHECK" = later ] && [ "$YES" = 1 ] && [ "$KIND" != mainline ]; then root_login_stop; fi
+
 if [ "$DRYRUN" = 1 ] && [ "$KIND" = mainline ]; then
 	log "[dry-run] 1: skipped: the kiosk's own ssh (root/\$TSX_MAINLINE_PW) replaces Android root"
 	log "[dry-run] 2: record eth0 MAC over ssh. Copy rescue.img to the kiosk's /tmp over ssh (sha256 checked). Run lib/tsx-arm-from-mainline.sh --rescue there (p1:tsxboot.img <- rescue, rm p1:tsxboot.off, tsx_once=1 verified). The panel reboots"
@@ -255,10 +288,17 @@ elif [ "$YES" != 1 ]; then
 	fi
 	CONFIG=$(mktemp "$RESULTS.panel-conf.XXXXXX"); TMPFILES+=("$CONFIG")
 	. "$HERE/lib/tsx-config-prompt.sh"
-	tsx_config_prompt "$CONFIG" "$REINSTALL_DEFAULTS"
+	tsx_config_prompt "$CONFIG" "$REINSTALL_DEFAULTS" || root_login_stop
 	[ -z "$REINSTALL_DEFAULTS" ] || rm -f "$REINSTALL_DEFAULTS"
 elif [ "$KIND" = mainline ] && [ "$KEEP_DATA" = 1 ]; then
 	log "== panel configuration: --yes with no --config on a reinstall: the panel's own /data/tsx/panel.conf stays in place on the kept tsxdata"
+	if [ "$ROOT_LOGIN_CHECK" = later ]; then
+		# read it only to check the root login. The file stays on the panel.
+		CHK=$(mktemp "$RESULTS.panel-conf.XXXXXX"); TMPFILES+=("$CHK")
+		$MSSH 'cat /data/tsx/panel.conf 2>/dev/null' > "$CHK" 2>/dev/null || true
+		tsx_config_has_root_login "$CHK" || root_login_stop
+		rm -f "$CHK"
+	fi
 elif [ "$KIND" = mainline ]; then
 	# --wipe-data formats tsxdata again: carry the panel's own panel.conf over
 	CONFIG=$(mktemp "$RESULTS.panel-conf.XXXXXX"); TMPFILES+=("$CONFIG")
@@ -268,6 +308,7 @@ elif [ "$KIND" = mainline ]; then
 		rm -f "$CONFIG"; CONFIG=
 		log "== panel configuration: --yes with no --config, and the panel has no /data/tsx/panel.conf: no panel.conf will be written"
 	fi
+	if [ "$ROOT_LOGIN_CHECK" = later ]; then tsx_config_has_root_login "$CONFIG" || root_login_stop; fi
 else
 	log "== panel configuration: --yes with no --config: skipping prompts, keeping only --kiosk-url (no panel.conf will be written)"
 fi
@@ -359,12 +400,19 @@ fi
 
 # ------------------------------------------------------- step 3: discover --
 log "== step 3: find the rescue on the network"
+# A rescue that cannot read a login from /data shows a one-time password on the
+# panel screen. Ask for it when a person is here.
+if [ "$RESUME" != 1 ] && [ -z "$RPW" ] && [ "$KIND" != mainline ] && [ -t 0 ]; then
+	read -r -s -p "The rescue shows a password on the panel screen when it starts. Type it here, or press Enter to use your SSH key: " RPW || RPW=
+	echo >&2
+fi
 WSIP=$(WSIP_FOR "$PANEL"); [ -n "$WSIP" ] || die "no workstation IP towards $PANEL"
 if [ "$RESUME" = 1 ]; then RIP=$PANEL
-else RIP=$(wait_for_rescue "$PANEL" "$MAC" "$WSIP" "$RPW" "$RESCUE_WAIT_S") || die "could not find the rescue's IP within ${RESCUE_WAIT_S}s (MAC $MAC, ssh at $PANEL, sweep of ${PANEL%.*}.0/24 only when on-link)"
+else RIP=$(wait_for_rescue "$PANEL" "$MAC" "$WSIP" "$RPW" "$RESCUE_WAIT_S") || die "could not find the rescue's IP within ${RESCUE_WAIT_S}s (MAC $MAC, ssh at $PANEL, sweep of ${PANEL%.*}.0/24 only when on-link). If the panel screen shows a one-time password, run this command again with TSX_RESCUE_PW set to it"
 fi
 log "  rescue reachable at $RIP"
-RSSH="sshpass -p $RPW ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=6 root@$RIP"
+RESCUE_SSH_PW=$RPW
+RSSH="tsx_rescue_ssh_cur -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=6 root@$RIP"
 if [ "$KIND" = mainline ]; then
 	# Reinstall: the rescue that just booted (p1:tsxboot.img) also becomes the
 	# rescue in the golden slot. Later recovery (tsx-restore-factory,

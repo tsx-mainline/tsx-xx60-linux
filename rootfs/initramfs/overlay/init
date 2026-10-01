@@ -1,7 +1,7 @@
 #!/bin/sh
 # PID 1 of the xx60 switch_root initramfs.
 # It mounts the kiosk rootfs (default LABEL=tsxroot) and switch_roots into it.
-# It falls back to the rescue system (busybox init, DHCP, dropbear, root/tsx)
+# It falls back to the rescue system (busybox init, DHCP, dropbear)
 # when the rootfs is missing or broken, or when the user asks for rescue.
 #
 # Kernel cmdline:  tsx.root=LABEL=x|UUID=x|PARTUUID=x|/dev/x

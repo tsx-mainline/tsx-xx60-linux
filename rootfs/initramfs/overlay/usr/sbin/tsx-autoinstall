@@ -7,7 +7,7 @@
 # Exit 0 = nothing to do (the normal boot goes on). After a successful install
 # it reboots and does not return. Exit 1 = an install was requested but failed
 # (or waits for deploy.sh). /init then drops to the rescue system (DHCP,
-# dropbear root/tsx). The reason is on the screen and in /run/tsx-autoinstall.log.
+# dropbear). The reason is on the screen and in /run/tsx-autoinstall.log.
 #
 # Triggers (anything else, e.g. a random USB stick, is ignored):
 #   p1:tsxinst.cfg          written by tsx-android-install.sh (stage 1 on stock Android)

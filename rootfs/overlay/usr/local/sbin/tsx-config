@@ -670,6 +670,15 @@ apply() {
 			mkdir -p "$STATE" && (umask 077; printf '%s' "$hsum" > "$STATE/.root-hash-applied")
 		fi
 	fi
+	# An empty password field lets anyone in on the console. Lock it. The
+	# installer never leaves a panel in this state, so this guards a broken image.
+	if [ -r "$PREFIX/etc/shadow" ] && [ -z "$(awk -F: '$1=="root"{print $2}' "$PREFIX/etc/shadow")" ] \
+		&& awk -F: '$1=="root"{f=1} END{exit !f}' "$PREFIX/etc/shadow"; then
+		tmp="$PREFIX/etc/shadow.tmp.$$"
+		(umask 077; awk -F: 'BEGIN{OFS=":"} { if ($1=="root") $2="*"; print }' "$PREFIX/etc/shadow" > "$tmp") \
+			&& cat "$tmp" > "$PREFIX/etc/shadow" && rm -f "$tmp" \
+			&& log "root password field was empty: locked it"
+	fi
 
 	key=$(cfg_get SSH_AUTHORIZED_KEY) || key=
 	if [ -n "$key" ]; then

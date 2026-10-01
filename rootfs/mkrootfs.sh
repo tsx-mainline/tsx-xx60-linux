@@ -322,18 +322,18 @@ grep -q '^PermitRootLogin' /etc/ssh/sshd_config || echo 'PermitRootLogin yes' >>
 rm -f /etc/fw_env.config
 CH
 # Root password (docs/rootfs.md "Root login"). A public image has none: the
-# field in /etc/shadow stays empty. The installer asks for a password and puts
-# its hash in panel.conf (ROOT_PASSWORD_HASH), and the first boot applies it
-# (tsx-config apply). With no password at all, the first login on the panel
-# console asks for one, and ssh takes keys only until then (tsx-rootpw).
+# field in /etc/shadow is locked ("*"), never empty. The installer stops unless
+# it gets a root password or an SSH key. It puts the hash of the password and
+# the key in panel.conf, and the first boot applies them (tsx-config apply).
+# With a key only, the password stays locked until a person sets one over ssh.
 # Only a test build sets a fixed password: TSX_DEV_ROOT_HASH, a crypt(3) hash.
 if [ -n "${TSX_DEV_ROOT_HASH:-}" ]; then
 	case "$TSX_DEV_ROOT_HASH" in \$6\$*) ;; *) echo "TSX_DEV_ROOT_HASH is not a sha-512 crypt hash (\$6\$...)"; exit 1;; esac
 	sed -i "s|^root:[^:]*:|root:$TSX_DEV_ROOT_HASH:|" $R/etc/shadow
 	ROOT_PW_RESULT="TSX_DEV_ROOT_HASH (test build, do not publish)"
 else
-	sed -i "s|^root:[^:]*:|root::|" $R/etc/shadow
-	ROOT_PW_RESULT="none (set at install or at the first console login)"
+	sed -i "s|^root:[^:]*:|root:*:|" $R/etc/shadow
+	ROOT_PW_RESULT="none (locked until the installer or ssh sets one)"
 fi
 echo "root password: $ROOT_PW_RESULT"
 if [ -s "$HERE/authorized_keys" ]; then

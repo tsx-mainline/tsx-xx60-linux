@@ -122,13 +122,15 @@ KERNEL_FLAVOR=lts
 # the light. Lux = sensor lux x ALS_SCALE (0.01-1000). Unset = 1.
 #ALS_SCALE=
 
-# Root login. A public image has no root password. ROOT_PASSWORD_HASH is a crypt(3)
-# hash (e.g. `openssl passwd -6`, or `mkpasswd -m sha-512`), never a plain password.
-# The panel applies it at the first boot, and a hash that it has applied once is not
-# applied again, so a password that someone sets later on the panel stays. With no
-# ROOT_PASSWORD_HASH, the first login on the console asks for a password, and ssh
-# accepts keys only until then. SSH_AUTHORIZED_KEY is one
+# Root login. A public image has no root password, and the installer stops unless this
+# file has ROOT_PASSWORD_HASH or SSH_AUTHORIZED_KEY (or both). ROOT_PASSWORD_HASH is a
+# crypt(3) hash (e.g. `openssl passwd -6`, or `mkpasswd -m sha-512`), never a plain
+# password. The panel applies it at the first boot, and a hash that it has applied once
+# is not applied again, so a password that someone sets later on the panel stays.
+# With a key and no hash, the root password is locked: ssh takes the key, and the login
+# on the panel screen opens after you run passwd over ssh. SSH_AUTHORIZED_KEY is one
 # "ssh-ed25519 AAAA... comment" line. Setting it only ADDS a key. panel.conf
-# never removes the existing keys on the panel.
+# never removes the existing keys on the panel. The rescue system uses the same two
+# values (docs/recovery.md).
 #ROOT_PASSWORD_HASH=
 #SSH_AUTHORIZED_KEY=

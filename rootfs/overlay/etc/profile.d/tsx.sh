@@ -7,10 +7,5 @@ case $- in *i*)
 	# profile shows this in its own banner (tsx-banner).
 	if [ "$(id -u)" = 0 ] && [ -x /usr/local/bin/tsx-rootpw ]; then
 		[ "$(cat /etc/tsx/profile 2>/dev/null)" = console ] || { /usr/local/bin/tsx-rootpw note; echo; }
-		# With no password yet, a login on a text console (the panel screen, the
-		# serial port) must choose one. A login over ssh is not asked.
-		case $(tty 2>/dev/null) in
-		/dev/tty*) /usr/local/bin/tsx-rootpw login || exit 1;;
-		esac
 	fi;;
 esac

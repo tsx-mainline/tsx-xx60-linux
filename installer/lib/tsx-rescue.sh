@@ -249,11 +249,24 @@ android_went_down() {
 	return 0
 }
 
+# tsx_rescue_ssh PW ARGS...: ssh to the rescue. The rescue has no fixed password:
+# it takes the root password or the SSH key of the panel, or a one-time password
+# that only the panel screen shows (docs/recovery.md "Rescue login"). With a
+# PW, the call uses it (sshpass). With no PW, it uses your SSH key and never
+# asks for a password.
+tsx_rescue_ssh() {
+	local pw=$1; shift
+	if [ -n "$pw" ]; then SSHPASS=$pw sshpass -e ssh "$@"; else ssh -o BatchMode=yes "$@"; fi
+}
+# tsx_rescue_ssh_cur ARGS...: the same, with the password in $RESCUE_SSH_PW. A
+# command string that holds this function name keeps the password out of it.
+tsx_rescue_ssh_cur() { tsx_rescue_ssh "${RESCUE_SSH_PW:-}" "$@"; }
+
 # ssh_test_rescue HOST PW: true if HOST answers ssh as the rescue. If HOST runs
 # the Crestron sshd, the function does not try a login (see is_crestron_sshd).
 ssh_test_rescue() {
 	is_crestron_sshd "$1" && return 1
-	sshpass -p "$2" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3 \
+	tsx_rescue_ssh "$2" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3 \
 		"root@$1" 'test -f /etc/tsx/rescue-image' >/dev/null 2>&1
 }
 
@@ -278,7 +291,7 @@ find_rescue_by_env() {
 	local mac=$1 prefix=$2 pw=$3 ip e
 	for ip in $(ip neigh | awk -v p="$prefix." 'index($1, p) == 1 && $0 ~ /lladdr/ {print $1}'); do
 		case "$(timeout 2 bash -c "exec 3<>/dev/tcp/$ip/22 && head -c 64 <&3" 2>/dev/null | tr -d '\r\0' | head -n 1)" in *dropbear*) ;; *) continue;; esac
-		e=$(sshpass -p "$pw" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3 "root@$ip" \
+		e=$(tsx_rescue_ssh "$pw" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3 "root@$ip" \
 			'test -f /etc/tsx/rescue-image && dd if=/dev/mmcblk0 bs=65536 skip=16 count=1 2>/dev/null | tr "\0" "\n" | sed -n "s/^ethaddr=//p"' 2>/dev/null | head -n 1)
 		[ -n "$e" ] && [ "$(echo "$e" | tr 'A-F' 'a-f')" = "$(echo "$mac" | tr 'A-F' 'a-f')" ] && { echo "$ip"; return 0; }
 	done

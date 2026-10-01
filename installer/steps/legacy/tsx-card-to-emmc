@@ -19,6 +19,8 @@
 #     log check, 30 s CPU sample
 #   tsx-card-to-emmc PANEL_IP [--img FILE] [--from-step N] [--to-step N] [--wake-local]
 #                    [--results FILE] [--dry-run]
+#   Login: your SSH key, or the root password of the panel in $TSX_MAINLINE_PW. There
+#           is no fixed password. With neither, the script stops before it changes anything.
 #   --img   the eMMC boot image (default emmc/out/tsxboot-emmc.img). Its sha256 comes
 #           from FILE.sha256 if that exists (as the default's does), else the script computes it.
 set -euo pipefail
@@ -30,14 +32,26 @@ SERLOG=${TSX_SERIAL_LOG:-$WORK/../tools/bench/boot-2200.log}
 ser_mark() { if [ -f "$SERLOG" ]; then wc -l < "$SERLOG"; else echo 0; fi; }
 ser_since() { [ -f "$SERLOG" ] || return 0; tail -n +$(($1 + 1)) "$SERLOG" | tr -d '\0'; }
 PANEL= FROM=1 TO=7 RESULTS= DRY=0 WAKE=0
-while [ $# -gt 0 ]; do case "$1" in --from-step) FROM=$2; shift 2;; --to-step) TO=$2; shift 2;; --results) RESULTS=$2; shift 2;; --dry-run) DRY=1; shift;; --wake-local) WAKE=1; shift;; --img) IMG=$2; shift 2;; -h|--help) sed -n '2,23p' "$0"; exit 0;; --*) echo "unknown $1" >&2; exit 2;; *) PANEL=$1; shift;; esac; done
-[ -n "$PANEL" ] || { sed -n '2,23p' "$0" >&2; exit 2; }
+while [ $# -gt 0 ]; do case "$1" in --from-step) FROM=$2; shift 2;; --to-step) TO=$2; shift 2;; --results) RESULTS=$2; shift 2;; --dry-run) DRY=1; shift;; --wake-local) WAKE=1; shift;; --img) IMG=$2; shift 2;; -h|--help) sed -n '2,25p' "$0"; exit 0;; --*) echo "unknown $1" >&2; exit 2;; *) PANEL=$1; shift;; esac; done
+[ -n "$PANEL" ] || { sed -n '2,25p' "$0" >&2; exit 2; }
 [ -n "$RESULTS" ] || RESULTS=$HERE/results/tsx-card-to-emmc-$(date +%Y%m%d-%H%M).txt; mkdir -p "$(dirname "$RESULTS")"
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$RESULTS" >&2; }
 logblock() { log "-- $1 --"; printf '%s\n' "$2" | while IFS= read -r l; do log "  $l"; done; log "-- end $1 --"; }
 die() { log "ERROR: $*"; exit 1; }
-SSH="sshpass -p tsx ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$PANEL"
-SCP="sshpass -p tsx scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+# No fixed root password (docs/rootfs.md "Root login"). The panel has the login
+# that its install gave it: the root password hash or the SSH key of its
+# panel.conf. This script uses your SSH key. If the panel has a root password
+# (or a test build with TSX_DEV_ROOT_HASH), give it in $TSX_MAINLINE_PW. With
+# neither, the script stops before it changes anything.
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+if [ -n "${TSX_MAINLINE_PW:-}" ]; then
+	export SSHPASS=$TSX_MAINLINE_PW
+	SSH="sshpass -e ssh $SSH_OPTS -o ConnectTimeout=8 root@$PANEL"
+	SCP="sshpass -e scp $SSH_OPTS"
+else
+	SSH="ssh -o BatchMode=yes $SSH_OPTS -o ConnectTimeout=8 root@$PANEL"
+	SCP="scp -o BatchMode=yes $SSH_OPTS"
+fi
 root_dev() { $SSH "awk '\$2==\"/\"{print \$1}' /proc/mounts" 2>/dev/null | tail -n 1; }
 wait_ssh() { local w=0; log "  waiting for ssh root@$PANEL"; sleep 20; until $SSH true >/dev/null 2>&1; do sleep 5; w=$((w + 5)); [ $((w % 30)) -eq 0 ] && log "  still waiting for ssh root@$PANEL: ${w}/${1:-240} s"; [ $w -lt "${1:-240}" ] || die "ssh did not come back in ${1:-240}s"; done; log "  ssh up after ~$((w + 20)) s"; }
 # Stream the output of a long remote command live (through log). The
@@ -56,6 +70,9 @@ step() { [ "$FROM" -le "$1" ] && [ "$TO" -ge "$1" ]; }
 [ -f "$IMG" ] && [ -f "$MIG" ] && [ -f "$P1U" ] || die "missing inputs ($IMG, $MIG, $P1U)"
 if [ -f "$IMG.sha256" ]; then SHA=$(awk '{print $1}' "$IMG.sha256")
 else SHA=$(sha256sum < "$IMG" | cut -d' ' -f1); log "  no $IMG.sha256: computed sha256 $SHA"
+fi
+if [ "$DRY" != 1 ] && [ "$FROM" -le 1 ] && ! $SSH true >/dev/null 2>&1; then
+	die "no login to root@$PANEL. This panel has no fixed password. Use an ssh key that is in its panel.conf (SSH_AUTHORIZED_KEY), or give its root password in TSX_MAINLINE_PW. The script changed nothing"
 fi
 log "== tsx-card-to-emmc: PANEL=$PANEL image $(basename "$IMG") $SHA from=$FROM to=$TO dry=$DRY"
 [ "$(sha256sum < "$IMG" | cut -d' ' -f1)" = "$SHA" ] || die "$IMG does not match its .sha256"

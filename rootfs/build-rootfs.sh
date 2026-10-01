@@ -35,9 +35,12 @@
 # profile (docs/rootfs.md "Profiles").
 # TSX_DEV_ROOT_HASH (optional) is a crypt(3) hash for the root password of the
 # image, for our own test builds only. Without it, the image has no root
-# password and the first login on the panel console sets one (docs/rootfs.md
+# password: the field is locked, and the installer sets the login (docs/rootfs.md
 # "Root login"). A public image never uses it. Example:
 #   TSX_DEV_ROOT_HASH=$(openssl passwd -6 mypassword) ./build-rootfs.sh rootfs
+# TSX_DEV_RESCUE_HASH (optional) does the same for the root password of the
+# rescue initramfs (./build-rootfs.sh initramfs). Without it, the rescue has no
+# fixed password (docs/recovery.md).
 # CHROMIUM_ES2_PATCH (default 1) patches the Chromium ES3 to ES2 fallback gate
 # (src/chromium-es2/). 0 gives the stock binary. TSX_APK_LOCAL disables it.
 # This project's apk repository is tsx-aports (docs/updates.md).
@@ -125,7 +128,7 @@ rootfs() {
 
 initramfs() {
 	need_binfmt
-	docker run --rm --platform linux/arm/v7 -v "$HERE:/w" -e ALPINE="$ALPINE" "$IMAGE" sh -c "
+	docker run --rm --platform linux/arm/v7 -v "$HERE:/w" -e ALPINE="$ALPINE" -e TSX_DEV_RESCUE_HASH="${TSX_DEV_RESCUE_HASH:-}" "$IMAGE" sh -c "
 		printf 'https://dl-cdn.alpinelinux.org/alpine/%s/main\nhttps://dl-cdn.alpinelinux.org/alpine/%s/community\n' $ALPINE $ALPINE > /etc/apk/repositories
 		apk add -q --no-cache cpio mkpasswd >/dev/null
 		/w/initramfs/mkinitramfs-switchroot.sh /w/out/initramfs-switchroot.cpio.gz /w/authorized_keys

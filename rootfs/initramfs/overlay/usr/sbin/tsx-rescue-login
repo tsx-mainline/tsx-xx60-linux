@@ -1,0 +1,104 @@
+#!/bin/sh
+# tsx-rescue-login: choose who can log in to the rescue system. /etc/init.d/rcS
+# runs it once, before it starts dropbear. The rescue has no fixed password.
+#
+#   1. The panel's own login. The script reads panel.conf on the tsxdata
+#      file system (LABEL=tsxdata, read only) and uses ROOT_PASSWORD_HASH
+#      and SSH_AUTHORIZED_KEY, the two values that the installer writes
+#      (docs/rootfs.md "Root login"). The hash becomes the password of root
+#      in /etc/shadow. The key becomes /root/.ssh/authorized_keys.
+#   2. A one-time password. If /data cannot be read, or panel.conf has
+#      neither value, the script makes a random password for this boot. It
+#      writes the password to $RUN/tsx-rescue-otp (mode 600, in RAM) only.
+#      The rescue screen (tsx-rescue-status) shows it on the panel. Nothing
+#      sends it to the network, to the kernel log or to a file on disk, so
+#      only a person at the panel can log in. Run the script again to get a
+#      new one.
+#   3. A test build. If the image build put a password hash into /etc/shadow
+#      (TSX_DEV_RESCUE_HASH, docs/recovery.md "Test builds"), the script
+#      leaves it as it is. A public image never has one.
+#
+# The script writes the case to $RUN/tsx-rescue-login: panel, onetime or build.
+# Test hooks: TSX_RESCUE_SHADOW TSX_RESCUE_ROOT TSX_RESCUE_RUN TSX_RESCUE_DATA
+# (a directory that already holds panel.conf: nothing is mounted) TSX_RESCUE_WAIT
+# (seconds to wait for tsxdata, default 10) TSX_RESCUE_CHPASSWD TSX_RESCUE_URANDOM
+# TSX_RESCUE_FINDFS TSX_RESCUE_MOUNT TSX_RESCUE_UMOUNT.
+set -u
+SHADOW=${TSX_RESCUE_SHADOW:-/etc/shadow}
+ROOTHOME=${TSX_RESCUE_ROOT:-/root}
+RUN=${TSX_RESCUE_RUN:-/run}
+WAIT=${TSX_RESCUE_WAIT:-10}
+CHPASSWD=${TSX_RESCUE_CHPASSWD:-chpasswd -c sha512}
+URANDOM=${TSX_RESCUE_URANDOM:-/dev/urandom}
+FINDFS=${TSX_RESCUE_FINDFS:-findfs}
+MOUNT=${TSX_RESCUE_MOUNT:-mount}
+UMOUNT=${TSX_RESCUE_UMOUNT:-umount}
+umask 077
+
+root_field() { awk -F: '$1 == "root" { print $2 }' "$SHADOW" 2>/dev/null; }
+set_root_field() {   # set_root_field VALUE
+	tmp=$SHADOW.tmp.$$
+	awk -F: -v h="$1" 'BEGIN { OFS = ":" } { if ($1 == "root") $2 = h; print }' "$SHADOW" > "$tmp" \
+		&& cat "$tmp" > "$SHADOW"; rc=$?
+	rm -f "$tmp"; return $rc
+}
+# conf_get FILE KEY: the last KEY=value line, without surrounding quotes
+conf_get() {
+	sed -n "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*//p" "$1" 2>/dev/null | tail -n 1 \
+		| sed -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
+case_is() { echo "$1" > "$RUN/tsx-rescue-login"; }
+
+# 3. a test build put a hash into the image
+case $(root_field) in
+\$*) case_is build; exit 0;;
+esac
+rm -f "$RUN/tsx-rescue-otp"
+
+# 1. the panel's login from /data
+hash= key= mounted=
+conf=
+if [ -n "${TSX_RESCUE_DATA:-}" ]; then
+	conf=$TSX_RESCUE_DATA/panel.conf
+else
+	dev= n=0
+	while :; do
+		dev=$($FINDFS LABEL=tsxdata 2>/dev/null) && [ -n "$dev" ] && break
+		dev=; [ "$n" -ge "$WAIT" ] && break
+		n=$((n + 1)); sleep 1
+	done
+	if [ -n "$dev" ]; then
+		mkdir -p "$RUN/tsx-data"
+		# noload: read the file system without a journal replay, so ro works on a dirty one
+		if $MOUNT -t ext4 -o ro,noload "$dev" "$RUN/tsx-data" 2>/dev/null; then
+			mounted=1; conf=$RUN/tsx-data/tsx/panel.conf
+		fi
+	fi
+fi
+if [ -n "$conf" ] && [ -r "$conf" ]; then
+	h=$(conf_get "$conf" ROOT_PASSWORD_HASH)
+	case $h in \$[0-9a-z]*\$*) printf '%s' "$h" | grep -Eq '^\$[0-9A-Za-z$./]{10,}$' && hash=$h;; esac
+	k=$(conf_get "$conf" SSH_AUTHORIZED_KEY)
+	case $k in ssh-*|ecdsa-*|sk-*) key=$k;; esac
+fi
+[ -z "$mounted" ] || $UMOUNT "$RUN/tsx-data" 2>/dev/null
+
+if [ -n "$hash" ] || [ -n "$key" ]; then
+	if [ -n "$hash" ]; then set_root_field "$hash"; else set_root_field '*'; fi
+	if [ -n "$key" ]; then
+		mkdir -p "$ROOTHOME/.ssh"; chmod 700 "$ROOTHOME/.ssh"
+		grep -qxF "$key" "$ROOTHOME/.ssh/authorized_keys" 2>/dev/null || printf '%s\n' "$key" >> "$ROOTHOME/.ssh/authorized_keys"
+		chmod 600 "$ROOTHOME/.ssh/authorized_keys"
+	fi
+	case_is panel
+	exit 0
+fi
+
+# 2. a one-time password, shown on the panel screen only
+otp=$(tr -dc 'abcdefghjkmnpqrstuvwxyz23456789' < "$URANDOM" | head -c 10)
+if [ "${#otp}" -lt 10 ] || ! { printf 'root:%s\n' "$otp" | $CHPASSWD >/dev/null 2>&1; }; then
+	# no password at all is better than a weak one
+	set_root_field '*'; case_is none; exit 1
+fi
+printf '%s\n' "$otp" > "$RUN/tsx-rescue-otp"; chmod 600 "$RUN/tsx-rescue-otp"
+case_is onetime

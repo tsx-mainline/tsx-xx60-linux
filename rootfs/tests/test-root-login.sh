@@ -4,9 +4,10 @@
 #   - the image build writes no password hash, unless TSX_DEV_ROOT_HASH is set
 #   - first boot: tsx-config apply puts ROOT_PASSWORD_HASH and the SSH key in
 #     place, and a password that a person sets later survives the next boot
-#   - no password (expired state): tsx-rootpw, the console login that forces a
-#     new password, ssh that takes keys only, and the banner that says which
-#     case applies
+#   - no password (key only): the root field stays locked, never empty,
+#     tsx-rootpw, and the banner that says which case applies (password set,
+#     key only, nothing at all)
+#   - the console login never asks for a new password (no empty-password state)
 # The installer prompt (with and without a password) is in
 # installer/tests/test-install-mainline-config.sh.
 set -u
@@ -36,11 +37,11 @@ grep -q 'mkpasswd -m sha-512 -s' "$MK" && bad "mkrootfs.sh still makes a hash of
 # run the password block of mkrootfs.sh on a made-up shadow file
 sed -n '/^if \[ -n "\${TSX_DEV_ROOT_HASH:-}" \]; then$/,/^echo "root password: /p' "$MK" > "$T/block.sh"
 [ -s "$T/block.sh" ] && ok "found the password block of mkrootfs.sh" || bad "no password block in mkrootfs.sh"
-mk_shadow() { mkdir -p "$T/img/etc"; printf 'root:*::0:::::\nbin:!::0:::::\n' > "$T/img/etc/shadow"; }
+mk_shadow() { mkdir -p "$T/img/etc"; printf 'root::0:::::\nbin:!::0:::::\n' > "$T/img/etc/shadow"; }
 mk_shadow
 out=$(R="$T/img" TSX_DEV_ROOT_HASH= sh "$T/block.sh" 2>&1)
-eq "$(root_field "$T/img/etc/shadow")" "" "default build: the root field of /etc/shadow is empty"
-eq "$(sed -n 1p "$T/img/etc/shadow")" "root:::0:::::" "default build: the other fields of the line stay"
+eq "$(root_field "$T/img/etc/shadow")" "*" "default build: the root field of /etc/shadow is locked (*), not empty"
+eq "$(sed -n 1p "$T/img/etc/shadow")" "root:*:0:::::" "default build: the other fields of the line stay"
 case "$out" in *none*) ok "the build log says that there is no root password";; *) bad "build log: $out";; esac
 mk_shadow
 out=$(R="$T/img" TSX_DEV_ROOT_HASH="$HASH" sh "$T/block.sh" 2>&1)
@@ -53,14 +54,14 @@ grep -q TSX_DEV_ROOT_HASH "$HERE/../tools/build/remote-build.sh" && ok "remote-b
 
 echo "== first boot: tsx-config apply =="
 CFG=$T/panel.conf; FX=$T/fx; mkdir -p "$FX/etc" "$FX/root" "$FX/var/lib/kiosk"
-reset_fx() { rm -rf "$FX/var/lib/tsx" "$FX/root/.ssh"; printf 'root::19000:0:99999:7:::\nbin:!:19000:0:99999:7:::\n' > "$FX/etc/shadow"; }
+reset_fx() { rm -rf "$FX/var/lib/tsx" "$FX/root/.ssh"; printf 'root:*:19000:0:99999:7:::\nbin:!:19000:0:99999:7:::\n' > "$FX/etc/shadow"; }
 apply_() { env TSX_CONF="$CFG" TSX_RUN="$FX/run" TSX_STATE_DIR="$FX/var/lib/tsx" TSX_APPLY_PREFIX="$FX" TSX_APPLY_ALLOW_NONROOT=1 busybox sh "$CONFIG" apply >/dev/null 2>&1; }
 set_() { TSX_CONF="$CFG" busybox sh "$CONFIG" set "$@" >/dev/null; }
 unset_() { TSX_CONF="$CFG" busybox sh "$CONFIG" unset "$@" >/dev/null; }
 KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test@host'
 reset_fx; : > "$CFG"
 apply_
-eq "$(root_field "$FX/etc/shadow")" "" "no ROOT_PASSWORD_HASH: the field stays empty (the expired state)"
+eq "$(root_field "$FX/etc/shadow")" "*" "no ROOT_PASSWORD_HASH: the field stays locked"
 [ ! -e "$FX/root/.ssh/authorized_keys" ] && ok "no key in panel.conf: no authorized_keys" || bad "authorized_keys without a key"
 set_ ROOT_PASSWORD_HASH "$HASH"; set_ SSH_AUTHORIZED_KEY "$KEY"
 apply_
@@ -76,82 +77,60 @@ eq "$(root_field "$FX/etc/shadow")" "$cur" "a password set on the console surviv
 set_ ROOT_PASSWORD_HASH "$HASH2"; apply_
 eq "$(root_field "$FX/etc/shadow")" "$HASH2" "a changed ROOT_PASSWORD_HASH is applied"
 # a reinstall: the same panel.conf on /data, a new image with an empty field
-printf 'root::19000:0:99999:7:::\nbin:!:19000:0:99999:7:::\n' > "$FX/etc/shadow"; rm -rf "$FX/root/.ssh"; apply_
-eq "$(root_field "$FX/etc/shadow")" "$HASH2" "reinstall: the hash is applied again to the empty field"
+printf 'root:*:19000:0:99999:7:::\nbin:!:19000:0:99999:7:::\n' > "$FX/etc/shadow"; rm -rf "$FX/root/.ssh"; apply_
+eq "$(root_field "$FX/etc/shadow")" "$HASH2" "reinstall: the hash is applied again to the locked field"
 grep -qxF "$KEY" "$FX/root/.ssh/authorized_keys" 2>/dev/null && ok "reinstall: the key is applied again" || bad "reinstall: no key"
 # a locked field (a build of another kind)
 printf 'root:*::0:::::\n' > "$FX/etc/shadow"; apply_
 eq "$(root_field "$FX/etc/shadow")" "$HASH2" "a locked field gets the hash too"
-unset_ ROOT_PASSWORD_HASH; unset_ SSH_AUTHORIZED_KEY
+# key only: the password stays locked, the key is in place
+unset_ ROOT_PASSWORD_HASH; reset_fx; apply_
+eq "$(root_field "$FX/etc/shadow")" "*" "key only: the root password stays locked"
+grep -qxF "$KEY" "$FX/root/.ssh/authorized_keys" 2>/dev/null && ok "key only: ssh gets the key" || bad "key only: no key"
+# an empty field (a broken image) is locked, never left open
+printf 'root::19000:0:99999:7:::\nbin:!:19000:0:99999:7:::\n' > "$FX/etc/shadow"; apply_
+eq "$(root_field "$FX/etc/shadow")" "*" "an empty root field is locked at the first boot"
+eq "$(sed -n '2p' "$FX/etc/shadow")" "bin:!:19000:0:99999:7:::" "the lock leaves the other accounts alone"
+unset_ SSH_AUTHORIZED_KEY
 
 echo "== no password: tsx-rootpw =="
-SH=$T/shadow
-rp() { env TSX_SHADOW_FILE="$SH" TSX_PASSWD_BIN="${PASSWD_BIN:-$T/passwd-ok}" busybox sh "$RPW" "$@"; }
-printf 'root::19000:0:::::\n' > "$SH";             eq "$(rp state)" "none" "empty field: state none"
+SH=$T/shadow AK=$T/authorized_keys
+rp() { env TSX_SHADOW_FILE="$SH" TSX_AUTH_KEYS_FILE="$AK" busybox sh "$RPW" "$@"; }
+printf 'root::19000:0:::::\n' > "$SH";             eq "$(rp state)" "empty" "empty field: state empty (an error state)"
 printf 'root:!:19000:0:::::\n' > "$SH";            eq "$(rp state)" "locked" "field !: state locked"
 printf 'root:*::0:::::\n' > "$SH";                 eq "$(rp state)" "locked" "field *: state locked"
 printf 'root:%s:19000:0:::::\n' "$HASH" > "$SH";   eq "$(rp state)" "set" "a hash: state set"
 printf 'bin:!:19000:0:::::\n' > "$SH";             eq "$(rp state)" "locked" "no root line: not a usable password"
 eq "$(env TSX_SHADOW_FILE="$T/none" busybox sh "$RPW" state)" "" "a shadow file that cannot be read: no answer (not root)"
-printf 'root::19000:0:::::\n' > "$SH"
-rp note | grep -q 'no password yet' && rp note | grep -q 'keys only' && ok "note (none): says no password yet and keys only" || bad "note (none) wrong"
-printf 'root:%s:19000:0:::::\n' "$HASH" > "$SH"; rp note | grep -q 'password is set' && ok "note (set)" || bad "note (set) wrong"
-printf 'root:!:19000:0:::::\n' > "$SH"; rp note | grep -q 'password login is off' && ok "note (locked)" || bad "note (locked) wrong"
-# login: a fake passwd that writes a hash into the shadow file, one that does nothing
-printf '#!/bin/sh\nsed -i "s|^root:[^:]*:|root:\\$6\\$new\\$typedvaluevaluevalue:|" "%s"\nexit 0\n' "$SH" > "$T/passwd-ok"
-printf '#!/bin/sh\necho x >> "%s/tries"\nexit 1\n' "$T" > "$T/passwd-fail"
-chmod 755 "$T/passwd-ok" "$T/passwd-fail"
-printf 'root::19000:0:::::\n' > "$SH"
-rp login >/dev/null 2>&1 && ok "login with no password: passwd runs and the login goes on" || bad "login failed although passwd set a password"
-eq "$(rp state)" "set" "after the login, a password is set"
-rp login >/dev/null 2>&1 && ok "login with a password: nothing to ask" || bad "login asked although a password is set"
-printf 'root::19000:0:::::\n' > "$SH"; rm -f "$T/tries"
-PASSWD_BIN=$T/passwd-fail rp login >/dev/null 2>&1 && bad "login went on with no password set" || ok "login with no password after 3 failed tries: the login ends"
-eq "$(wc -l < "$T/tries" | tr -d ' ')" "3" "passwd was tried 3 times"
-out=$(PASSWD_BIN=$T/passwd-fail rp login 2>&1); case "$out" in *"Choose one now"*) ok "login tells the person what to do";; *) bad "login text: $out";; esac
+rp login >/dev/null 2>&1 && bad "tsx-rootpw still has a login mode" || ok "tsx-rootpw has no login mode (no forced password change)"
+grep -q 'passwd root\|PASSWD' "$RPW" && bad "tsx-rootpw still calls passwd" || ok "tsx-rootpw never runs passwd"
+echo "$KEY" > "$AK"
+printf 'root:*::0:::::\n' > "$SH"
+rp note | grep -q 'no password is set' && rp note | grep -q 'over SSH with your key' && ok "note (key only): says no password, log in over SSH with the key" || bad "note (key only) wrong"
+printf 'root:%s:19000:0:::::\n' "$HASH" > "$SH"; rp note | grep -q 'password is set' && ok "note (password set)" || bad "note (set) wrong"
+: > "$AK"; printf 'root:*::0:::::\n' > "$SH"
+rp note | grep -q 'Nobody can log in' && ok "note (locked, no key): says nobody can log in" || bad "note (no key) wrong"
+printf 'root::19000:0:::::\n' > "$SH"; rp note | grep -q 'WARNING' && ok "note (empty field): warns" || bad "note (empty) wrong"
 
-echo "== /etc/profile.d/tsx.sh: the console login that forces a new password =="
-# a copy that calls the fake tsx-rootpw, with fake id and tty
-mkdir -p "$T/fb"
-# (a busybox ash may run id and tty as built-in applets, so the copy reads
-# the user and the terminal from variables instead)
-sed "s|/usr/local/bin/tsx-rootpw|$T/fb/tsx-rootpw|g; s|/etc/tsx/profile|$T/profile|g; s|/etc/tsx/build-id|$T/build-id|g; s|\$(id -u)|\$FAKE_UID|g; s|\$(tty 2>/dev/null)|\$FAKE_TTY|g" "$PROF" > "$T/profile.d.sh"
-grep -q 'FAKE_UID' "$T/profile.d.sh" && grep -q 'FAKE_TTY' "$T/profile.d.sh" && ok "the test copy of tsx.sh reads the fake user and terminal" || bad "the copy of tsx.sh was not prepared"
-cat > "$T/fb/tsx-rootpw" <<'FAKE'
-#!/bin/sh
-case "$1" in
-note) echo "NOTE-LINE";;
-login) echo login >> "$LOGFILE"; exit "${LOGIN_RC:-0}";;
-esac
-FAKE
-chmod 755 "$T/fb/tsx-rootpw"
-# the file only acts in an interactive shell: run it with -i
-prof_i() { printf '%s\n' "$1" > "$T/profile"; rm -f "$T/log"
-	env PATH="$T/fb:$PATH" LOGFILE="$T/log" FAKE_TTY="$2" FAKE_UID="$3" LOGIN_RC="$4" busybox sh -i -c ". $T/profile.d.sh; echo REACHED" 2>&1 < /dev/null; }
-out=$(prof_i kiosk /dev/tty1 0 0); [ -s "$T/log" ] && ok "root on a text console with no password: the login asks for one" || bad "no forced login on a console: $out"
-case "$out" in *REACHED*) ok "after a password is set the shell starts";; *) bad "shell did not start: $out";; esac
-out=$(prof_i kiosk /dev/ttyAML0 0 0); [ -s "$T/log" ] && ok "the serial console is forced too" || bad "no forced login on the serial console"
-out=$(prof_i kiosk /dev/tty1 0 1); case "$out" in *REACHED*) bad "the login went on after a failed password change";; *) ok "a failed password change ends the login";; esac
-out=$(prof_i kiosk /dev/pts/0 0 0); [ ! -s "$T/log" ] && ok "a login over ssh is not forced" || bad "ssh login forced"
-case "$out" in *NOTE-LINE*) ok "ssh login: the note says which case applies (kiosk profile)";; *) bad "no note over ssh: $out";; esac
-out=$(prof_i console /dev/pts/0 0 0); case "$out" in *NOTE-LINE*) bad "console profile: the note is shown twice (banner and profile)";; *) ok "console profile: the banner has the note, the shell does not repeat it";; esac
-out=$(prof_i kiosk /dev/tty1 1000 0); [ ! -s "$T/log" ] && ok "a user other than root is not asked" || bad "non-root user asked for the root password"
+echo "== /etc/profile.d/tsx.sh: the console login never forces a password =="
+grep -q 'tsx-rootpw login' "$PROF" && bad "tsx.sh still forces a password change" || ok "tsx.sh has no forced password change"
+grep -q '/dev/tty' "$PROF" && bad "tsx.sh still checks the console terminal" || ok "tsx.sh does not look at the terminal"
 
-echo "== ssh takes keys only until a password is set =="
+echo "== ssh takes the key until a password is set =="
 grep -q '^PermitEmptyPasswords no$' "$SSHD" && ok "sshd: PermitEmptyPasswords no" || bad "sshd: no PermitEmptyPasswords no"
 grep -q '^PermitRootLogin yes$' "$SSHD" && grep -q '^PubkeyAuthentication yes$' "$SSHD" && ok "sshd: root may log in with a key or a password" || bad "sshd policy changed"
 
 echo "== the banner says which case applies =="
 mkdir -p "$T/run"; echo TSS-10 > "$T/run/model"
-ban() { env TSX_BANNER_ART="$ART" TSX_ISSUE_FILE="$T/issue" TSX_MOTD_FILE="$T/motd" TSX_RUN="$T/run" TSX_IP=192.0.2.10 TSX_NO_RESPAWN=1 TSX_ROOTPW_BIN="$RPW" TSX_SHADOW_FILE="$SH" sh "$BAN"; }
-printf 'root::19000:0:::::\n' > "$SH"; ban
+ban() { env TSX_BANNER_ART="$ART" TSX_ISSUE_FILE="$T/issue" TSX_MOTD_FILE="$T/motd" TSX_RUN="$T/run" TSX_IP=192.0.2.10 TSX_NO_RESPAWN=1 TSX_ROOTPW_BIN="$RPW" TSX_SHADOW_FILE="$SH" TSX_AUTH_KEYS_FILE="$AK" sh "$BAN"; }
+printf 'root:*::0:::::\n' > "$SH"; echo "$KEY" > "$AK"; ban
 for f in issue motd; do
-	grep -q 'no password yet' "$T/$f" && grep -q 'keys only' "$T/$f" && ok "$f (no password): says so and says keys only" || bad "$f (no password) wrong"
+	grep -q 'no password is set' "$T/$f" && grep -q 'over SSH with your key' "$T/$f" && grep -q 'run passwd' "$T/$f" && ok "$f (key only): says the console login opens after passwd over SSH" || bad "$f (key only) wrong"
 done
 printf 'root:%s:19000:0:::::\n' "$HASH" > "$SH"; ban
 for f in issue motd; do grep -q 'password is set' "$T/$f" && ok "$f (password set): says so" || bad "$f (set) wrong"; done
-printf 'root:!:19000:0:::::\n' > "$SH"; ban
-grep -q 'password login is off' "$T/issue" && ok "issue (locked): says so" || bad "issue (locked) wrong"
+printf 'root:*::0:::::\n' > "$SH"; : > "$AK"; ban
+grep -q 'Nobody can log in' "$T/issue" && ok "issue (no password, no key): says nobody can log in" || bad "issue (nothing) wrong"
 
 echo "$N passed, $F failed"
 [ "$F" = 0 ]

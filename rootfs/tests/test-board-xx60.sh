@@ -71,6 +71,35 @@ TBARGS="call tsx_board_mac_source"; eq "$(tb)" "uboot" "call a board function"
 TBARGS="call rm"; tb >/dev/null; eq "$?" "1" "call refuses another name"
 TBARGS="get 'a b'"; tb >/dev/null 2>&1; eq "$?" "2" "a bad name is an error"
 
+echo "== tsx-board call loads the env first =="
+# A board file whose tsx_board_load fills the env from a fixture, as a running
+# panel does from the U-Boot env. Without the load, the same functions print nothing.
+cat > "$T/board-fx.sh" <<EOF
+. "$BOARD"
+tsx_board_load() {
+	echo loaded >> "$T/load.log"
+	TSX_BOARD_ENV='product_name=TSS-10_[v3.002.1061,_#0A1B2C3D]
+ethaddr=00:10:7f:00:00:01'
+}
+EOF
+tbl() { : > "$T/load.log"; env -i PATH="$PATH" TSX_BOARD_CONF="$T/board-fx.sh" sh "$TB" call "$1"; }
+eq "$(tbl tsx_board_model)" "TSS-10" "call tsx_board_model prints the model on a running system"
+eq "$(tbl tsx_board_stock_fw)" "v3.002.1061" "call tsx_board_stock_fw prints the firmware"
+eq "$(tbl tsx_board_unit_id)" "00107f000001" "call tsx_board_unit_id prints the unit id"
+eq "$(tbl tsx_board_mac)" "00:10:7f:00:00:01" "call tsx_board_mac prints the MAC"
+eq "$(tbl tsx_board_mac_source)" "uboot" "call tsx_board_mac_source needs no env and still works"
+[ ! -s "$T/load.log" ] && ok "a function that needs no env does not read it" || bad "tsx_board_mac_source read the env"
+tbl tsx_board_model >/dev/null; [ "$(wc -l < "$T/load.log" | tr -d ' ')" = 1 ] && ok "the env is read once per call" || bad "load count: $(cat "$T/load.log")"
+# the bug: without the load, the model function prints an empty line
+eq "$(env -i PATH="$PATH" sh -c ". '$BOARD'; tsx_board_model")" "" "without tsx_board_load the function prints nothing (the old tsx-board call)"
+# a failed load still ends in the normal output of the function, no crash
+cat > "$T/board-fail.sh" <<EOF
+. "$BOARD"
+tsx_board_load() { TSX_BOARD_ENV=; echo "fw_printenv failed" >&2; return 1; }
+EOF
+out=$(env -i PATH="$PATH" TSX_BOARD_CONF="$T/board-fail.sh" sh "$TB" call tsx_board_model 2>/dev/null); rc=$?
+eq "$rc:$out" "0:" "a failed load: the call still finishes with an empty line"
+
 echo "== the shared code names no family, model, sound card or DRM driver =="
 # Comment lines and the board glue of the xx60 (audio, tfa, boot update, LED bar) stay out.
 SHARED="overlay/usr/local/bin/kiosk-session overlay/usr/local/sbin/tsx-mqtt overlay/usr/local/sbin/tsx-panelctl

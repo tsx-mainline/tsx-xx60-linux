@@ -83,7 +83,18 @@ wantnot '0A1B2C3D' "no tsid on the screen"
 want '^rescue       : built 2026-09-29, kernel flavor stable$' "rescue version + flavor"
 want '^kernel       : 7.2.8-00116-gb5862166389d$' "kernel"
 want '^network      : eth0 192.0.2.10 (dhcp, MAC 00:10:7f:00:00:01, uboot)$' "network"
-want '^repair shell : ssh root@192.0.2.10   (password: tsx)$' "repair shell"
+want '^repair shell : ssh root@192.0.2.10$' "repair shell"
+wantnot 'password: tsx' "no fixed password on the screen"
+want '^login        : starting$' "login line before tsx-rescue-login has run"
+echo panel > "$T/run/tsx-rescue-login"; render
+want '^login        : the root password or SSH key of this panel$' "login line: the panel's own login"
+wantnot 'one-time' "panel login: no one-time password on the screen"
+echo onetime > "$T/run/tsx-rescue-login"; echo k7m2x9pq4r > "$T/run/tsx-rescue-otp"; render
+want '^login        : root, one-time password k7m2x9pq4r$' "login line: the one-time password is on the screen"
+fit 80
+echo none > "$T/run/tsx-rescue-login"; rm -f "$T/run/tsx-rescue-otp"; render
+want '^login        : NONE' "login line: no login at all is said plainly"
+echo onetime > "$T/run/tsx-rescue-login"; echo k7m2x9pq4r > "$T/run/tsx-rescue-otp"; render
 want '^Press Enter for a rescue shell$' "Enter line"
 wantnot 'DO NOT power off' "no warning while idle"
 wantnot '^install' "no operation section while idle"

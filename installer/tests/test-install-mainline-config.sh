@@ -5,8 +5,9 @@
 # already does on its own (test-install-mainline-dryrun.sh covers that side).
 #   1. --dry-run --config FILE: the script uses the file and skips the prompts.
 #      It refuses a missing file up front.
-#   2. --dry-run --yes with no --config: the script skips the prompts and
-#      notes no panel.conf.
+#   2. --dry-run --yes with no --config: refused when it has no root login
+#      (a password hash or an SSH key). A reinstall of a mainline panel passes
+#      because the panel keeps its own panel.conf.
 #   3. The prompt flow of installer/lib/tsx-config-prompt.sh, with answers on
 #      stdin (a scripted or piped install, or this test). It uses the tsx-config
 #      of the panel. So `tsx-config apply` on the panel accepts every value
@@ -40,6 +41,8 @@ mkpayload "$W/payload"
 
 echo "== 1. --dry-run --config FILE: uses the file, prompts skipped =="
 TSX_CONF="$W/mine.conf" "$TSX_CONFIG_BIN" set KIOSK_URL "https://ha.example.org/lovelace/home" >/dev/null
+KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test@host'
+TSX_CONF="$W/mine.conf" "$TSX_CONFIG_BIN" set SSH_AUTHORIZED_KEY "$KEY" >/dev/null
 OUT=$("$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --config "$W/mine.conf" --dry-run </dev/null 2>&1)
 RC=$?
 [ $RC = 0 ] && ok "dry-run --config exits 0 (no stdin needed: prompts are skipped)" || bad "dry-run --config failed: $OUT"
@@ -51,10 +54,35 @@ OUT=$("$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --config "$W/does-n
 [ $? -ne 0 ] && ok "missing --config file refused" || bad "missing --config file accepted"
 echo "$OUT" | grep -qi "config file not found" && ok "error names the missing file" || bad "error did not name the missing file"
 
-echo "== 3. --dry-run --yes with no --config: prompts skipped, no panel.conf =="
+echo "== 3. no root login: the install stops (unattended and with --config) =="
 OUT=$("$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --yes --dry-run </dev/null 2>&1)
-[ $? = 0 ] && ok "dry-run --yes (no --config) exits 0 with no stdin" || bad "dry-run --yes failed"
-echo "$OUT" | grep -qi "no panel.conf would be written" && ok "dry-run --yes reports no panel.conf" || bad "dry-run --yes did not report skipping panel.conf"
+[ $? != 0 ] && ok "dry-run --yes with no --config and no root login is refused" || bad "dry-run --yes accepted with no root login"
+echo "$OUT" | grep -q "No root password and no SSH public key" && ok "the stop says what is missing" || bad "no clear stop message: $OUT"
+TSX_CONF="$W/nologin.conf" "$TSX_CONFIG_BIN" set KIOSK_URL "https://ha.example.org/x" >/dev/null
+OUT=$("$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --config "$W/nologin.conf" --dry-run </dev/null 2>&1)
+[ $? != 0 ] && ok "--config with no hash and no key is refused" || bad "--config with no root login accepted"
+echo "$OUT" | grep -q "No root password and no SSH public key" && ok "the --config stop says what is missing" || bad "no stop message for --config: $OUT"
+TSX_CONF="$W/hashonly.conf" "$TSX_CONFIG_BIN" set ROOT_PASSWORD_HASH '$6$abcdefgh$somehashvalueherelongenough' >/dev/null
+"$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --config "$W/hashonly.conf" --dry-run </dev/null >/dev/null 2>&1 && ok "--config with a password hash only passes" || bad "hash-only config refused"
+TSX_CONF="$W/keyonly.conf" "$TSX_CONFIG_BIN" set SSH_AUTHORIZED_KEY "$KEY" >/dev/null
+"$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --config "$W/keyonly.conf" --dry-run </dev/null >/dev/null 2>&1 && ok "--config with an SSH key only passes" || bad "key-only config refused"
+OUT=$(TSX_PANEL_KIND=android "$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --yes --dry-run </dev/null 2>&1)
+[ $? != 0 ] && ok "--yes on an Android panel with no --config is refused" || bad "Android --yes with no root login accepted"
+OUT=$(TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --yes --dry-run </dev/null 2>&1)
+[ $? = 0 ] && ok "--yes reinstall of a mainline panel passes (its own panel.conf is checked later)" || bad "--yes reinstall refused: $OUT"
+OUT=$(TSX_MAINLINE_PW=testpw TSX_PANEL_KIND=android "$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --yes --dry-run </dev/null 2>&1)
+[ $? = 0 ] && ok "a test build (TSX_MAINLINE_PW) skips the check" || bad "test build refused: $OUT"
+# the reinstall checks the panel's own panel.conf (a stub ssh serves it)
+mkdir -p "$W/bin3" "$W/res3"
+cat > "$W/bin3/ssh" <<'STUB'
+#!/bin/sh
+case "$*" in *"cat /data/tsx/panel.conf"*) cat "$STUB_CONF";; *) exit 1;; esac
+STUB
+chmod +x "$W/bin3/ssh"
+OUT=$(PATH="$W/bin3:$PATH" STUB_CONF="$W/nologin.conf" TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --yes --results "$W/res3/b.txt" </dev/null 2>&1)
+echo "$OUT" | grep -q "No root password and no SSH public key" && ok "reinstall with --yes: a panel.conf with no root login stops the install" || bad "no stop on the panel's own panel.conf: $OUT"
+OUT=$(PATH="$W/bin3:$PATH" STUB_CONF="$W/keyonly.conf" TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/payload" --kernel lts --yes --results "$W/res3/c.txt" </dev/null 2>&1)
+echo "$OUT" | grep -q "No root password and no SSH public key" && bad "a panel.conf with a key was refused: $OUT" || ok "reinstall with --yes: a panel.conf with a key passes the check"
 
 echo "== 4. interactive prompts, answers fed on stdin (installer/lib/tsx-config-prompt.sh) =="
 PCONF="$W/prompted.conf"
@@ -172,8 +200,7 @@ no
 
 
 
-
-
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test@host
 EOF
 )
 echo "$OUT" | grep -q "could not read the panel's eth0 MAC" && ok "prompted run got past the prompts and stopped at the MAC read" || bad "prompted run did not reach step 2: $OUT"
@@ -228,19 +255,47 @@ else
 	echo "  skip: no openssl or mkpasswd on this host (the hash cases)"
 fi
 P10="$W/p10.conf"
-OUT=$({ pre; printf '\n'; } | rp "$P10" "")
-TSX_CONF="$P10" "$TSX_CONFIG_BIN" get ROOT_PASSWORD_HASH >/dev/null 2>&1 && bad "a blank answer stored a hash" || ok "a blank answer stores no password (none)"
-echo "$OUT" | grep -q 'no root password' && echo "$OUT" | grep -q 'asks for one' && ok "the prompt says what no password means" || bad "no explanation for a blank answer"
+OUT=$({ pre; printf '\n\n'; } | rp "$P10" ""); RC=$?
+TSX_CONF="$P10" "$TSX_CONFIG_BIN" get ROOT_PASSWORD_HASH >/dev/null 2>&1 && bad "a blank answer stored a hash" || ok "a blank answer stores no password"
+echo "$OUT" | grep -q 'No root password and no SSH public key' && ok "the prompt says that it needs one of them" || bad "no explanation: $OUT"
 OUT=$(note "$P10")
-case "$OUT" in *"no root password was set"*"no SSH key was given"*) ok "no password and no key: the end of the install says that ssh accepts nothing";; *) bad "root login note (none, no key): $OUT";; esac
-P11="$W/p11.conf"; TSX_CONF="$P11" "$TSX_CONFIG_BIN" set SSH_AUTHORIZED_KEY "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test@host" >/dev/null
+case "$OUT" in *"no root password and no SSH key"*) ok "no password and no key: the note says so";; *) bad "root login note (none, no key): $OUT";; esac
+P11="$W/p11.conf"
+OUT=$({ pre; printf '\n%s\n' "$KEY"; } | rp "$P11" "")
+TSX_CONF="$P11" "$TSX_CONFIG_BIN" get ROOT_PASSWORD_HASH >/dev/null 2>&1 && bad "key only stored a hash" || ok "key only: no hash is stored (the password stays locked)"
+[ "$(TSX_CONF="$P11" "$TSX_CONFIG_BIN" get SSH_AUTHORIZED_KEY 2>/dev/null)" = "$KEY" ] && ok "key only: the key is stored" || bad "key only: no key stored"
+echo "$OUT" | grep -q 'The install then needs an SSH key' && ok "a blank password answer says that a key is needed" || bad "no key hint"
+echo "$OUT" | grep -q 'No root password and no SSH public key' && bad "key only was refused" || ok "key only: the prompt flow passes"
 OUT=$(note "$P11")
-case "$OUT" in *"no root password was set"*"ssh accepts the SSH key"*) ok "no password with a key: ssh accepts the key";; *) bad "root login note (none, key): $OUT";; esac
+case "$OUT" in *"no root password was set"*"ssh accepts the SSH key"*"run passwd"*) ok "key only: the note says ssh takes the key and passwd opens the console";; *) bad "root login note (key only): $OUT";; esac
 P12="$W/p12.conf"
 OUT=$({ pre; printf 'correct horse battery\ncorrect horse battery\n\n'; } | rp "$P12" "" TSX_HASH_DISABLE=1)
 TSX_CONF="$P12" "$TSX_CONFIG_BIN" get ROOT_PASSWORD_HASH >/dev/null 2>&1 && bad "a hash without a tool" || ok "no hash tool: nothing is stored"
 echo "$OUT" | grep -q 'no tool to hash' && ok "no hash tool: the prompt says so" || bad "no message for a missing hash tool"
 case "$OUT" in *"correct horse"*) bad "the password was printed";; *) ok "the password is not printed (no tool case)";; esac
+
+echo "== 8. the rescue has no fixed password: the installer uses the key or the password it is given =="
+mkdir -p "$W/bin8"
+cat > "$W/bin8/ssh" <<'STUB'
+#!/bin/sh
+echo "ssh $*" >> "$W8LOG"
+STUB
+cat > "$W/bin8/sshpass" <<'STUB'
+#!/bin/sh
+echo "sshpass $* SSHPASS=${SSHPASS:-}" >> "$W8LOG"
+STUB
+chmod +x "$W/bin8/ssh" "$W/bin8/sshpass"
+W8LOG="$W/log8"; export W8LOG
+run8() { : > "$W8LOG"; (cd "$HERE" && PATH="$W/bin8:$PATH" bash -c '. lib/tsx-rescue.sh; '"$1" >/dev/null 2>&1); }
+run8 'tsx_rescue_ssh "" root@192.0.2.9 true'
+grep -q '^ssh -o BatchMode=yes root@192.0.2.9 true' "$W8LOG" && ok "no password: ssh with the key, BatchMode, no sshpass" || bad "no-password call: $(cat "$W8LOG")"
+grep -q sshpass "$W8LOG" && bad "sshpass used with no password" || ok "no password: sshpass is not used"
+run8 'tsx_rescue_ssh "k7m2x9pq4r" root@192.0.2.9 true'
+grep -q 'SSHPASS=k7m2x9pq4r' "$W8LOG" && grep -q '^sshpass -e ssh root@192.0.2.9 true' "$W8LOG" && ok "a password: sshpass -e, the password in the environment" || bad "password call: $(cat "$W8LOG")"
+grep -q -- '-p k7m2x9pq4r' "$W8LOG" && bad "the password is on the command line" || ok "the password is not on the command line"
+run8 'RESCUE_SSH_PW=abc12345; tsx_rescue_ssh_cur root@192.0.2.9 true'
+grep -q 'SSHPASS=abc12345' "$W8LOG" && ok "tsx_rescue_ssh_cur uses RESCUE_SSH_PW" || bad "tsx_rescue_ssh_cur: $(cat "$W8LOG")"
+grep -n 'RPW=tsx\|sshpass -p tsx' "$DRIVER" "$HERE/tsx-restore-factory" "$HERE/lib/tsx-rescue.sh" >/dev/null && bad "a fixed rescue password is still in the installer" || ok "no fixed rescue password in the installer scripts"
 
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-install-mainline-config || echo FAIL test-install-mainline-config
