@@ -37,6 +37,9 @@ done
 # The orientation table (panel.conf ORIENTATION). This is the same script as
 # on the rootfs, so the initramfs and the kiosk always agree on a name.
 install -m 755 "$HERE/../overlay/usr/local/bin/tsx-orientation" $R/usr/sbin/tsx-orientation
+# The board file (the rescue screen and rcS read it). It is the same file as on
+# the rootfs.
+install -D -m 644 "$HERE/../overlay/usr/local/lib/tsx/board.sh" $R/usr/local/lib/tsx/board.sh
 # The rescue tools: `tsx-rescue status` and `tsx-rescue done` work in both
 # rescues (this initramfs and the rescue image). tsx-rescue calls tsx-boot-ok,
 # which reads uboot-env.conf. Both files are the same as on the rootfs.

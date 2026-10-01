@@ -51,7 +51,9 @@ RUN=${TSX_RUN_DIR:-/run/tsx}
 SYS=${TSX_SYSFS:-/sys}
 PROC=${TSX_PROC:-/proc}
 LIB=${TSX_BT_LIB:-/usr/local/lib/tsx}
-CHIP=${TSX_BT_CHIP:-$LIB/bt-chip-csr8811.sh}
+# The board values (TSX_BT_CHIP: the chip file, or none). Test hook: TSX_BOARD_CONF.
+. "${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}"
+CHIP=$TSX_BT_CHIP
 WAIT=${TSX_BT_WAIT:-20}
 DEFAULT_HCI=${TSX_BT_HCI:-hci0}
 MODDIR=${TSX_BT_MODDIR:-/lib/modules/$(uname -r 2>/dev/null)}

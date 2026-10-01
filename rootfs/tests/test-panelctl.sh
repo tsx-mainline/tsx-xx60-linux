@@ -8,6 +8,9 @@
 # Such lines are a glob, a leading-dash "option", a wrong argument count, an
 # out-of-range number, an overlong numeric string and a bare shell metacharacter.
 set -uo pipefail
+# The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
+export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
+export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")" && pwd)
 SCRIPT="$HERE/../overlay/usr/local/sbin/tsx-panelctl"
 command -v busybox >/dev/null 2>&1 || { echo "SKIPPED test-panelctl: no busybox on this host"; exit 0; }

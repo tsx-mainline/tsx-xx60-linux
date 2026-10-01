@@ -180,7 +180,7 @@ def build_entities(server, backend: PanelBackend, key_base: int = 0) -> PanelDev
         )
         entities.append(als_auto)
 
-    # ---- volume (only with the TSW1060 sound card, like tsx-mqtt) -------------
+    # ---- volume (only with the board's sound card, like tsx-mqtt) -------------
     volume = None
     if backend.sound_card_present():
         volume = NumberEntity(

@@ -39,7 +39,8 @@ start_pre() {
 	[ -r /etc/tsx/voice.conf ] && . /etc/tsx/voice.conf
 	[ -r /run/tsx/voice.conf ] && . /run/tsx/voice.conf   # panel.conf NAME/WAKE_WORD (tsx-config apply)
 	[ -x /usr/local/bin/linux-voice-assistant ] || { eerror "linux-voice-assistant not installed"; return 1; }
-	[ -e /proc/asound/TSW1060 ] || ewarn "no TSW1060 sound card"
+	. "${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}"
+	[ -e "/proc/asound/$TSX_SOUND_CARD" ] || ewarn "no $TSX_SOUND_CARD sound card"
 	checkpath -d -m 0755 -o kiosk:audio "$STATE_DIR"
 	# State, ducking and the push-to-talk FIFO (the satellite runs as kiosk)
 	checkpath -d -m 0755 /run/tsx

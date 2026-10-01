@@ -1,5 +1,5 @@
 #!/bin/sh
-# tsx-mqtt: MQTT bridge between the xx60 kiosk and Home Assistant.
+# tsx-mqtt: MQTT bridge between the panel kiosk and Home Assistant.
 #
 # It publishes HA MQTT discovery (retained) for one device with:
 #   light  "LED bar"      RGB (tsx-ledbar. HA 0..255 <-> bar 0..100 per channel.
@@ -20,7 +20,7 @@
 #   sensor "eMMC life used A/B", "eMMC end of life"  (diagnostic. Only with
 #                         /run/tsx/emmc.state, which tsx-emmc-state writes)
 #   number "Volume"       0..100 % of the ALSA "Master" softvol (only when the
-#                         TSW1060 sound card exists. /etc/asound.conf)
+#                         sound card exists. /etc/asound.conf)
 #   update "Update"       status of tsx-autoupdate (installed and pending
 #                         Alpine packages, reboot pending, Chromium hold
 #                         state). Install runs "tsx-autoupdate now" in the
@@ -46,7 +46,8 @@ IDLED=${TSX_IDLED_STATE:-/run/tsx-idled.state}
 BCONF=${TSX_BUTTONS_CONF:-/etc/tsx/buttons.conf}
 KCONF=${TSX_KIOSK_CONF:-/etc/kiosk.conf}
 ACONF=${TSX_ALS_CONF:-/etc/tsx/als.conf}
-CARD=${TSX_SOUND_CARD:-TSW1060}
+. "${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}"
+CARD=$TSX_SOUND_CARD
 ASOUND=${TSX_ASOUND_DIR:-/proc/asound}
 DRY=${TSX_MQTT_DRY:-0}
 PUBTO=${TSX_MQTT_PUB_TIMEOUT:-5}
@@ -120,7 +121,7 @@ field() {  # field FILE KEY -> rest of the first line "KEY ..."
 }
 
 # ---- discovery ---------------------------------------------------------------
-DEV="\"dev\":{\"ids\":[\"tsx_$NODE\"],\"name\":\"$DNAME\",\"mf\":\"Crestron\",\"mdl\":\"xx60 (mainline Linux)\"}"
+DEV="\"dev\":{\"ids\":[\"tsx_$NODE\"],\"name\":\"$DNAME\",\"mf\":\"Crestron\",\"mdl\":\"$TSX_HA_MODEL (mainline Linux)\"}"
 AV="\"avty_t\":\"$BASE/availability\""
 
 discovery() {

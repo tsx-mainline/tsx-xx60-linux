@@ -26,6 +26,9 @@
 #  - a save lands in a temp panel.conf
 #  - no secret ever appears in a JSON response or in the log of either daemon
 set -uo pipefail
+# The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
+export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
+export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 SBIN="$HERE/overlay/usr/local/sbin"
 BIN="$HERE/overlay/usr/local/bin"

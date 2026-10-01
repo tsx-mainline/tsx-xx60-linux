@@ -1,5 +1,5 @@
 #!/bin/sh
-# tsx-autoupdate: automatic Alpine package updates for the xx60 kiosk.
+# tsx-autoupdate: automatic Alpine package updates for the panel kiosk.
 #
 # Daily: run `apk update`, compute the pending upgrades, and decide whether
 # the ES2-patch pin of Chromium must move. It installs only inside the night
@@ -56,6 +56,9 @@
 # internal. They call the matching shell function directly. The host tests
 # use them to check that logic without a real apk, date or reboot.
 set -u
+# The board values (TSX_FAMILY, TSX_APK_CATEGORY). Test hook: TSX_BOARD_CONF.
+. "${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}"
+CHROMIUM_PKG=tsx-$TSX_FAMILY-chromium   # the patched Chromium of the board (tsx-aports)
 
 CONF=${TSX_AUTOUPDATE_CONF:-/etc/tsx/autoupdate.conf}
 RUN=${TSX_RUN_DIR:-/run/tsx}
@@ -105,7 +108,7 @@ in_window() {  # in_window HH:MM start-end  (window may cross midnight)
 needs_reboot() {  # needs_reboot "pkg1 pkg2 ..." -> exit 0 if any needs a reboot
 	for n in $1; do
 		case $n in
-		linux*|musl*|openrc*|busybox*|tsx-xx60-kernel*) return 0;;
+		linux*|musl*|openrc*|busybox*|tsx-$TSX_FAMILY-kernel*) return 0;;
 		esac
 	done
 	return 1
@@ -202,7 +205,7 @@ write_ha_json() {
 	hold) d=${cd#* }; summary="${summary:+$summary; }chromium $cc held since $ch (day $d)";;
 	unpatched) summary="${summary:+$summary; }chromium $cc installed unpatched (software rendering) since $ch";;
 	patch) summary="${summary:+$summary; }chromium $cc: ES2 patch re-applied";;
-	migrate) summary="${summary:+$summary; }chromium: switch to tsx-xx60-chromium (ES2 patch built in)";;
+	migrate) summary="${summary:+$summary; }chromium: switch to $CHROMIUM_PKG (ES2 patch built in)";;
 	esac
 	rw=$(get_field "$f" repo_warning)
 	[ -n "$rw" ] && summary="${summary:+$summary; }WARNING: $rw"
@@ -224,8 +227,8 @@ write_ha_json() {
 
 pinned_chromium_ver() { sed -n 's/^chromium=//p' "$WORLD" 2>/dev/null | head -1; }
 # tsx-xx60-chromium (tsx-aports) installed / offered by a configured repository
-tsx_chromium_installed() { apk info -e tsx-xx60-chromium >/dev/null 2>&1; }
-tsx_chromium_offered() { [ -n "$(apk list -a tsx-xx60-chromium 2>/dev/null | head -1)" ]; }
+tsx_chromium_installed() { apk info -e $CHROMIUM_PKG >/dev/null 2>&1; }
+tsx_chromium_offered() { [ -n "$(apk list -a $CHROMIUM_PKG 2>/dev/null | head -1)" ]; }
 
 # classify_repos APK_UPDATE_OUTPUT: find every repository that apk could not
 # fetch ("WARNING: updating and opening <repo>/<arch>/APKINDEX.tar.gz: <why>").
@@ -237,7 +240,7 @@ classify_repos() {
 	REPO_WARNING= REPO_BLOCKED=0 APK_FORCE= ours= others=
 	for u in $(printf '%s\n' "$1" | sed -nE 's#^(WARNING|ERROR): .* ([a-z]+://[^ ]*|/[^ ]*)/[^/ ]+/APKINDEX\.tar\.gz: .*#\2#p' | sort -u); do
 		case $u in
-		*/common|*/xx60) ours="${ours:+$ours, }$u";;
+		*/common|*/"$TSX_APK_CATEGORY") ours="${ours:+$ours, }$u";;
 		*) others="${others:+$others, }$u";;
 		esac
 	done
@@ -281,17 +284,17 @@ is_idle() {
 	[ "$s" = blank ]
 }
 
-chromium_migrate() {  # Alpine chromium (pinned, patched in place) -> tsx-xx60-chromium
+chromium_migrate() {  # Alpine chromium (pinned, patched in place) -> $CHROMIUM_PKG
 	command -v rc-service >/dev/null 2>&1 && rc-service kiosk stop >>"$LOG" 2>&1
-	if apk add ${APK_FORCE:-} tsx-xx60-chromium >>"$LOG" 2>&1; then
+	if apk add ${APK_FORCE:-} $CHROMIUM_PKG >>"$LOG" 2>&1; then
 		# This drops only the "chromium=<ver>" world pin. tsx-xx60-chromium provides chromium.
 		apk del ${APK_FORCE:-} chromium >>"$LOG" 2>&1
 		# No package owned the sidecar of the in-place patch. Take the copy of the package.
 		[ -e "$ES2_MARKER.apk-new" ] && mv -f "$ES2_MARKER.apk-new" "$ES2_MARKER"
 		rm -f "$STATE/chromium-hold"
-		log "chromium: now tsx-xx60-chromium (ES2 patch built in, upgrades with the other packages)"
+		log "chromium: now $CHROMIUM_PKG (ES2 patch built in, upgrades with the other packages)"
 	else
-		log "chromium: switching to tsx-xx60-chromium FAILED, keeping the pinned Alpine chromium"
+		log "chromium: switching to $CHROMIUM_PKG FAILED, keeping the pinned Alpine chromium"
 	fi
 	command -v rc-service >/dev/null 2>&1 && rc-service kiosk start >>"$LOG" 2>&1
 }
@@ -347,11 +350,11 @@ do_check() {
 	if tsx_chromium_installed || [ -z "$oldver" ]; then
 		# tsx-xx60-chromium (or no pin at all) is an ordinary package. Its
 		# upgrades are in the list above already.
-		tsx_chromium_installed && oldver=tsx-xx60-chromium
+		tsx_chromium_installed && oldver=$CHROMIUM_PKG
 		candver= decision=none
 		rm -f "$STATE/chromium-hold"
 	elif tsx_chromium_offered; then
-		candver=tsx-xx60-chromium decision=migrate
+		candver=$CHROMIUM_PKG decision=migrate
 		rm -f "$STATE/chromium-hold"
 	else
 		candver=$(candidate_chromium_ver)
@@ -442,8 +445,8 @@ cmd_status() {
 	echo "pending:        $(get_field "$f" pending_count) package(s)"
 	pl=$(get_field "$f" pending_list); [ -n "$pl" ] && echo "  $pl"
 	rb=$(get_field "$f" reboot_pending); echo "reboot pending: $([ "$rb" = 1 ] && echo yes || echo no)"
-	if [ "$(get_field "$f" chromium_pinned)" = tsx-xx60-chromium ]; then
-		echo "chromium:       tsx-xx60-chromium (ES2 patch built in. Upgrades with the other packages)"
+	if [ "$(get_field "$f" chromium_pinned)" = $CHROMIUM_PKG ]; then
+		echo "chromium:       $CHROMIUM_PKG (ES2 patch built in. Upgrades with the other packages)"
 	else
 		echo "chromium:       pinned $(get_field "$f" chromium_pinned), candidate $(get_field "$f" chromium_candidate), decision $(get_field "$f" chromium_decision)"
 	fi

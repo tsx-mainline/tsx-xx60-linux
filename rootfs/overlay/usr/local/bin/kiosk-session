@@ -17,6 +17,8 @@
 # (from the generated sway config) to start Chromium. Sway exits when
 # Chromium exits.
 set -u
+# The board values: the DRM driver names and the sound card. Test hook: TSX_BOARD_CONF.
+. "${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}"
 . /etc/kiosk.conf
 # panel.conf overrides (KIOSK_URL, TZ_NAME). tsx-config apply generates them
 # at boot. See docs/rootfs.md "Panel configuration".
@@ -58,24 +60,32 @@ http://127.0.0.1:*/setup)
 esac
 
 # --- renderer selection -------------------------------------------------
-# Primary path: drm/meson KMS (display) + Lima (render node), GLES2 in cage
-# and GPU compositing in Chromium. Fallback: simpledrm on the U-Boot
+# Primary path: the display driver of the board (TSX_DISPLAY_DRM, meson on the
+# xx60) for KMS, and its GPU (TSX_RENDER_DRM, lima) for the render node. GLES2
+# in cage and GPU compositing in Chromium. Fallback: simpledrm on the U-Boot
 # framebuffer with pixman + software rendering. The script picks cards by
-# driver name, never by number (on the panel lima is card0, meson card2).
+# driver name, never by number (on the xx60 lima is card0, meson card2).
+# drv_in NAME LIST: succeed if NAME matches one of the patterns in LIST
+drv_in() {
+	for _p in $2; do
+		case "$1" in $_p) return 0;; esac
+	done
+	return 1
+}
+DRM=${TSX_DRM_SYS:-/sys/class/drm}
 disp= dispdrv= render=
-for c in /sys/class/drm/card[0-9]*; do
+for c in "$DRM"/card[0-9]*; do
 	case "${c##*/}" in *-*) continue;; esac     # skip connectors (card2-LVDS-1)
 	[ -e "$c/device/driver" ] || continue
 	drv=$(basename "$(readlink -f "$c/device/driver")")
-	case "$drv" in
-	meson*) disp=/dev/dri/${c##*/}; dispdrv=$drv; break;;
-	lima|panfrost) ;;                           # render-only GPU, no display
-	*) [ -z "$disp" ] && { disp=/dev/dri/${c##*/}; dispdrv=$drv; };;
-	esac
+	if drv_in "$drv" "$TSX_DISPLAY_DRM"; then disp=/dev/dri/${c##*/}; dispdrv=$drv; break
+	elif drv_in "$drv" "$TSX_RENDER_DRM"; then :     # render-only GPU, no display
+	else [ -z "$disp" ] && { disp=/dev/dri/${c##*/}; dispdrv=$drv; }
+	fi
 done
-for r in /sys/class/drm/renderD*; do
+for r in "$DRM"/renderD*; do
 	[ -e "$r/device/driver" ] || continue
-	case "$(basename "$(readlink -f "$r/device/driver")")" in lima|panfrost) render=/dev/dri/${r##*/}; break;; esac
+	drv_in "$(basename "$(readlink -f "$r/device/driver")")" "$TSX_RENDER_DRM" && { render=/dev/dri/${r##*/}; break; }
 done
 
 # KIOSK_GPU: auto | browser (GLES compositor + GPU browser through the
@@ -97,16 +107,20 @@ browser)
 on) comp_gl=1 browser_gl=1;;
 compositor) comp_gl=1;;
 off) ;;
-*) case "$dispdrv" in meson*) [ -n "$render" ] && comp_gl=1 browser_gl=1;; esac
-   # Mali-400/450 (lima) is GLES 2.0 only. Chromium 152 asks for an ES 3.0
+*) if drv_in "$dispdrv" "$TSX_DISPLAY_DRM"; then [ -n "$render" ] && comp_gl=1 browser_gl=1; fi
+   # A GPU in TSX_RENDER_ES2_DRM (the Mali-400/450, lima) is GLES 2.0 only. Chromium 152 asks for an ES 3.0
    # context with no ES2 fallback ("ES version fallback is disabled", also
    # through ANGLE). Its GPU process then dies three times, and Chromium ends
    # up in software compositing anyway (measured on the TSW-1060,
    # 2026-09-26). Skip that: use GLES in cage only. KIOSK_GPU=on still forces
    # the attempt.
-   case "$render" in /dev/dri/*) case "$(basename "$(readlink -f "/sys/class/drm/${render##*/}/device/driver")")" in
-      lima) [ $browser_gl = 1 ] && log "GPU is lima (GLES 2.0): stock Chromium needs GLES 3.0, browser renders in software (KIOSK_GPU=browser uses the ES2 patch)"; browser_gl=0;;
-   esac;; esac
+   case "$render" in /dev/dri/*)
+      rdrv=$(basename "$(readlink -f "$DRM/${render##*/}/device/driver")")
+      if drv_in "$rdrv" "$TSX_RENDER_ES2_DRM"; then
+         [ $browser_gl = 1 ] && log "GPU is $rdrv (GLES 2.0): stock Chromium needs GLES 3.0, browser renders in software (KIOSK_GPU=browser uses the ES2 patch)"
+         browser_gl=0
+      fi;;
+   esac
    [ $comp_gl = 0 ] && [ -n "$render" ] && log "GPU $render present but display is ${dispdrv:-none}: using pixman";;
 esac
 if [ $comp_gl = 1 ]; then
@@ -115,11 +129,12 @@ else
 	export WLR_RENDERER=pixman
 fi
 [ -n "$disp" ] && export WLR_DRM_DEVICES=$disp
-case "$dispdrv" in meson*)
-	# Meson8 OSD planes: ARGB8888 only, no modifiers. The patched cage picks
-	# ARGB8888 when XRGB8888 is missing. The variable forces it regardless.
-	export WLR_DRM_NO_MODIFIERS=1 CAGE_RENDER_FORMAT=argb8888;;
-esac
+if drv_in "$dispdrv" "$TSX_DISPLAY_DRM" && [ -n "$TSX_DISPLAY_ENV" ]; then
+	# The board names the variables of its display. On the xx60 (Meson8 OSD
+	# planes: ARGB8888 only, no modifiers), the patched cage picks ARGB8888
+	# when XRGB8888 is missing. The variables force it regardless.
+	export $TSX_DISPLAY_ENV
+fi
 export WLR_BACKENDS=drm,libinput
 export WLR_LIBINPUT_NO_DEVICES=1          # start even before touch is probed
 export WLR_NO_HARDWARE_CURSORS=1

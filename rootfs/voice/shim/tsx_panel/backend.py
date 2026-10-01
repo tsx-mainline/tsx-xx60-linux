@@ -24,7 +24,8 @@ rootfs/overlay/usr/local/sbin/tsx-panelctl.
 Env overrides (all also read by tsx-mqtt; new ones only for this module):
   TSX_RUN_DIR (/run/tsx), TSX_IDLED_STATE (/run/tsx-idled.state),
   TSX_BUTTONS_CONF (/etc/tsx/buttons.conf), TSX_KIOSK_CONF (/etc/kiosk.conf),
-  TSX_ALS_CONF (/etc/tsx/als.conf), TSX_SOUND_CARD (TSW1060),
+  TSX_ALS_CONF (/etc/tsx/als.conf), TSX_SOUND_CARD (the board's `tsx-board get TSX_SOUND_CARD`),
+  TSX_BOARD_BIN (tsx-board),
   TSX_ASOUND_DIR (/proc/asound), TSX_BACKLIGHT_DIR (/sys/class/backlight),
   TSX_THERMAL_ZONE (/sys/class/thermal/thermal_zone0/temp),
   TSX_DEVTOOLS (127.0.0.1:9222, as buttons.conf's DEVTOOLS=),
@@ -77,6 +78,21 @@ def _field(path, key) -> Optional[str]:
     return None
 
 
+def board_value(name) -> str:
+    """A value of the board file (board.sh): the environment first, else
+    `tsx-board get NAME`. Empty if the board does not define it."""
+    val = os.environ.get(name, "")
+    if val:
+        return val
+    try:
+        return subprocess.run(
+            [os.environ.get("TSX_BOARD_BIN", "tsx-board"), "get", name],
+            check=False, capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 class PanelBackend:
     def __init__(self):
         self.run_dir = Path(_env("TSX_RUN_DIR", "/run/tsx"))
@@ -84,7 +100,7 @@ class PanelBackend:
         self.buttons_conf = Path(_env("TSX_BUTTONS_CONF", "/etc/tsx/buttons.conf"))
         self.kiosk_conf = Path(_env("TSX_KIOSK_CONF", "/etc/kiosk.conf"))
         self.als_conf = Path(_env("TSX_ALS_CONF", "/etc/tsx/als.conf"))
-        self.card = _env("TSX_SOUND_CARD", "TSW1060")
+        self.card = board_value("TSX_SOUND_CARD")
         self.asound_dir = Path(_env("TSX_ASOUND_DIR", "/proc/asound"))
         self.orientation_file = Path(_env("TSX_ORIENTATION_FILE", "/etc/tsx/orientation"))
         self.backlight_dir = Path(_env("TSX_BACKLIGHT_DIR", "/sys/class/backlight"))

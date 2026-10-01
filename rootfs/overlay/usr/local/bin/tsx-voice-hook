@@ -13,7 +13,8 @@
 CONF=${TSX_VOICE_CONF:-/etc/tsx/voice.conf}
 RUN=${TSX_VOICE_RUN:-/run/tsx/voice}
 AMIXER=${AMIXER:-amixer}
-CARD=${TSX_SOUND_CARD:-TSW1060}
+. "${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}"
+CARD=$TSX_SOUND_CARD
 DUCK_MEDIA=20 LED=none LED_COLOR="0 40 100"
 [ -r "$CONF" ] && . "$CONF"
 SAVED=$RUN/voice-duck

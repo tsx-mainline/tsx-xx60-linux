@@ -8,6 +8,9 @@
 #  - the clock line of `tsx-config show`
 # The test runs under busybox or dash sh and needs no compiler.
 set -eu
+# The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
+export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
+export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")/.." && pwd); O=$HERE/overlay
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 N=0 F=0

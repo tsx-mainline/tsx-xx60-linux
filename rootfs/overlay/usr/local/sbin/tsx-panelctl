@@ -53,7 +53,8 @@ ALS=${TSX_ALS_BIN:-tsx-als}
 CONFIG=${TSX_CONFIG_BIN:-tsx-config}
 REBOOT_BIN=${TSX_REBOOT_BIN:-reboot}
 AMIXER=${TSX_AMIXER:-amixer}
-CARD=${TSX_SOUND_CARD:-TSW1060}
+. "${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}"
+CARD=$TSX_SOUND_CARD
 UPDATE_BIN=${TSX_UPDATE_BIN:-tsx-autoupdate}
 ONESHOT=${TSX_PANELCTL_ONESHOT:-0}
 

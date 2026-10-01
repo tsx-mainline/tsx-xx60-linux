@@ -2,6 +2,9 @@
 # Host test of tsx-als (fake IIO + backlight sysfs) and of the tsx-mqtt ALS
 # entities (dry-run mode). No compiler needed. busybox/dash sh.
 set -eu
+# The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
+export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
+export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")" && pwd); O=$HERE/../../rootfs/overlay
 ALS=$O/usr/local/sbin/tsx-als
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT

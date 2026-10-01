@@ -7,6 +7,9 @@
 # The test touches nothing on the host. /etc/apk/world, the chromium binary,
 # rc-service, curl and reboot are all stubs under $T/bin.
 set -u
+# The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
+export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
+export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")" && pwd); BIN=$HERE/../../rootfs/overlay/usr/local/sbin/tsx-autoupdate
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin"

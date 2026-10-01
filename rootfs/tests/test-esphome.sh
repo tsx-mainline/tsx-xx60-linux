@@ -25,6 +25,9 @@
 # plays audio. So the test needs a system libmpv, and this is easy to miss.
 # See ci/lint.sh and .github/workflows/tests.yml for the apt-get package name.
 set -euo pipefail
+# The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
+export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
+export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")" && pwd)
 SHIM=$HERE/../voice/shim
 T=$(mktemp -d)

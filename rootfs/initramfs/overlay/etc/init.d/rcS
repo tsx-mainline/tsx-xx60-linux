@@ -14,14 +14,12 @@ ip link set lo up
 for c in $(cat /proc/cmdline); do case $c in tsx.ip=*) STATIC=${c#tsx.ip=};; esac; done
 ( n=0; while [ ! -e /sys/class/net/eth0 ] && [ $n -lt 30 ]; do sleep 1; n=$((n+1)); done
   macsrc=random; mac=
-  n=0; while [ ! -b /dev/mmcblk0 ] && [ $n -lt 10 ]; do sleep 1; n=$((n+1)); done   # the card can probe after eth0
-  if [ -b /dev/mmcblk0 ] && command -v dd >/dev/null 2>&1 && command -v sed >/dev/null 2>&1; then
-    mac=$(dd if=/dev/mmcblk0 bs=64k skip=16 count=1 2>/dev/null | tr '\0' '\n' | sed -n 's/^ethaddr=//p' | head -1)
-  fi
-  echo "$mac" | grep -qiE '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$' || mac=
+  . /usr/local/lib/tsx/board.sh
+  n=0; while [ ! -b "$TSX_MAC_DEV" ] && [ $n -lt 10 ]; do sleep 1; n=$((n+1)); done   # the card can probe after eth0
+  mac=$(tsx_board_mac_early)
   if [ -n "$mac" ]; then
     ip link set eth0 down 2>/dev/null
-    if ip link set dev eth0 address "$mac" 2>/dev/null; then macsrc=uboot; else mac=; fi
+    if ip link set dev eth0 address "$mac" 2>/dev/null; then macsrc=$(tsx_board_mac_source); else mac=; fi
   fi
   [ -z "$mac" ] && mac=$(cat /sys/class/net/eth0/address 2>/dev/null)
   echo "$macsrc" > /run/tsx-eth0-mac-src 2>/dev/null

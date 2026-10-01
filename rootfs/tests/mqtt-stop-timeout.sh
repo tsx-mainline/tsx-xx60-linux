@@ -6,6 +6,9 @@
 # while a publish is stuck mid-connect, (2) no mosquitto_pub/sub is left
 # behind as an orphan.
 set -eu
+# The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
+export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
+export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")" && pwd); O=$HERE/../../rootfs/overlay
 T=$(mktemp -d); trap 'rc=$?; kill "${DAEMON:-}" 2>/dev/null || true; rm -rf "$T"; exit $rc' EXIT
 mkdir -p "$T/bin" "$T/run" "$T/bl/x" "$T/none"

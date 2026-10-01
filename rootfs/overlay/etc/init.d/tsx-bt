@@ -37,9 +37,10 @@ start() {
 		einfo "Bluetooth: $(sed -n 's/^reason=//p' /run/tsx/bt.state 2>/dev/null)"
 		return 0
 	fi
+	. "${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}"
 	proxy=$(tsx-config get BT_PROXY 2>/dev/null) || proxy=
-	# empty = the board default (a board file sets TSX_BT_PROXY_DEFAULT)
-	[ -n "$proxy" ] || proxy=${TSX_BT_PROXY_DEFAULT:-off}
+	# empty = the board default (TSX_BT_PROXY_DEFAULT in the board file)
+	[ -n "$proxy" ] || proxy=$TSX_BT_PROXY_DEFAULT
 	if [ "$proxy" != on ]; then
 		einfo "BT_PROXY is off in panel.conf: Bluetooth stays off"
 		return 0

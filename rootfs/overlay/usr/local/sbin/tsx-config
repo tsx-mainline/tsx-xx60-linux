@@ -50,7 +50,7 @@
 # MQTT_HOST, MQTT_PORT, MQTT_USER, MQTT_PASSWORD, KERNEL_FLAVOR (lts|stable).
 # APK_URL: base URL of the apk repositories of this project (tsx-aports).
 #   apply rewrites the two lines <APK_URL>/<alpine-branch>/common and
-#   .../xx60 at the top of /etc/apk/repositories. Unset = the build default
+#   .../xx60 (the repository category of the board) at the top of /etc/apk/repositories. Unset = the build default
 #   in /etc/tsx/apk-url.default. "off" = leave them out.
 # BLANK_TIMEOUT: seconds without input before the screen goes dark, 0 =
 #   never. It replaces BLANK_TIMEOUT of kiosk.conf through
@@ -104,6 +104,13 @@ PREFIX=${TSX_APPLY_PREFIX:-}
 # The hardware facts of the panel (tsx-hw detect, at boot). A missing file
 # (host tooling, an early boot) means a panel with all parts.
 HW_CONF=${TSX_HW_CONF:-$RUN/hw.conf}
+# The board values (TSX_FAMILY, TSX_APK_CATEGORY, TSX_BT_PROXY_DEFAULT,
+# TSX_BT_MAC_SETTABLE). Test hook: TSX_BOARD_CONF. The installer runs this
+# script from a checkout of the repository on a host. There the board file is
+# next to it.
+BOARD=${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}
+[ -r "$BOARD" ] || BOARD=$(dirname "$0")/../lib/tsx/board.sh
+. "$BOARD"
 
 KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT BOOT_VERBOSE ORIENTATION BT_PROXY BT_ACTIVE BT_MAC AUTO_BRIGHTNESS ALS_SCALE ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 SECRET_KEYS="HA_TOKEN HA_API_KEY MQTT_PASSWORD ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
@@ -131,6 +138,8 @@ hw_missing() {
 		echo "this panel has no microphone (government=$(hw_get GOVERNMENT))";;
 	BT_PROXY|BT_ACTIVE) [ "$(hw_get BT)" = no ] || return 1
 		echo "this panel has no Bluetooth module (government=$(hw_get GOVERNMENT))";;
+	BT_MAC) [ "$TSX_BT_MAC_SETTABLE" = no ] || return 1
+		echo "this board takes the Bluetooth address from the controller";;
 	AUTO_BRIGHTNESS|ALS_SCALE) [ "$(hw_get ALS)" = no ] || return 1
 		echo "this panel has no ambient light sensor";;
 	*) return 1;;
@@ -275,7 +284,7 @@ cfg_set() {
 	d=$(dirname "$TSX_CONF")
 	mkdir -p "$d"; chmod 700 "$d" 2>/dev/null || true
 	if [ ! -f "$TSX_CONF" ]; then
-		{ echo "# /data/tsx/panel.conf: xx60 panel configuration (tsx-config)."
+		{ echo "# /data/tsx/panel.conf: $TSX_FAMILY panel configuration (tsx-config)."
 		  echo "# One KEY=\"value\" setting per line. Never sourced directly by any"
 		  echo "# service -- edit only with tsx-config get/set/show, or a factory"
 		  echo "# reinstall/upgrade may not read a hand-broken line."
@@ -391,11 +400,11 @@ apk_repos() {
 			echo "#   APK_URL=off: this project's repositories are not used"
 		else
 			echo "$url/$br/common"
-			echo "$url/$br/xx60"
+			echo "$url/$br/$TSX_APK_CATEGORY"
 		fi
 		# Everything else, minus an earlier block and any other copy of the
-		# two repositories of this project (/<branch>/common, /<branch>/xx60)
-		grep -vE '^# tsx-aports |^#   APK_URL=off|/(v[0-9][0-9.]*|edge)/(common|xx60)/*[[:space:]]*$' "$repos"
+		# two repositories of this project (/<branch>/common, /<branch>/$TSX_APK_CATEGORY)
+		grep -vE '^# tsx-aports |^#   APK_URL=off|/(v[0-9][0-9.]*|edge)/(common|'"$TSX_APK_CATEGORY"')/*[[:space:]]*$' "$repos"
 	} > "$tmp"
 	if cmp -s "$tmp" "$repos"; then rm -f "$tmp"; return 0; fi
 	chmod 644 "$tmp" && mv "$tmp" "$repos" && log "apk repositories: tsx-aports at $url ($br). The next apk update / tsx-autoupdate check uses it"
@@ -508,7 +517,7 @@ apply() {
 	# (rootfs/voice/shim/tsx_panel/bluetooth.py) read it. The voice satellite
 	# runs as kiosk and cannot read $TSX_CONF.
 	btp=$(cfg_get BT_PROXY) || btp=
-	[ -n "$btp" ] || btp=${TSX_BT_PROXY_DEFAULT:-off}
+	[ -n "$btp" ] || btp=$TSX_BT_PROXY_DEFAULT
 	bta=$(cfg_get BT_ACTIVE) || bta=off
 	# No Bluetooth module: bt.conf says off, so tsx-bt and both ESPHome
 	# front ends never offer the proxy.
@@ -516,6 +525,7 @@ apply() {
 		hw_warn BT_PROXY "$btp"; hw_warn BT_ACTIVE "$bta"; btp=off bta=off
 	fi
 	btm=$(cfg_get BT_MAC) || btm=
+	if [ -n "$btm" ] && why=$(hw_missing BT_MAC); then log "WARNING: BT_MAC=$btm is set, but $why. apply leaves it out"; btm=; fi
 	tmp="$RUN/bt.conf.tmp.$$"
 	{
 		printf 'PROXY="%s"\n' "$(shq "$btp")"

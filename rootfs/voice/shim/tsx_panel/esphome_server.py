@@ -41,7 +41,7 @@ from linux_voice_assistant.util import get_default_interface, get_default_ipv4, 
 from linux_voice_assistant.zeroconf import HomeAssistantZeroconf
 
 from . import bluetooth, naming, security
-from .backend import PanelBackend
+from .backend import PanelBackend, board_value
 from .device import build_entities, poll
 
 _LOGGER = logging.getLogger("tsx_esphome")
@@ -71,6 +71,7 @@ class PanelAPIServer(APIServer):
     mac_address = ""
     version = get_version()
     esphome_version = get_esphome_version()
+    model = "panel"  # replaced by the board value in main()
 
     def __init__(self) -> None:
         # asyncio.create_server's protocol_factory takes no arguments. The
@@ -116,7 +117,7 @@ class PanelAPIServer(APIServer):
                 esphome_version=self.esphome_version,
                 mac_address=self.mac_address,
                 manufacturer="Crestron (mainline Linux)",
-                model="xx60 panel",
+                model=self.model,
             ))
             return
         if bluetooth.handle_message(self, msg):
@@ -166,6 +167,9 @@ async def async_main() -> None:
     PanelAPIServer.name = device_name
     PanelAPIServer.friendly_name = friendly_name
     PanelAPIServer.mac_address = mac
+    ha_model = board_value("TSX_HA_MODEL")
+    if ha_model:
+        PanelAPIServer.model = f"{ha_model} panel"   # "xx60 panel" on the xx60
 
     backend = PanelBackend()
     device = build_entities(None, backend, key_base=0)

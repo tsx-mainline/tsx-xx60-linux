@@ -8,6 +8,9 @@
 # A panel without a part, or without a setting, must start nothing and
 # fail nothing.
 set -uo pipefail
+# The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
+export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
+export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 I=$HERE/overlay/etc/init.d
 command -v busybox >/dev/null 2>&1 || { echo "SKIPPED test-initscripts: no busybox on this host"; exit 0; }

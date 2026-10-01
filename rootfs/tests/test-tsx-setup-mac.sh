@@ -11,6 +11,9 @@
 # got a random MAC and a different DHCP address. The logic lived only in the
 # rcS of the rescue image.
 set -uo pipefail
+# The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
+export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
+export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 SCRIPT="$HERE/overlay/etc/init.d/tsx-setup"
 command -v busybox >/dev/null 2>&1 || { echo "SKIPPED test-tsx-setup-mac: no busybox on this host"; exit 0; }

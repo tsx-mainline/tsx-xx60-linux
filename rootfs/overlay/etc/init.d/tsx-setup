@@ -19,17 +19,14 @@ depend() { need localmount; before networking kiosk; }
 # step with a valid ethaddr whenever it sees one (docs/recovery.md "Random
 # MAC in the rescue, and the fix").
 #
-# TSX_MMCBLK0 and TSX_ETH0_MAC_FILE are hooks for host tests only
+# The board file gives the MAC (tsx_board_mac_early, board.sh). TSX_MMCBLK0
+# (read by board.sh), TSX_BOARD_CONF and TSX_ETH0_MAC_FILE are hooks for host tests only
 # (rootfs/tests/). They work like TSX_APPLY_PREFIX in tsx-config. If they
 # are empty or unset, the script uses the real paths of the panel.
 select_eth0_mac() {
-	blk=${TSX_MMCBLK0:-/dev/mmcblk0}
+	. "${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}"
 	macf=${TSX_ETH0_MAC_FILE:-/etc/tsx/eth0.mac}
-	mac=
-	if [ -b "$blk" ] || [ -f "$blk" ]; then
-		mac=$(dd if="$blk" bs=64k skip=16 count=1 2>/dev/null | tr '\0' '\n' | sed -n 's/^ethaddr=//p' | head -1)
-	fi
-	echo "$mac" | grep -qiE '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$' || mac=
+	mac=$(tsx_board_mac_early)
 	if [ -n "$mac" ]; then
 		cur=
 		[ -s "$macf" ] && cur=$(head -1 "$macf")

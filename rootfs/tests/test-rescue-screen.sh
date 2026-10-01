@@ -17,6 +17,9 @@
 #   - tsx-rescue and tsx-boot-ok are in the base initramfs (one source each).
 # The test runs under busybox or dash sh and needs no compiler.
 set -eu
+# The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
+export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
+export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
 RS=$HERE/rootfs/initramfs/overlay/usr/sbin/tsx-rescue-status
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT

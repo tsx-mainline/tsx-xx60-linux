@@ -24,6 +24,9 @@
 #    and the BT_ACTIVE switch.
 # The PSR files here are made up. They are not the vendor file.
 set -uo pipefail
+# The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
+export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
+export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIB=$HERE/../overlay/usr/local/lib/tsx
 BT=$HERE/../overlay/usr/local/sbin/tsx-bt

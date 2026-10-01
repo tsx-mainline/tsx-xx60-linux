@@ -1,8 +1,9 @@
 #!/bin/sh
-# tsx-audio: TSW-1060 sound card helper. Config /etc/tsx/audio.conf.
+# tsx-audio: sound card helper of the xx60 (the TSW-1060 and the TSW-760). Config /etc/tsx/audio.conf.
 #
 #   tsx-audio init                  card setup at boot: amplifier inputs, ZL38051
 #                                   mic/AEC, softvol controls, saved or default levels
+#   tsx-audio card                  print the ALSA card name (TSX_SOUND_CARD of the board file)
 #   tsx-audio store                 save the mixer state (STATE)
 #   tsx-audio status                card, controls, speaker enable, open streams
 #   tsx-audio volume [N|+N|-N]      Master in % (0..100 of -50..-6 dB). No arg = print
@@ -22,7 +23,8 @@ AMIXER=${AMIXER:-amixer}
 ALSACTL=${ALSACTL:-alsactl}
 APLAY=${APLAY:-aplay}
 
-CARD=TSW1060 CARD_WAIT=15 STATE=/var/lib/tsx/asound.state
+. "${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}"
+CARD=$TSX_SOUND_CARD CARD_WAIT=15 STATE=/var/lib/tsx/asound.state
 MASTER_DEFAULT=100 MEDIA_DEFAULT=100 LEFT_AMP_INPUT=Left RIGHT_AMP_INPUT=Right
 MIC=on AEC=on MIC_VOLUME=
 [ -r "$CONF" ] && . "$CONF"
@@ -185,10 +187,11 @@ case ${1:-} in
 init) cmd_init;;
 store) cmd_store;;
 status) cmd_status;;
+card) echo "$CARD";;
 volume) shift; cmd_volume "$@";;
 mute) shift; cmd_mute "$@";;
 speaker) shift; cmd_speaker "$@";;
 enable) cmd_enable add "${2:-}";;
 disable) cmd_enable del "${2:-}";;
-*) sed -n '2,17p' "$0"; exit 1;;
+*) sed -n '2,18p' "$0"; exit 1;;
 esac

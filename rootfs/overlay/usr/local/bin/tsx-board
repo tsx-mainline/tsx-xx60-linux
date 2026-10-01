@@ -1,0 +1,27 @@
+#!/bin/sh
+# tsx-board: one value of the board file (board.sh), for programs that cannot
+# source it (the Python parts of the panel software).
+#   tsx-board get NAME   print the value of the variable NAME (TSX_SOUND_CARD)
+#   tsx-board call NAME  print the output of the function NAME (tsx_board_model)
+# A name that the board does not define prints nothing and returns 1.
+# Test hook: TSX_BOARD_CONF replaces /usr/local/lib/tsx/board.sh.
+set -u
+BOARD=${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}
+usage() { sed -n '2,7p' "$0" >&2; exit 2; }
+[ $# = 2 ] || usage
+case "$2" in ''|*[!A-Za-z0-9_]*) echo "tsx-board: bad name" >&2; exit 2;; esac
+[ -r "$BOARD" ] || { echo "tsx-board: no $BOARD" >&2; exit 1; }
+. "$BOARD"
+case "$1" in
+get)
+	case "$2" in tsx_*) exit 1;; esac
+	eval "[ -n \"\${$2:-}\" ]" || exit 1
+	eval "printf '%s\\n' \"\${$2}\""
+	;;
+call)
+	case "$2" in tsx_board_*) ;; *) exit 1;; esac
+	type "$2" >/dev/null 2>&1 || exit 1
+	"$2"
+	;;
+*) usage;;
+esac

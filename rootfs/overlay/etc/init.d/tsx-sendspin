@@ -18,14 +18,15 @@ start_pre() {
 	# must exist, and kiosk must be able to write it.
 	checkpath -f -m 0644 -o kiosk:audio /var/log/tsx-sendspin.log
 	[ -x "$command" ] || { eerror "no sendspin-cli (apk add sendspin-cli)"; return 1; }
-	[ -e /proc/asound/TSW1060 ] || ewarn "no TSW1060 sound card (audio not brought up yet)"
+	. "${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}"
+	[ -e "/proc/asound/$TSX_SOUND_CARD" ] || ewarn "no $TSX_SOUND_CARD sound card (audio not brought up yet)"
 	SENDSPIN_NAME= SENDSPIN_ID= SENDSPIN_OUTPUT=alsa:media SENDSPIN_FORMATS= SENDSPIN_BUFFER_MS=300
 	SENDSPIN_STATIC_DELAY=0 SENDSPIN_SERVER= SENDSPIN_ARGS=
 	[ -r /etc/tsx/sendspin.conf ] && . /etc/tsx/sendspin.conf
 	[ -r /run/tsx/sendspin.conf ] && . /run/tsx/sendspin.conf   # panel.conf PANEL_NAME (tsx-config apply)
 	checkpath -d -m 0755 -o kiosk:audio /run/sendspin-cli
 	checkpath -d -m 0755 -o kiosk:audio /var/lib/sendspin
-	command_args="-n \"${SENDSPIN_NAME:-$(hostname)}\" -o $SENDSPIN_OUTPUT --buffer-ms $SENDSPIN_BUFFER_MS --static-delay $SENDSPIN_STATIC_DELAY --control-socket /run/sendspin-cli/control.sock --state-dir /var/lib/sendspin --manufacturer Crestron --product-name xx60"
+	command_args="-n \"${SENDSPIN_NAME:-$(hostname)}\" -o $SENDSPIN_OUTPUT --buffer-ms $SENDSPIN_BUFFER_MS --static-delay $SENDSPIN_STATIC_DELAY --control-socket /run/sendspin-cli/control.sock --state-dir /var/lib/sendspin --manufacturer Crestron --product-name $TSX_HA_MODEL"
 	[ -n "$SENDSPIN_ID" ] && command_args="$command_args --id $SENDSPIN_ID"
 	[ -n "$SENDSPIN_FORMATS" ] && command_args="$command_args --audio-format $SENDSPIN_FORMATS"
 	[ -n "$SENDSPIN_SERVER" ] && command_args="$command_args -s $SENDSPIN_SERVER"

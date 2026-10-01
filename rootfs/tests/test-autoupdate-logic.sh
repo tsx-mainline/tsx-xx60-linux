@@ -5,6 +5,9 @@
 # (no apk/date stubbing needed here. See test-autoupdate-flow.sh for the
 # end-to-end check/install/status/healthcheck flow with a stubbed apk/date).
 set -u
+# The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
+export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
+export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")" && pwd); BIN=$HERE/../../rootfs/overlay/usr/local/sbin/tsx-autoupdate
 fail=0
 chk() { [ "$1" = "$2" ] || { echo "FAIL: $3: got '$1', want '$2'"; fail=1; }; }

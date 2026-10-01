@@ -2,6 +2,9 @@
 # Host test of tsx-mqtt in dry-run mode: discovery JSON (jq), state mapping,
 # command handling (tsx-ledbar/tsx-keypad/tsx-blank are stubs that log calls).
 set -eu
+# The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
+export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
+export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")" && pwd); O=$HERE/../../rootfs/overlay
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; mkdir -p "$T/bin" "$T/run" "$T/bl/x"
 for c in tsx-ledbar tsx-keypad tsx-blank tsx-autoupdate tsx-config; do printf '#!/bin/sh\necho "CALL %s $*" >&2\n' $c > "$T/bin/$c"; chmod +x "$T/bin/$c"; done

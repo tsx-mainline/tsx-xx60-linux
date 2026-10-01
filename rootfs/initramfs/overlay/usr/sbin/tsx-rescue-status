@@ -32,8 +32,8 @@
 #   /run/tsx-eth0-mac-src     uboot|random (rootfs/initramfs/overlay/etc/init.d/rcS).
 #                             Absent: rcS has not set the MAC yet ("starting").
 #   /etc/tsx/rescue-version   the version line of the rescue image (absent in the initramfs rescue)
-#   the U-Boot env (product_name, ethaddr) through tsx-lib.sh
-# Test hooks: TSX_RUN TSX_STATUS_TTY (output) TSX_STATUS_IN (keyboard tty)
+#   the board data (model, stock firmware, unit id, MAC) through board.sh
+# Test hooks: TSX_BOARD_CONF (the board file) TSX_RUN TSX_STATUS_TTY (output) TSX_STATUS_IN (keyboard tty)
 # TSX_STATUS_SHELL TSX_STATUS_COLS (default 80) TSX_STATUS_LOOPS (rounds, default endless) TSX_STATUS_WAIT (default 2 s)
 set -u
 RUN=${TSX_RUN:-/run}
@@ -44,6 +44,7 @@ COLS=${TSX_STATUS_COLS:-80}
 WAIT=${TSX_STATUS_WAIT:-2}
 VERFILE=${TSX_VERFILE:-/etc/tsx/rescue-version}
 . ${TSX_LIB:-/usr/share/tsx/tsx-lib.sh} 2>/dev/null || true
+. "${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}"
 
 # ---- banner: small enough for an 80x25 console (63 columns). On the LCD the
 # console font is Terminus bold sized for the screen (tsx-confont: 16x32 on
@@ -125,7 +126,7 @@ read_op() {
 
 # ---- one frame (text on stdout) -------------------------------------------
 frame_text() {
-	local ip method mac macsrc envmac noaddr rver kver pname punit fw model hint
+	local ip method mac macsrc envmac noaddr rver kver punit fw model
 	ip=$(ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
 	case " $(cat /proc/cmdline 2>/dev/null) " in *" tsx.ip="*) method=static;; *) method=dhcp;; esac
 	mac=$(cat /sys/class/net/eth0/address 2>/dev/null)
@@ -134,17 +135,12 @@ frame_text() {
 	rver="initramfs rescue (no rescue image)"; [ -f "$VERFILE" ] && rver=$(head -n 1 "$VERFILE")
 	kver=$(uname -r 2>/dev/null || echo unknown)
 
-	pname=; punit=
-	if type tsx_find_disk >/dev/null 2>&1; then
-		if tsx_find_disk 2>/dev/null; then
-			# fw_env.config needs a hex offset and size (installer/steps/tsx-rescue-arm.sh says why)
-			printf '%s 0x%x 0x%x\n' "$WHOLE" "${TSX_ENV_OFFSET:-1048576}" "${TSX_ENV_SIZE:-65536}" > "$RUN/tsx-status-env.cfg" 2>/dev/null
-			FWCFG=$RUN/tsx-status-env.cfg
-			tsx_pick_fwenv 2>/dev/null
-			pname=$(tsx_env product_name 2>/dev/null || true)
-			punit=$(tsx_unit_id 2>/dev/null || true)
-			[ -n "$macsrc" ] || envmac=$(tsx_env ethaddr 2>/dev/null || true)
-		fi
+	model= fw= punit=
+	if tsx_board_probe "$RUN"; then
+		model=$(tsx_board_model 2>/dev/null || true)
+		fw=$(tsx_board_stock_fw 2>/dev/null || true)
+		punit=$(tsx_board_unit_id 2>/dev/null || true)
+		[ -n "$macsrc" ] || envmac=$(tsx_board_mac 2>/dev/null || true)
 	fi
 	# rcS writes tsx-eth0-mac-src when it has set the MAC. Before that, eth0
 	# still has the random MAC of the kernel and has no address yet. The
@@ -152,13 +148,8 @@ frame_text() {
 	noaddr="(no address yet)"
 	if [ -z "$macsrc" ]; then
 		noaddr="(starting)"
-		if echo "$envmac" | grep -qiE '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$'; then mac=$envmac macsrc=uboot; else mac=; fi
+		if [ -n "$envmac" ]; then mac=$envmac macsrc=$(tsx_board_mac_source); else mac=; fi
 	fi
-	# product_name looks like "TSS-10_[v3.002.1061,_#0A1B2C3D]". It has the
-	# model, then the stock firmware version and the tsid. The tsid stays off
-	# the screen.
-	model=${pname%%_\[*}
-	fw=$(echo "$pname" | sed -n 's/^[^[]*\[\(v[0-9][0-9.]*\).*/\1/p')
 
 	splash
 	echo "----------------------------------------------------------------"
@@ -166,6 +157,7 @@ frame_text() {
 	echo "rescue       : $rver"
 	echo "kernel       : $kver"
 	echo "network      : eth0 ${ip:-$noaddr} ($method${mac:+, MAC $mac}${macsrc:+, $macsrc})"
+	tsx_board_rescue_extra
 	if [ -n "$ip" ]; then echo "repair shell : ssh root@$ip   (password: tsx)"
 	else echo "repair shell : ssh root@<ip once DHCP/static assigns one>  (password: tsx)"; fi
 	echo "----------------------------------------------------------------"
