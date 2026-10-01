@@ -84,6 +84,8 @@ jobs:
         run: tools/build/tests/test-push-protect.sh
       - name: tools/build/tests/test-no-pull.sh - remote build can leave artifacts on the host
         run: tools/build/tests/test-no-pull.sh
+      - name: tools/build/tests/test-send-guard.sh - remote build refuses ignored and proprietary files
+        run: tools/build/tests/test-send-guard.sh
       - name: rootfs/tests/mqtt-stop-timeout.sh - tsx-mqtt stops quickly with an unreachable broker
         run: sh rootfs/tests/mqtt-stop-timeout.sh
       - name: rootfs/tests/test-install.sh - docker --privileged, loop device

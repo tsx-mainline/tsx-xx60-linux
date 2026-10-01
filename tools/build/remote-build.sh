@@ -86,6 +86,34 @@ say() { echo "[remote-build] $*"; }
 case $FLAVOR in lts|stable) ;; *) echo "remote-build: --flavor/\$FLAVOR must be lts or stable (got $FLAVOR)"; exit 1;; esac
 flavor_branch() { case $1 in lts) echo tsx-xx60-6.18;; stable) echo tsx-xx60-7.2;; esac; }
 
+# --- send guard: refuse to send ignored files, or untracked proprietary-looking
+# files, to the build host. A git-ignored folder (vendor-local, vendor-cache,
+# a .puf download) must never reach a build. Build from a clean export or
+# worktree instead. A tree that is not a git checkout (a "git archive" export)
+# has no ignored files, so the guard has nothing to check there.
+# Ignored paths that the script never sends, or that are build inputs on
+# purpose, are allowed.
+GUARD_OK='^(out|out-[^/]*|kernel/out|rootfs/(out|build|build-[^/]*|modules|aports-local)|tools/build/state|rootfs/src/sendspin/out)/|^rootfs/voice/tflite/libtensorflowlite_c\.so$|\.(o|ko)$'
+GUARD_PROP='\.(cnt|puf|psr)$|tfa9890|csr8811'
+guard_sources() {  # guard_sources PATH... (relative to the repo root)
+	local top st bad
+	top=$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null) || return 0
+	[ "$top" = "$REPO" ] || return 0
+	st=$(cd "$REPO" && git status --porcelain --ignored -uall -- "$@")
+	bad=$({ printf '%s\n' "$st" | sed -n 's/^!! //p' | grep -v -E "$GUARD_OK" || true
+		printf '%s\n' "$st" | sed -n 's/^?? //p' | grep -E -i "$GUARD_PROP" || true; } | sort -u)
+	if [ -n "$bad" ]; then
+		echo "remote-build: REFUSED. These files are ignored or proprietary and would go to the build host:" >&2
+		echo "$bad" | sed 's/^/  /' >&2
+		echo "Build from a clean export or worktree: git worktree add ../wt-build <commit>, or git archive <commit> | tar -x -C <dir>." >&2
+		echo "Nothing was sent." >&2
+		exit 1
+	fi
+}
+# proprietary files in a built rootfs tarball stop the build (see ci/check-no-proprietary.sh)
+# TSX_ALLOW_PROPRIETARY=1 is for a private image on your own machine. Never use it for a release.
+ALLOW_PROP=${TSX_ALLOW_PROPRIETARY:-0}
+
 # --- no BUILD_HOST: build locally with the same scripts this wrapper would
 # otherwise run over ssh, and stop here. -----------------------------------
 if [ -z "${BUILD_HOST:-}" ]; then
@@ -93,7 +121,9 @@ if [ -z "${BUILD_HOST:-}" ]; then
 	case $CMD in
 	kernel) exec "$HERE/kbuild.sh" -f "$FLAVOR" ${J:+-j "$J"} ${DEST:+-d "$DEST"} kernel image;;
 	rootfs) [ $MODS = 1 ] && "$REPO/rootfs/build-rootfs.sh" modules
+		[ "$ALLOW_PROP" = 1 ] || export TFA_VENDOR_FETCH=${TFA_VENDOR_FETCH:-no}
 		"$REPO/rootfs/build-rootfs.sh" rootfs
+		[ "$ALLOW_PROP" = 1 ] || "$REPO/ci/check-no-proprietary.sh" "$REPO/rootfs/out/rootfs.tar.gz"
 		[ -z "$DEST" ] || { mkdir -p "$DEST"; cp "$REPO"/rootfs/out/rootfs.* "$DEST/"; }
 		exit 0;;
 	initramfs) "$REPO/rootfs/build-rootfs.sh" initramfs
@@ -222,6 +252,13 @@ maybe_pull() {  # like pull, but --no-pull/REMOTE_PULL=0 leaves the files on the
 }
 
 t0=$(date +%s)
+RS_PATHS=(tools/build ci kernel/mkimage.sh kernel/aml-dt.py rootfs/overlay rootfs/src rootfs/initramfs rootfs/config rootfs/voice rootfs/splash
+	rootfs/mkrootfs.sh rootfs/build-rootfs.sh rootfs/mkbootimg.sh rootfs/packages.txt rootfs/packages-tsx.txt rootfs/vendor-fetch.sh rootfs/install.sh rootfs/tsx-disk.sh rootfs/authorized_keys)
+case $CMD in
+kernel) guard_sources tools/build ci kernel/mkimage.sh kernel/aml-dt.py;;
+rootfs|initramfs|image) guard_sources "${RS_PATHS[@]}";;
+sync) guard_sources .;;
+esac
 case $CMD in
 kernel)
 	br=${ARG:-$(flavor_branch "$FLAVOR")}; wt=$(worktree_of "$br")
@@ -249,14 +286,16 @@ rootfs)
 	# rootfs sources on the host and used from there
 	apkenv="TSX_APK_URL=${TSX_APK_URL:-https://tsx-aports.unexceptional.net}"
 	# TFA_VENDOR_FETCH=no: no Crestron file in the image (as CI and release.yml)
-	[ -z "${TFA_VENDOR_FETCH:-}" ] || apkenv="$apkenv TFA_VENDOR_FETCH=$TFA_VENDOR_FETCH"
+	# A build through this script fetches nothing unless TSX_ALLOW_PROPRIETARY=1.
+	[ "$ALLOW_PROP" = 1 ] && [ -z "${TFA_VENDOR_FETCH:-}" ] || apkenv="$apkenv TFA_VENDOR_FETCH=${TFA_VENDOR_FETCH:-no}"
 	if [ -n "${TSX_APK_LOCAL:-}" ]; then
 		say "tsx-aports tree $TSX_APK_LOCAL -> $BUILD_DIR/rootfs/aports-local"
 		rsh "mkdir -p $BUILD_DIR/rootfs/aports-local"
 		"${RS[@]}" --delete "$TSX_APK_LOCAL/" "$HOST:$BUILD_DIR/rootfs/aports-local/"
 		apkenv="$apkenv TSX_APK_LOCAL=$BUILD_DIR/rootfs/aports-local"
 	fi
-	rjob rootfs "cd $BUILD_DIR/rootfs && flock $BUILD_DIR/rootfs/.rootfs.lock env $apkenv bash -c 'set -e; $m; ./build-rootfs.sh rootfs'"
+	chk=; [ "$ALLOW_PROP" = 1 ] || chk="; $BUILD_DIR/ci/check-no-proprietary.sh out/rootfs.tar.gz"
+	rjob rootfs "cd $BUILD_DIR/rootfs && flock $BUILD_DIR/rootfs/.rootfs.lock env $apkenv bash -c 'set -e; $m; ./build-rootfs.sh rootfs$chk'"
 	to=${DEST:-$REPO/rootfs/out}; o=$BUILD_DIR/rootfs/out
 	say "artifacts:"
 	maybe_pull "$to" "$o/rootfs.ext4" "$o/rootfs.tar.gz" "$o/rootfs.manifest" "$o/rootfs.sizes" "$o/rootfs.sha256";;
