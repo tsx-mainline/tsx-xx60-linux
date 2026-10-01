@@ -24,13 +24,19 @@
 # scan never sends it over the air.
 #
 # Every step logs why it failed. "up" writes $TSX_RUN_DIR/bt.state
-# (state=up|failed|down, reason=, hci=, mac=, psr=) and exits 1 on a failure.
-# The init script never fails the boot on that exit status.
+# (state=up|failed|down|absent, reason=, hci=, mac=, psr=) and exits 1 on a
+# failure. The init script never fails the boot on that exit status.
 #
-# Files: /run/tsx/bt.conf (PROXY=, MAC=, written by tsx-config apply),
-# /usr/local/share/tsx/csr8811/PSR-CSR8811.psr (+ SOURCE, from the
-# installer). Test hooks: TSX_RUN_DIR, TSX_SYSFS, TSX_PROC, TSX_BT_TTY, TSX_BT_PSR,
-# TSX_BT_LIB, TSX_BT_SETTLE.
+# A panel without a Bluetooth module (BT=no in /run/tsx/hw.conf, from
+# tsx-hw: government=1, the TSW-760-NC) never touches the chip: no rfkill
+# pulse, no UART. "up", "down" and "status" then report state=absent with
+# the reason, and exit 0.
+#
+# Files: /run/tsx/hw.conf (BT=, GOVERNMENT=, REASON=, written by tsx-hw at
+# boot), /run/tsx/bt.conf (PROXY=, ACTIVE=, MAC=, written by tsx-config
+# apply), /usr/local/share/tsx/csr8811/PSR-CSR8811.psr (+ SOURCE, from the
+# installer). Test hooks: TSX_RUN_DIR, TSX_SYSFS, TSX_PROC, TSX_BT_TTY,
+# TSX_BT_PSR, TSX_BT_LIB, TSX_BT_SETTLE.
 set -u
 RUN=${TSX_RUN_DIR:-/run/tsx}
 SYS=${TSX_SYSFS:-/sys}
@@ -51,6 +57,21 @@ log() { echo "tsx-bt: $*"; logger -t tsx-bt "$*" 2>/dev/null || true; }
 # never sourced.
 conf_get() {
 	sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$RUN/bt.conf" 2>/dev/null | tail -n 1
+}
+
+# hw_get KEY: a value from $RUN/hw.conf (tsx-hw). Empty if it is not there.
+hw_get() { sed -n "s/^$1=//p" "$RUN/hw.conf" 2>/dev/null | tail -n 1; }
+
+absent_reason() { echo "no Bluetooth module on this panel (government=$(hw_get GOVERNMENT))"; }
+
+# absent: on a panel without a Bluetooth module, record that and succeed.
+# Return 1 on any other panel.
+absent() {
+	[ "$(hw_get BT)" = no ] || return 1
+	HCI= MAC= PSRKIND=
+	state absent "$(absent_reason)"
+	log "absent: $(absent_reason). The chip is not touched"
+	return 0
 }
 
 valid_mac() { printf '%s' "$1" | grep -Eq '^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$'; }
@@ -178,7 +199,11 @@ do_up() {
 
 	out=$(python3 "$LIB/csr_psload.py" --device "$TTY" --baud "$BAUD" "$@" 2>&1) || {
 		echo "$out" | sed 's/^/  /'
-		fail "PSR upload: $(echo "$out" | tail -n 1)"
+		# A panel without the module has government=1 and never gets
+		# here (absent above). Name the flag for the person who reads
+		# this (docs/hardware.md "Panel variants").
+		gov=$(hw_get GOVERNMENT)
+		fail "PSR upload: $(echo "$out" | tail -n 1) (this panel has government=${gov:-unknown}. A panel with government=1 has no Bluetooth module)"
 	}
 	log "PSR upload: $(echo "$out" | tail -n 1)"
 
@@ -223,9 +248,16 @@ do_down() {
 }
 
 case "${1:-}" in
-up) do_up;;
-down) do_down;;
+up) absent || do_up;;
+down) absent || do_down;;
 status)
+	if [ "$(hw_get BT)" = no ]; then
+		# Say "absent" also when nothing has run yet (no state file).
+		if grep -q '^state=absent' "$RUN/bt.state" 2>/dev/null; then cat "$RUN/bt.state"
+		else echo "state=absent"; echo "reason=$(absent_reason)"
+		fi
+		exit 0
+	fi
 	cat "$RUN/bt.state" 2>/dev/null || echo "state=unknown (tsx-bt has not run)"
 	h=$(sed -n 's/^hci=//p' "$RUN/bt.state" 2>/dev/null)
 	[ -n "$h" ] && hciconfig "$h" 2>/dev/null

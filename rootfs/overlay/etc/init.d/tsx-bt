@@ -10,6 +10,8 @@
 # Home Assistant (/run/tsx/bt-gatt.sock, btgatt.py).
 # A failed bring-up never fails the boot: the service logs why
 # (/var/log/tsx-bt.log, /run/tsx/bt.state) and ends without the scanner.
+# A panel without a Bluetooth module (BT=no in /run/tsx/hw.conf,
+# government=1) never touches the chip: tsx-bt records state=absent.
 description="Bluetooth controller, BLE scanner and BLE links for the Home Assistant Bluetooth proxy"
 LOG=/var/log/tsx-bt.log
 PIDFILE=/run/tsx-btscan.pid
@@ -21,6 +23,12 @@ depend() {
 }
 
 start() {
+	if [ "$(sed -n 's/^BT=//p' /run/tsx/hw.conf 2>/dev/null)" = no ]; then
+		checkpath -d -m 0755 /run/tsx
+		/usr/local/sbin/tsx-bt up >>"$LOG" 2>&1
+		einfo "Bluetooth: $(sed -n 's/^reason=//p' /run/tsx/bt.state 2>/dev/null)"
+		return 0
+	fi
 	proxy=$(tsx-config get BT_PROXY 2>/dev/null) || proxy=off
 	if [ "$proxy" != on ]; then
 		einfo "BT_PROXY is off in panel.conf: Bluetooth stays off"

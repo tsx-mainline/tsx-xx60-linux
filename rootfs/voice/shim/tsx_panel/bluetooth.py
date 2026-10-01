@@ -62,12 +62,13 @@ messages for the Home Assistant connection that owns the link.
 
 The proxy is on when $TSX_RUN_DIR/bt.conf (written by tsx-config apply from
 panel.conf BT_PROXY and BT_ACTIVE) says PROXY="on". The active part also
-needs ACTIVE="on". Both front ends use one module-level instance (PROXY):
+needs ACTIVE="on". On a panel without a Bluetooth module (BT=no in
+hw.conf, government=1: hw.py) the proxy is always off. Both front ends use one module-level instance (PROXY):
 tsx-esphome (esphome_server.py) and the voice satellite (tsx_lva). The voice
 satellite runs as the kiosk user. It can read bt.conf and bt.mac (mode 644)
 and connect to both sockets (group kiosk).
 Test hooks: TSX_RUN_DIR, TSX_BT_CONF, TSX_BT_MAC_FILE, TSX_BT_ADV_SOCKET,
-TSX_BT_GATT_SOCKET.
+TSX_BT_GATT_SOCKET, TSX_HW_CONF.
 """
 
 import json
@@ -77,6 +78,8 @@ import socket
 import struct
 import threading
 import time
+
+from . import hw
 
 _LOGGER = logging.getLogger("tsx_panel.bluetooth")
 
@@ -128,6 +131,7 @@ class BtProxy:
     def __init__(self, run_dir=None):
         run = run_dir or os.environ.get("TSX_RUN_DIR", "/run/tsx")
         self.conf_path = os.environ.get("TSX_BT_CONF", os.path.join(run, "bt.conf"))
+        self.hw_path = os.environ.get("TSX_HW_CONF", os.path.join(run, "hw.conf"))
         self.mac_path = os.environ.get("TSX_BT_MAC_FILE", os.path.join(run, "bt.mac"))
         self.sock_path = os.environ.get("TSX_BT_ADV_SOCKET", os.path.join(run, "bt-adv.sock"))
         self.gatt = GattBridge(os.environ.get("TSX_BT_GATT_SOCKET", os.path.join(run, "bt-gatt.sock")))
@@ -138,7 +142,7 @@ class BtProxy:
 
     # ---- configuration ---------------------------------------------------
     def enabled(self):
-        return _conf_value(self.conf_path, "PROXY") == "on"
+        return hw.present("BT", self.hw_path) and _conf_value(self.conf_path, "PROXY") == "on"
 
     def active(self):
         return self.enabled() and _conf_value(self.conf_path, "ACTIVE") == "on"

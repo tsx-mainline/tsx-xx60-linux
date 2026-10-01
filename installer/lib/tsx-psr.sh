@@ -30,6 +30,10 @@
 # (rootfs/vendor-fetch.sh --psr, see tsx_psr_plan below). Without a file, the
 # panel still works: tsx-bt then loads only the Bluetooth address, and the
 # chip runs on its ROM defaults.
+# A panel with government=1 (the TSW-760-NC, docs/hardware.md "Panel
+# variants") has no Bluetooth module and needs no PSR file. The psr command
+# reads the flag first (tsx_psr_government). Then it looks for no file and
+# records "not-needed" (tsx_psr_not_needed), and the host downloads no .puf.
 # Test hooks: TSX_PSR_PINNED (replaces the pinned sha256) and a directory as
 # the root device (used as the mounted root).
 
@@ -40,6 +44,35 @@ TSX_PSR_REL=usr/local/share/tsx/csr8811
 # firmware tsw-xx60_3.002.1061.001 (7814 bytes). tsx-bt has the same value.
 tsx_psr_pinned() {
 	echo "${TSX_PSR_PINNED:-96709f6ca529efb0dc8cf48165ba0c1c1934236794424aa539810376676aa8be}"
+}
+
+# tsx_psr_government CMDLINE_FILE: print 0 or 1, or nothing if the flag is
+# not known. The source is androidboot.government=N on the kernel command
+# line: U-Boot builds it from its env at every boot, also for the rescue. If
+# the line has no such word, and the caller has sourced tsx-lib.sh and set
+# FWP (tsx_pick_fwenv) and FWCFG, the U-Boot env itself (tsx_env).
+tsx_psr_government() {
+	local w g=
+	for w in $(cat "${1:-/proc/cmdline}" 2>/dev/null); do
+		case $w in androidboot.government=*) g=${w#androidboot.government=};; esac
+	done
+	if [ -z "$g" ] && [ -n "${FWP:-}" ] && type tsx_env >/dev/null 2>&1; then
+		g=$(tsx_env government 2>/dev/null) || g=
+	fi
+	case $g in 0|1) echo "$g";; esac
+	return 0
+}
+
+# tsx_psr_not_needed OUTDIR: record in OUTDIR/SOURCE that this panel needs
+# no PSR file (government=1). OUTDIR gets no PSR file. "run" copies the
+# SOURCE file into the new root.
+tsx_psr_not_needed() {
+	rm -rf "$1"; mkdir -p "$1"
+	{ echo "source=not-needed"
+	  echo "firmware=none (government=1: this panel has no Bluetooth module)"
+	  echo "sha256=none"; } > "$1/SOURCE"
+	echo "psr: government=1: this panel has no Bluetooth module. No PSR file is needed"
+	echo "PSR-RESULT source=not-needed ok=0 government=1"
 }
 
 # tsx_psr_validate FILE: print one line. Return 0 (pinned sha256), 1 (unknown
@@ -118,13 +151,18 @@ tsx_psr_collect() {
 	return 0
 }
 
-# tsx_psr_plan MODE PANEL_OK: print what the host does next (--psr-source
-# MODE). PANEL_OK is 1 if the rescue found a valid file, 0 if it found none,
-# or "-" if nobody asked the rescue.
+# tsx_psr_plan MODE PANEL_OK [GOVERNMENT]: print what the host does next
+# (--psr-source MODE). PANEL_OK is 1 if the rescue found a valid file, 0 if
+# it found none, or "-" if nobody asked the rescue. GOVERNMENT is 1 if the
+# rescue reported government=1. The rescue looks only in modes auto and
+# panel, so only these two modes know the flag.
 #   use-panel   keep the file of the panel, no download
 #   puf         run rootfs/vendor-fetch.sh --psr (the .puf download) and push its file
 #   none        no PSR file
+#   not-needed  government=1: no PSR file, no download. The rescue has
+#               recorded SOURCE (source=not-needed)
 tsx_psr_plan() {
+	case "$1:${3:-}" in auto:1|panel:1) echo not-needed; return 0;; esac
 	case "$1:$2" in
 	none:*) echo none;;
 	puf:*) echo puf;;

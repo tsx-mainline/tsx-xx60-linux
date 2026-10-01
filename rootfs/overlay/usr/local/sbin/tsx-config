@@ -74,6 +74,10 @@
 #   Home Assistant reads the new feature flags.
 # BT_MAC: the Bluetooth address that tsx-bt loads into the chip. Empty = the
 #   eth0 MAC, the same value as the vendor firmware.
+# A panel without a microphone or a Bluetooth module (government=1, the
+# TSW-760-NC: /run/tsx/hw.conf, written by tsx-hw at boot) accepts VOICE=on,
+# BT_PROXY=on and BT_ACTIVE=on, so that a panel.conf from another panel
+# still loads. set and show print a warning, and apply treats them as off.
 # ROOT_PASSWORD_HASH, SSH_AUTHORIZED_KEY.
 # See installer/panel.conf.example and docs/rootfs.md "Panel configuration"
 # for what each key does.
@@ -88,6 +92,9 @@ SEED=${TSX_CONF_SEED:-/etc/tsx/panel.conf.seed}
 # fixture tree at it. If PREFIX is empty (the panel default), the paths stay
 # absolute.
 PREFIX=${TSX_APPLY_PREFIX:-}
+# The hardware facts of the panel (tsx-hw detect, at boot). A missing file
+# (host tooling, an early boot) means a panel with all parts.
+HW_CONF=${TSX_HW_CONF:-$RUN/hw.conf}
 
 KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT BOOT_VERBOSE ORIENTATION BT_PROXY BT_ACTIVE BT_MAC ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 SECRET_KEYS="HA_TOKEN HA_API_KEY MQTT_PASSWORD ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
@@ -103,6 +110,27 @@ key_known() {
 is_secret() {
 	case " $SECRET_KEYS " in *" $1 "*) return 0;; esac
 	return 1
+}
+
+hw_get() { sed -n "s/^$1=//p" "$HW_CONF" 2>/dev/null | tail -n 1; }
+
+# hw_missing KEY: if KEY=on cannot work on this panel, print why and
+# succeed. Else fail and print nothing.
+hw_missing() {
+	case "$1" in
+	VOICE) [ "$(hw_get MIC)" = no ] || return 1
+		echo "this panel has no microphone (government=$(hw_get GOVERNMENT))";;
+	BT_PROXY|BT_ACTIVE) [ "$(hw_get BT)" = no ] || return 1
+		echo "this panel has no Bluetooth module (government=$(hw_get GOVERNMENT))";;
+	*) return 1;;
+	esac
+}
+
+# hw_warn KEY VALUE [VERB]: the warning for an "on" that the panel cannot use
+hw_warn() {
+	[ "$2" = on ] || return 0
+	why=$(hw_missing "$1") || return 0
+	log "WARNING: $1=on ${3:-is set}, but $why. apply treats it as off"
 }
 
 # Escape a value for the OWN panel.conf storage of this script (unquote()
@@ -250,6 +278,7 @@ cfg_set() {
 		printf '%s\n' "$k=\"$esc\"" >> "$tmp"
 	fi
 	mv "$tmp" "$TSX_CONF"; chmod 600 "$TSX_CONF"
+	hw_warn "$k" "$v" "is saved"
 }
 
 cfg_unset() {
@@ -268,6 +297,10 @@ cfg_show() {
 		v=$(cfg_get "$k") || continue
 		is_secret "$k" && v="********"
 		printf '%s=%s\n' "$k" "$v"
+	done
+	for k in VOICE BT_PROXY BT_ACTIVE; do
+		v=$(cfg_get "$k") || continue
+		hw_warn "$k" "$v" 2>&1 | sed 's/^tsx-config: /# /' >&2
 	done
 	warn_open_api
 	clock_status
@@ -399,6 +432,8 @@ apply() {
 	} | write_override "$RUN/mqtt.conf"
 
 	voice=$(cfg_get VOICE) || voice=
+	# No microphone: the voice satellite never runs, whatever VOICE says.
+	if hw_missing VOICE >/dev/null; then hw_warn VOICE "$voice"; voice=off; fi
 	if command -v tsx-audio >/dev/null 2>&1; then
 		case "$voice" in
 		on) tsx-audio enable voice >/dev/null 2>&1 || true;;
@@ -446,6 +481,11 @@ apply() {
 	# runs as kiosk and cannot read $TSX_CONF.
 	btp=$(cfg_get BT_PROXY) || btp=off
 	bta=$(cfg_get BT_ACTIVE) || bta=off
+	# No Bluetooth module: bt.conf says off, so tsx-bt and both ESPHome
+	# front ends never offer the proxy.
+	if hw_missing BT_PROXY >/dev/null; then
+		hw_warn BT_PROXY "$btp"; hw_warn BT_ACTIVE "$bta"; btp=off bta=off
+	fi
 	btm=$(cfg_get BT_MAC) || btm=
 	tmp="$RUN/bt.conf.tmp.$$"
 	{

@@ -25,7 +25,9 @@
 # system partition in the same region (installer/lib/tsx-psr.sh). A valid
 # file goes to BUNDLE_DIR/psr/, and "run" deploys it. It stays on the panel.
 # If the panel has no valid file, the host can put the file of the .puf
-# download there instead (rootfs/vendor-fetch.sh --psr).
+# download there instead (rootfs/vendor-fetch.sh --psr). On a panel with
+# government=1 (no Bluetooth module, docs/hardware.md "Panel variants"), it
+# looks for no file and puts only psr/SOURCE (source=not-needed) there.
 #
 # --keep-data (a mainline -> mainline reinstall, docs/install.md "Reinstalling
 # or updating a mainline panel"): if the card is already folded and p4 is a
@@ -72,7 +74,7 @@
 #                          boot. After that, an override in panel.conf always
 #                          takes precedence.
 # Test hooks: TSX_EMMC/TSX_BOOT0 (as tsx-emmc-restore), TSX_RUN, TSX_SYSBLOCK
-# (card disk), TSX_STATUS (status-screen state file, default /run/tsx-install-state).
+# (card disk), TSX_CMDLINE (the kernel command line for the psr command), TSX_STATUS (status-screen state file, default /run/tsx-install-state).
 set -eu
 RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
 say() { echo "tsx-rescue-install: $(date +%T 2>/dev/null) $*" >&2; }
@@ -149,8 +151,19 @@ if [ "$CMD" = psr ]; then
 	[ -f "$B/tsx-psr.sh" ] || die "$B/tsx-psr.sh missing (bundle too old for the psr command)"
 	. "$B/tsx-psr.sh"
 	set_state "looking for the Bluetooth PSR file"
-	say "looking for the Bluetooth PSR file on this panel (read-only: $EROOT)"
-	tsx_psr_collect "$B/psr" "$EROOT" "$B/psr"
+	# The flag: the kernel command line, else the U-Boot env (read-only)
+	if tsx_find_disk 2>/dev/null; then
+		printf '%s 0x%x 0x%x\n' "$WHOLE" "${TSX_ENV_OFFSET:-1048576}" "${TSX_ENV_SIZE:-65536}" > "$RUN/tsx-psr-env.cfg"
+		FWCFG=$RUN/tsx-psr-env.cfg; tsx_pick_fwenv 2>/dev/null || FWP=
+	fi
+	gov=$(tsx_psr_government "${TSX_CMDLINE:-/proc/cmdline}")
+	say "government=${gov:-unknown} on this panel"
+	if [ "$gov" = 1 ]; then
+		tsx_psr_not_needed "$B/psr"
+	else
+		say "looking for the Bluetooth PSR file on this panel (read-only: $EROOT)"
+		tsx_psr_collect "$B/psr" "$EROOT" "$B/psr"
+	fi
 	set_state "checked OK"
 	exit 0
 fi
@@ -282,6 +295,9 @@ if [ -f "$B/psr/PSR-CSR8811.psr" ]; then
 	else
 		say "  WARNING: psr: PSR-CSR8811.psr copy failed (non-fatal: Bluetooth loads only its address)"
 	fi
+elif grep -q '^source=not-needed' "$B/psr/SOURCE" 2>/dev/null; then
+	mkdir -p "$PSRDIR" && cp "$B/psr/SOURCE" "$PSRDIR/SOURCE" \
+		&& say "  psr: not needed (government=1: no Bluetooth module). SOURCE recorded"
 else
 	say "  psr: no Bluetooth PSR file in the bundle (non-fatal: Bluetooth loads only its address)"
 fi

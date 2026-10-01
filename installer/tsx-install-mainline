@@ -84,7 +84,10 @@
 # download on THIS machine, and the script pushes it to the rescue.
 #   panel = the panel only. puf = the download only. none = no PSR file.
 # A missing PSR file never stops the install. Without it, the Bluetooth
-# proxy loads only its address.
+# proxy loads only its address. In modes auto and panel, the rescue first
+# reads the government flag. A panel with government=1 (the TSW-760-NC) has
+# no Bluetooth module: then there is no search, no .puf download, and SOURCE
+# records "not-needed".
 #
 # Needs: $TSX_ADMIN_PW (the Crestron console and web UI admin password) for
 # step 1, not for a reinstall. The user is $TSX_ADMIN_USER, default admin.
@@ -203,8 +206,8 @@ if [ "$DRYRUN" = 1 ]; then
 	none) log "[dry-run] 3: TFA9890 DSP files (--tfa-source none): none. The speakers run without the vendor tuning";;
 	esac
 	case "$PSR_SOURCE" in
-	auto) log "[dry-run] 3b: Bluetooth PSR file (--psr-source auto): tsx-rescue-install psr /tmp/b (read-only: the current root on eMMC p8, or stock Android's system partition there. The file stays on the panel). Only if that finds no valid file: rootfs/vendor-fetch.sh --psr here (the .puf download) and push its file. Never fatal";;
-	panel) log "[dry-run] 3b: Bluetooth PSR file (--psr-source panel): tsx-rescue-install psr /tmp/b only (current root, or stock Android's system partition). No .puf download";;
+	auto) log "[dry-run] 3b: Bluetooth PSR file (--psr-source auto): tsx-rescue-install psr /tmp/b (government=1: no search, no download, SOURCE says not-needed. Else read-only: the current root on eMMC p8, or stock Android's system partition there. The file stays on the panel). Only if that finds no valid file: rootfs/vendor-fetch.sh --psr here (the .puf download) and push its file. Never fatal";;
+	panel) log "[dry-run] 3b: Bluetooth PSR file (--psr-source panel): tsx-rescue-install psr /tmp/b only (government=1: not needed. Else the current root, or stock Android's system partition). No .puf download";;
 	puf) log "[dry-run] 3b: Bluetooth PSR file (--psr-source puf): rootfs/vendor-fetch.sh --psr here (the .puf download), push its file to the rescue. The panel is not searched";;
 	none) log "[dry-run] 3b: Bluetooth PSR file (--psr-source none): none. Bluetooth loads only its address";;
 	esac
@@ -470,13 +473,14 @@ psr_puf() {  # rootfs/vendor-fetch.sh --psr here, then push the file into /tmp/b
 		|| { log "  WARNING: pushing the .puf's PSR file to the rescue failed"; return 1; }
 	PSR_USED="puf (rootfs/vendor-fetch.sh --psr), sha256 $sha"
 }
-PSR_USED=none PSR_OK=- PSR_SRC=
+PSR_USED=none PSR_OK=- PSR_SRC= PSR_GOV=
 if [ "$PSR_SOURCE" = auto ] || [ "$PSR_SOURCE" = panel ]; then
 	log "== step 3b: Bluetooth PSR file (--psr-source $PSR_SOURCE): looking on the panel first (read-only, the file stays on the panel)"
 	if run_stream_at "$RSSH" "sh /tmp/b/tsx-rescue-install psr /tmp/b 2>&1"; then
 		PSR_RES=$(printf '%s\n' "$RS_OUT" | sed -n 's/^PSR-RESULT //p' | tail -n 1)
 		PSR_OK=$(printf '%s\n' "$PSR_RES" | sed -n 's/.*ok=\([01]\).*/\1/p')
 		PSR_SRC=$(printf '%s\n' "$PSR_RES" | sed -n 's/.*source=\([^ ]*\).*/\1/p')
+		PSR_GOV=$(printf '%s\n' "$PSR_RES" | sed -n 's/.*government=\([01]\).*/\1/p')
 		[ -n "$PSR_OK" ] || PSR_OK=-
 		log "  Bluetooth PSR on the panel: ${PSR_RES:-no result line}"
 	else
@@ -485,8 +489,9 @@ if [ "$PSR_SOURCE" = auto ] || [ "$PSR_SOURCE" = panel ]; then
 else
 	log "== step 3b: Bluetooth PSR file (--psr-source $PSR_SOURCE): the panel is not searched"
 fi
-PSR_ACTION=$(tsx_psr_plan "$PSR_SOURCE" "$PSR_OK") || true
+PSR_ACTION=$(tsx_psr_plan "$PSR_SOURCE" "$PSR_OK" "$PSR_GOV") || true
 case "$PSR_ACTION" in
+not-needed) PSR_USED="not needed: government=1, the panel has no Bluetooth module (no .puf download)";;
 use-panel) PSR_USED="panel: $PSR_SRC (no .puf download)";;
 puf) psr_puf || true;;
 none) run_stream_at "$RSSH" "rm -rf /tmp/b/psr" || true;;

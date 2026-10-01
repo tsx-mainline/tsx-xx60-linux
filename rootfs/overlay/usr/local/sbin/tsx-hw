@@ -1,0 +1,80 @@
+#!/bin/sh
+# tsx-hw: the hardware facts of this panel, in one file
+# (docs/hardware.md "Panel variants").
+#
+#   tsx-hw detect   read the kernel command line and write the facts file
+#                   (root, at boot: /etc/init.d/tsx-config runs it before
+#                   tsx-config apply)
+#   tsx-hw get KEY  print one value from the facts file
+#   tsx-hw show     print the facts file
+#
+# The facts file is $TSX_RUN_DIR/hw.conf (default /run/tsx/hw.conf), mode
+# 644: root and the kiosk and tsx-setup users read it. It has these lines:
+#   GOVERNMENT=0|1|unknown  the U-Boot variable government. U-Boot puts it
+#                           on the kernel command line as
+#                           androidboot.government=N.
+#   MIC=yes|no              a microphone is fitted
+#   BT=yes|no               a Bluetooth module (CSR8811) is fitted
+#   CAMERA=yes|no           a camera is fitted (mainline has no driver for it)
+#   REASON=TEXT             why a part is missing (empty when none is)
+# A panel with government=1 (the TSW-760-NC) has no microphone, no camera
+# and no Bluetooth module. Any other value, or no value, means that the
+# panel has all three.
+#
+# The services read the file, not the command line: tsx-config, tsx-bt,
+# tsx-voice, tsx-esphome, the ESPHome front ends and the setup page. If the
+# file is missing, they act as on a panel with all parts.
+#
+# No fallback to the U-Boot env: U-Boot builds the kernel command line from
+# the env at every boot, for the kiosk and for both rescues. fw_printenv
+# needs the env disk and can hang (docs/boot.md "fw_printenv can hang").
+#
+# Test hooks: TSX_RUN_DIR (the facts file directory), TSX_PROC (the
+# directory of cmdline).
+set -u
+RUN=${TSX_RUN_DIR:-/run/tsx}
+PROC=${TSX_PROC:-/proc}
+CONF=$RUN/hw.conf
+
+# facts: print the facts for the command line in $PROC/cmdline
+facts() {
+	gov=unknown
+	for w in $(cat "$PROC/cmdline" 2>/dev/null); do
+		case "$w" in androidboot.government=*) gov=${w#androidboot.government=};; esac
+	done
+	case "$gov" in 0|1) ;; *) gov=unknown;; esac
+	echo "GOVERNMENT=$gov"
+	if [ "$gov" = 1 ]; then
+		echo "MIC=no"
+		echo "BT=no"
+		echo "CAMERA=no"
+		echo "REASON=government=1 (TSW-760-NC): no microphone, no camera, no Bluetooth module"
+	else
+		echo "MIC=yes"
+		echo "BT=yes"
+		echo "CAMERA=yes"
+		echo "REASON="
+	fi
+}
+
+case "${1:-}" in
+detect)
+	mkdir -p "$RUN" || exit 1
+	facts > "$CONF.tmp.$$" && chmod 644 "$CONF.tmp.$$" && mv "$CONF.tmp.$$" "$CONF" || {
+		rm -f "$CONF.tmp.$$"; echo "tsx-hw: cannot write $CONF" >&2; exit 1; }
+	msg=$(grep -v '^REASON=' "$CONF" | tr '\n' ' ' | sed 's/ $//')
+	echo "tsx-hw: $msg"
+	logger -t tsx-hw "$msg" 2>/dev/null || true
+	;;
+get)
+	[ $# = 2 ] || { echo "usage: tsx-hw get KEY" >&2; exit 2; }
+	case "$2" in ''|*[!A-Z]*) echo "tsx-hw: bad key name" >&2; exit 2;; esac
+	[ -r "$CONF" ] || { echo "tsx-hw: no $CONF (run tsx-hw detect as root)" >&2; exit 1; }
+	grep -q "^$2=" "$CONF" || exit 1
+	sed -n "s/^$2=//p" "$CONF" | tail -n 1
+	;;
+show)
+	cat "$CONF" 2>/dev/null || { echo "tsx-hw: no $CONF (run tsx-hw detect as root)" >&2; exit 1; }
+	;;
+*) sed -n '2,10p' "$0" >&2; exit 2;;
+esac

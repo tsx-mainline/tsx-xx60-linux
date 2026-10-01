@@ -7,7 +7,9 @@
 #    lost packet, a refused key, a silent chip.
 #  - tsx-bt (the bring-up script) with a fake sysfs and fake tools: the
 #    order of the steps, the Bluetooth address and its PSR line, the state
-#    file, and a soft failure with a reason for each broken step.
+#    file, and a soft failure with a reason for each broken step. On a
+#    panel without a Bluetooth module (hw.conf BT=no, government=1): state
+#    absent, exit 0, and no rfkill, UART or tool call.
 #  - btscan.py (the passive scanner) against a fake controller
 #    (bt-fake-hci.py): passive scan parameters, the scan only while a client
 #    is connected, and the record format.
@@ -174,12 +176,37 @@ failcase() {  # failcase TITLE EXPECTED-REASON-PART
 	[ $rc = 1 ] && [ "$(st state)" = failed ] && st reason | grep -q "$2" \
 		&& ok "$1: exit 1, state=failed, reason '$(st reason)'" || { bad "$1: exit $rc, $(cat "$R/bt.state")"; cat "$W/fail.log"; }
 }
-echo fail > "$W/psload-mode"; failcase "PSR upload fails" "PSR upload: csr_psload: no BCSP answer"; echo ok > "$W/psload-mode"
+echo fail > "$W/psload-mode"; failcase "PSR upload fails (no hw.conf)" "PSR upload: csr_psload: no BCSP answer.*government=unknown"
+printf 'GOVERNMENT=0\nMIC=yes\nBT=yes\nCAMERA=yes\nREASON=\n' > "$R/hw.conf"
+failcase "PSR upload fails on a government=0 panel" "this panel has government=0. A panel with government=1 has no Bluetooth module"
+rm -f "$R/hw.conf"; echo ok > "$W/psload-mode"
 echo fail > "$W/attach-mode"; failcase "hciattach fails" "hciattach: BCSP initialization timed out"
 echo nodev > "$W/attach-mode"; failcase "no hci device" "no new hci device"; echo ok > "$W/attach-mode"
 echo down > "$W/up-mode"; failcase "hci0 stays down" "does not come up"; echo up > "$W/up-mode"
 mv "$W/ttyAML1" "$W/ttyAML1.x"; failcase "no UART node" "does not exist"; mv "$W/ttyAML1.x" "$W/ttyAML1"
 mv "$S/class/net/eth0" "$W/eth0.x"; failcase "no MAC at all" "no Bluetooth address"; mv "$W/eth0.x" "$S/class/net/eth0"
+
+echo "== tsx-bt: a panel without a Bluetooth module (hw.conf BT=no) =="
+rm -rf "$S/class/bluetooth/hci0" "$R/bt.state" "$R/bt-bdaddr.psr"; : > "$LOG"
+echo 0 > "$S/class/rfkill/rfkill1/soft"
+printf 'GOVERNMENT=1\nMIC=no\nBT=no\nCAMERA=no\nREASON=government=1 (TSW-760-NC): no microphone, no camera, no Bluetooth module\n' > "$R/hw.conf"
+btsh status > "$W/abs0.log" 2>&1; rc=$?
+[ $rc = 0 ] && grep -q '^state=absent' "$W/abs0.log" && grep -q '^reason=no Bluetooth module on this panel (government=1)$' "$W/abs0.log" \
+	&& ok "status before any run: state=absent with the reason, exit 0" || bad "status (absent, no state file): exit $rc, $(cat "$W/abs0.log")"
+btsh up > "$W/abs.log" 2>&1; rc=$?
+[ $rc = 0 ] && [ "$(st state)" = absent ] && st reason | grep -q 'no Bluetooth module on this panel (government=1)' \
+	&& ok "up: exit 0, state=absent, reason '$(st reason)'" || { bad "up (absent): exit $rc, $(cat "$R/bt.state" 2>/dev/null)"; cat "$W/abs.log"; }
+[ ! -s "$LOG" ] && [ "$(cat "$S/class/rfkill/rfkill1/soft")" = 0 ] && [ ! -e "$R/bt-bdaddr.psr" ] \
+	&& ok "up: no rfkill pulse, no PSR upload, no hciattach" || bad "up (absent) touched the chip: $(cat "$LOG"), soft=$(cat "$S/class/rfkill/rfkill1/soft")"
+btsh down > "$W/abs2.log" 2>&1; rc=$?
+[ $rc = 0 ] && [ "$(st state)" = absent ] && [ "$(cat "$S/class/rfkill/rfkill1/soft")" = 0 ] && [ ! -s "$LOG" ] \
+	&& ok "down: exit 0, state stays absent, the rfkill is not touched" || bad "down (absent): exit $rc, $(cat "$R/bt.state"), soft=$(cat "$S/class/rfkill/rfkill1/soft")"
+btsh status | grep -q '^state=absent' && ok "status: state=absent" || bad "status (absent): $(btsh status)"
+# The script reads hw.conf, not the command line
+rm -f "$R/hw.conf" "$R/bt.state"; echo 'console=ttyAML0 androidboot.government=1' > "$W/proc/cmdline"
+btsh up > "$W/abs3.log" 2>&1
+[ "$(st state)" = up ] && ok "no hw.conf: the bring-up runs (tsx-bt reads hw.conf, not /proc/cmdline)" || bad "no hw.conf: $(cat "$R/bt.state")"
+rm -f "$W/proc/cmdline"
 
 rm -f "$W/vendor.psr"; rm -rf "$S/class/bluetooth/hci0"
 btsh up > "$W/up3.log" 2>&1

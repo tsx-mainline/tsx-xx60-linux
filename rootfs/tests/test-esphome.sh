@@ -317,6 +317,45 @@ start_btscan
 wait "$SLOTS_PID" && echo "OK: a restart of tsx-btscan: 0 slots while it is away, 3 again after ($(cat "$T/slots.out"))" \
 	|| { echo "FAIL: slots across a tsx-btscan restart: $(cat "$T/slots.out")"; rc=1; }
 
+# ---- a panel without a microphone or a Bluetooth module (hw.conf of tsx-hw,
+# government=1): bt.conf says on, but the device offers no Bluetooth proxy
+# and no voice features. The voice satellite does not start. The entity
+# list is the same as on a panel with all parts (no entity goes away).
+echo "== government=1 (hw.conf): no Bluetooth proxy, no voice features, the same entities =="
+printf 'GOVERNMENT=1\nMIC=no\nBT=no\nCAMERA=no\nREASON=government=1 (TSW-760-NC): no microphone, no camera, no Bluetooth module\n' > "$F/run/tsx/hw-gov.conf"
+GOV_PORT=$((API_PORT + 55))
+TSX_TEST_SERVER_ARGS=--no-zeroconf start_server standalone "$T/server-gov.log" "$GOV_PORT" Gov-Panel TSX_HA_API_KEY= \
+	TSX_BT_CONF="$F/run/tsx/bt-active.conf" TSX_HW_CONF="$F/run/tsx/hw-gov.conf"
+start_server voice "$T/voice-gov.log" $((API_PORT + 56)) Gov-Voice TSX_HA_API_KEY= TSX_HW_CONF="$F/run/tsx/hw-gov.conf"
+GOVV_PID=$LAST_PID
+wait_listening "$T/server-gov.log"
+"$T/venv/bin/python3" "$HERE/esphome-bt-check.py" "$GOV_PORT" off || rc=1
+grep -q 'Bluetooth proxy: off' "$T/server-gov.log" && echo "OK: tsx-esphome logs the proxy as off (no Bluetooth module)" \
+	|| { echo "FAIL: no 'Bluetooth proxy: off' in server-gov.log"; rc=1; }
+"$T/venv/bin/python3" - "$GOV_PORT" "$BT_PORT" <<'PYEOF' || rc=1
+import asyncio, sys
+from aioesphomeapi import APIClient
+async def info(port):
+    cli = APIClient("127.0.0.1", int(port), None)
+    await cli.connect(login=False)
+    try:
+        dev = await cli.device_info()
+        ents, _ = await cli.list_entities_services()
+        return dev.voice_assistant_feature_flags_compat(cli.api_version), sorted(e.object_id for e in ents)
+    finally:
+        await cli.disconnect()
+async def main():
+    gflags, gents = await info(sys.argv[1])
+    _, nents = await info(sys.argv[2])
+    assert gflags == 0, gflags
+    assert gents == nents, (gents, nents)
+    print(f"OK: government=1: no voice assistant features, the same {len(gents)} entities as on a panel with all parts")
+asyncio.run(main())
+PYEOF
+st=0; wait "$GOVV_PID" || st=$?
+[ "$st" != 0 ] && grep -q 'no microphone on this panel (government=1 (TSW-760-NC)' "$T/voice-gov.log" \
+	&& echo "OK: the voice satellite does not start without a microphone ($st)" || { echo "FAIL: the voice satellite started without a microphone"; cat "$T/voice-gov.log"; rc=1; }
+
 # ---- a configured key that cannot be used: refuse to start, never plaintext
 echo "== unusable key file: fail closed =="
 echo "not-a-key" > "$F/run/tsx/esphome.key.bad"

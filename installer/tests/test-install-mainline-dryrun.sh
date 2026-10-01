@@ -90,7 +90,7 @@ grep -q "tfa-source must be auto, panel, puf, or none" "$W/o6.txt" && ok "error 
 echo "== 7. Bluetooth PSR file: the panel first, the .puf download as the fallback (--psr-source)"
 OUT=$(TSX_PANEL_KIND=android "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run 2>&1)
 echo "$OUT" | grep -q "psr-source=auto" && ok "default --psr-source is auto" || bad "default psr-source not auto: $OUT"
-echo "$OUT" | grep -q "(--psr-source auto): tsx-rescue-install psr /tmp/b (read-only" && ok "auto: the panel is searched first" || bad "auto plan does not search the panel: $OUT"
+echo "$OUT" | grep -q "(--psr-source auto): tsx-rescue-install psr /tmp/b (government=1: no search, no download, SOURCE says not-needed. Else read-only" && ok "auto: the government flag first, then the panel is searched" || bad "auto plan does not search the panel: $OUT"
 echo "$OUT" | grep -q "Only if that finds no valid file: rootfs/vendor-fetch.sh --psr" && ok "auto: the .puf download only as the fallback" || bad "auto plan has no .puf fallback"
 OUT=$(TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run --psr-source puf 2>&1)
 echo "$OUT" | grep -q "(--psr-source puf): rootfs/vendor-fetch.sh --psr here" && ok "puf: the download only" || bad "puf plan wrong: $OUT"

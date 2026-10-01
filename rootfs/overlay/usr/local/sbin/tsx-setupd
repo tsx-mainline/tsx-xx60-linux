@@ -37,8 +37,13 @@ already set, never its value. It reuses the masking of `tsx-config show`
 and does not reimplement it. The daemon never logs anything about a POST
 body.
 
+On a panel without a microphone or a Bluetooth module (government=1, the
+TSW-760-NC: /run/tsx/hw.conf from tsx-hw), the page shows the voice
+assistant and the Bluetooth proxy as not available. A submit then leaves
+VOICE and WAKE_WORD as they are.
+
 Env overrides for host tests (rootfs/tests/test-setup.sh): TSX_SETUP_PORT,
-TSX_SETUP_CONF, TSX_RUN_DIR, TSX_CONFIG_BIN, TSX_SETUP_HELPER_REQ,
+TSX_SETUP_CONF, TSX_HW_CONF, TSX_RUN_DIR, TSX_CONFIG_BIN, TSX_SETUP_HELPER_REQ,
 TSX_SETUP_HELPER_RESP, TSX_ZONEINFO_DIR, TSX_SETUP_NO_ZEROCONF=1.
 """
 import json
@@ -60,6 +65,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 TSX_CONFIG_BIN = os.environ.get("TSX_CONFIG_BIN", "tsx-config")
 ZONEINFO_DIR = os.environ.get("TSX_ZONEINFO_DIR", "/usr/share/zoneinfo")
 RUN_DIR = os.environ.get("TSX_RUN_DIR", "/run/tsx")
+HW_CONF_PATH = os.environ.get("TSX_HW_CONF", os.path.join(RUN_DIR, "hw.conf"))
 CONF_PATH = os.environ.get("TSX_SETUP_CONF", "/etc/tsx/setup.conf")
 KIOSK_CONF_PATH = os.environ.get("TSX_KIOSK_CONF", "/etc/kiosk.conf")
 NO_ZEROCONF = os.environ.get("TSX_SETUP_NO_ZEROCONF", "0") == "1"
@@ -531,8 +537,25 @@ SIMPLE_KEYS = ["PANEL_NAME", "TZ_NAME", "VOICE", "WAKE_WORD", "MQTT_HOST",
 CLEARABLE_BLANK = {"MQTT_HOST", "MQTT_PORT", "MQTT_USER"}
 
 
+def hw_unavailable():
+    """The settings that this panel cannot use, with the reason
+    (hw.conf of tsx-hw. A missing file = a panel with all parts)."""
+    hw = load_conf(HW_CONF_PATH)
+    gov = hw.get("GOVERNMENT", "unknown")
+    out = {}
+    if hw.get("MIC") == "no":
+        out["VOICE"] = "no microphone on this panel (government=%s)" % gov
+    if hw.get("BT") == "no":
+        out["BT_PROXY"] = "no Bluetooth module on this panel (government=%s)" % gov
+    return out
+
+
 def handle_submit(fields):
     errors = {}
+    if "VOICE" in hw_unavailable():
+        # Not available on this panel: the page does not send them. Keep
+        # what panel.conf has (tsx-config apply treats VOICE=on as off).
+        fields = {k: v for k, v in fields.items() if k not in ("VOICE", "WAKE_WORD")}
     to_set = {}
     to_unset = []
 
@@ -741,6 +764,7 @@ class Handler(BaseHTTPRequestHandler):
             "window_seconds": WINDOW,
             "fields": fields,
             "tz_list": zone_list(),
+            "unavailable": hw_unavailable(),
         }
         if loop:
             code, code_at = PAIRING.current_code()
@@ -934,6 +958,7 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
         <label for="f-wake">Wake word</label>
         <input id="f-wake" name="WAKE_WORD" type="text" placeholder="okay_nabu" maxlength="32">
       </div>
+      <div class="hint" id="hw-hint" style="display:none"></div>
     </div>
 
     <details><summary>MQTT (optional)</summary>
@@ -1044,6 +1069,17 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
     populateTz(fields.tz_list, fields.TZ_NAME);
   }
 
+  function applyUnavailable(u){
+    var notes = [];
+    if (u.VOICE) {
+      $("f-voice").checked = false; $("f-voice").disabled = true;
+      $("wake-wrap").style.display = "none";
+      notes.push("Voice assistant: not available, " + u.VOICE + ".");
+    }
+    if (u.BT_PROXY) notes.push("Bluetooth proxy: not available, " + u.BT_PROXY + ".");
+    if (notes.length) { $("hw-hint").textContent = notes.join(" "); $("hw-hint").style.display = "block"; }
+  }
+
   function loadState(){
     api("GET", "/setup/api/state").then(function(r){
       state = r.body;
@@ -1060,6 +1096,7 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
       var f = state.fields || {};
       f.tz_list = state.tz_list;
       applyFields(f);
+      applyUnavailable(state.unavailable || {});
     }).catch(function(){});
   }
 
@@ -1123,8 +1160,8 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
       PANEL_NAME: $("f-name").value.trim(),
       TZ_NAME: $("f-tz").value,
       ORIENTATION: $("f-orient").value,
-      VOICE: $("f-voice").checked ? "on" : "off",
-      WAKE_WORD: $("f-wake").value.trim(),
+      VOICE: $("f-voice").disabled ? undefined : ($("f-voice").checked ? "on" : "off"),
+      WAKE_WORD: $("f-voice").disabled ? undefined : $("f-wake").value.trim(),
       MQTT_HOST: $("f-mqtt-host").value.trim(),
       MQTT_PORT: $("f-mqtt-port").value.trim(),
       MQTT_USER: $("f-mqtt-user").value.trim(),

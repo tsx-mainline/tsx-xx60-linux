@@ -231,6 +231,47 @@ grep -qx 'ACTIVE="on"' "$FX/run/tsx/bt.conf" && ok "BT_ACTIVE=on reaches bt.conf
 	|| bad "BT_ACTIVE=on: $(restarts)/$(vrestarts)/$(btl restart) restarts (was $r0/$v0/$s0)"
 set_ BT_PROXY off >/dev/null; applyp
 [ "$(btl stop)" -ge 1 ] && ok "BT_PROXY=off stops tsx-bt" || bad "BT_PROXY=off did not stop tsx-bt"
+echo "== a panel without a microphone or a Bluetooth module (hw.conf, government=1) =="
+CFG3="$W/panel-gov.conf"; FX3="$W/fx-gov"; mkdir -p "$FX3/run/tsx" "$FX3/etc"
+printf '#!/bin/sh\necho "tsx-audio $*" >> "%s/audio.log"\nexit 0\n' "$W" > "$W/bin/tsx-audio"; chmod +x "$W/bin/tsx-audio"
+gov_conf() {  # gov_conf 0|1: the hw.conf that tsx-hw writes for that flag
+	if [ "$1" = 1 ]; then printf 'GOVERNMENT=1\nMIC=no\nBT=no\nCAMERA=no\nREASON=government=1 (TSW-760-NC): no microphone, no camera, no Bluetooth module\n'
+	else printf 'GOVERNMENT=0\nMIC=yes\nBT=yes\nCAMERA=yes\nREASON=\n'; fi > "$FX3/run/tsx/hw.conf"
+}
+cfg3() { env PATH="$W/bin:$PATH" TSX_CONF="$CFG3" TSX_RUN="$FX3/run" TSX_STATE_DIR="$FX3/var/lib/tsx" TSX_APPLY_PREFIX="$FX3" TSX_APPLY_ALLOW_NONROOT=1 busybox sh "$SCRIPT" "$@"; }
+gov_conf 1
+for k in VOICE BT_PROXY BT_ACTIVE; do
+	out=$(cfg3 set "$k" on 2>&1); rc=$?
+	[ $rc = 0 ] && [ "$(cfg3 get "$k")" = on ] && case "$out" in *"WARNING: $k=on is saved, but this panel has no "*"(government=1). apply treats it as off"*) true;; *) false;; esac \
+		&& ok "set $k on: saved (a panel.conf from another panel loads), with a warning" || bad "set $k on: exit $rc, '$out'"
+done
+out=$(cfg3 set VOICE off 2>&1); [ -z "$out" ] && ok "set VOICE off: no warning" || bad "set VOICE off warns: $out"
+cfg3 set VOICE on >/dev/null 2>&1
+out=$(cfg3 show 2>&1 >/dev/null)
+case "$out" in *"# WARNING: VOICE=on is set, but this panel has no microphone (government=1)"*"# WARNING: BT_PROXY=on is set"*"# WARNING: BT_ACTIVE=on is set"*) ok "show: a warning for each of the three keys";; *) bad "show warnings: $out";; esac
+rm -f "$W/audio.log" "$W/rc.log"
+out=$(cfg3 apply 2>&1); rc=$?
+[ $rc = 0 ] && grep -qx 'PROXY="off"' "$FX3/run/tsx/bt.conf" && grep -qx 'ACTIVE="off"' "$FX3/run/tsx/bt.conf" \
+	&& ok "apply: bt.conf says PROXY and ACTIVE off" || bad "apply (government=1): exit $rc, bt.conf $(cat "$FX3/run/tsx/bt.conf" 2>/dev/null)"
+grep -qx 'tsx-audio disable voice' "$W/audio.log" 2>/dev/null && ! grep -q 'enable voice' "$W/audio.log" \
+	&& ok "apply: VOICE=on is treated as off (tsx-audio disable voice)" || bad "apply voice: $(cat "$W/audio.log" 2>/dev/null)"
+case "$out" in *"WARNING: VOICE=on is set, but this panel has no microphone"*"WARNING: BT_PROXY=on is set"*) ok "apply: the log says why";; *) bad "apply log: $out";; esac
+grep -q '|off|' "$FX3/run/tsx/.esphome-sig" && ok "apply: tsx-esphome sees VOICE off (it serves the entities)" || bad ".esphome-sig: $(cat "$FX3/run/tsx/.esphome-sig")"
+grep -q 'tsx-bt' "$W/rc.log" 2>/dev/null && bad "the first apply touched tsx-bt" || ok "the first apply does not touch tsx-bt"
+cfg3 apply >/dev/null 2>&1
+grep -q 'tsx-bt' "$W/rc.log" 2>/dev/null && bad "an unchanged apply touched tsx-bt" || ok "an unchanged apply does not touch tsx-bt"
+cfg3 set BT_MAC 02:11:22:33:44:55 >/dev/null 2>&1; cfg3 apply >/dev/null 2>&1
+grep -q 'tsx-bt restart' "$W/rc.log" 2>/dev/null && bad "a BT_MAC change restarted tsx-bt on a panel without the module" || ok "a BT_MAC change does not restart tsx-bt (the proxy stays off)"
+gov_conf 0; rm -f "$W/audio.log" "$FX3/run/tsx/.bt-sig"
+out=$(cfg3 set VOICE on 2>&1); [ -z "$out" ] && ok "government=0: set VOICE on gives no warning" || bad "government=0 set warns: $out"
+cfg3 apply >/dev/null 2>&1
+grep -qx 'PROXY="on"' "$FX3/run/tsx/bt.conf" && grep -qx 'ACTIVE="on"' "$FX3/run/tsx/bt.conf" && grep -qx 'tsx-audio enable voice' "$W/audio.log" \
+	&& ok "government=0: BT_PROXY, BT_ACTIVE and VOICE work as before" || bad "government=0: bt.conf $(cat "$FX3/run/tsx/bt.conf"), audio $(cat "$W/audio.log" 2>/dev/null)"
+rm -f "$FX3/run/tsx/hw.conf" "$W/audio.log"; cfg3 apply >/dev/null 2>&1
+grep -qx 'PROXY="on"' "$FX3/run/tsx/bt.conf" && grep -qx 'tsx-audio enable voice' "$W/audio.log" \
+	&& ok "no hw.conf: a panel with all parts" || bad "no hw.conf: bt.conf $(cat "$FX3/run/tsx/bt.conf")"
+rm -f "$W/bin/tsx-audio" "$W/audio.log"
+
 echo "== unconfigured panel (no KIOSK_URL, no TZ_NAME): apply runs to the end =="
 CFG2="$W/panel-unconf.conf"; FX2="$W/fx-unconf"; mkdir -p "$FX2/run" "$FX2/etc"
 printf '# header only\nKERNEL_FLAVOR="stable"\n' > "$CFG2"

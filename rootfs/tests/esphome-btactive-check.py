@@ -8,14 +8,17 @@ fake one in rootfs/tests/test-esphome.sh, or a real peripheral on a panel.
 
   esphome-btactive-check.py HOST PORT --addr C0:FF:EE:00:00:01 [--atype 1]
       [--silent C0:FF:EE:00:00:EE] [--cycles 5] [--limit 3] [--key BASE64]
-      [--adv] [--json RESULT]
+      [--adv] [--json RESULT] [--gap-name NAME] [--retries N]
 
 Checks: the feature flags, the slot count, connect, the services, read,
 write with and without response, a refused read, notifications on and off,
 disconnect, --cycles connect/disconnect cycles, a drop by the peer and the
 reconnect after it, a connect timeout (--silent), and with --adv that raw
-advertisements keep arriving between the links. Prints one "OK:" line per
-check and the timings. Exit status 1 on the first failure.
+advertisements keep arriving between the links. --retries N: try a connect
+again up to N times when the link fails while it comes up, like
+bleak-retry-connector in Home Assistant (a Linux peer drops some links,
+docs/hardware.md). Prints one "OK:" line per check and the timings. Exit
+status 1 on the first failure.
 """
 import argparse
 import asyncio
@@ -102,9 +105,25 @@ async def run(args):
         dev = BLEDevice(addr, "tsx-test-peer", {"source": source, "address_type": atype})
         return ESPHomeClient(dev, client_data=data, disconnected_callback=lambda *_: dropped.append(time.monotonic()))
 
+    failed = []
+
+    async def connect(client, **kw):
+        """Connect like bleak-retry-connector does: try again after a link
+        that the peer dropped while it came up (--retries)."""
+        for attempt in range(args.retries + 1):
+            t = time.monotonic()
+            try:
+                await client.connect(pair=False, **kw)
+                return
+            except BleakError as err:
+                if attempt == args.retries or "while connecting" not in str(err):
+                    raise
+                failed.append(round(time.monotonic() - t, 2))
+                await asyncio.sleep(0.5)
+
     peer = make(args.addr, args.atype)
     t0 = time.monotonic()
-    await peer.connect(pair=False)
+    await connect(peer)
     res["connect_s"] = round(time.monotonic() - t0, 3)
     check(peer.is_connected, f"connect (with service discovery) in {res['connect_s']:.2f} s, MTU {peer.mtu_size}")
     await asyncio.sleep(0.3)
@@ -123,7 +142,7 @@ async def run(args):
     val = await peer.read_gatt_char(chars[U_LONG])
     res["read_ms"] = round((time.monotonic() - t0) * 1000, 1)
     check(bytes(val) == LONG, f"read: 100 bytes in {res['read_ms']} ms")
-    check(bytes(await peer.read_gatt_char(chars[U_NAME])) == b"tsx-test-peer", "read: the device name")
+    check(bytes(await peer.read_gatt_char(chars[U_NAME])) == args.gap_name.encode(), "read: the device name")
     t0 = time.monotonic()
     await peer.write_gatt_char(chars[U_RW], b"panel", response=True)
     res["write_ms"] = round((time.monotonic() - t0) * 1000, 1)
@@ -164,13 +183,13 @@ async def run(args):
     for i in range(args.cycles):
         c = make(args.addr, args.atype)
         t0 = time.monotonic()
-        await c.connect(pair=False, dangerous_use_bleak_cache=True)
+        await connect(c, dangerous_use_bleak_cache=True)
         up = time.monotonic() - t0
         v = await c.read_gatt_char(c.services.get_characteristic(U_NAME))
         t1 = time.monotonic()
         await c.disconnect()
         times.append((up, time.monotonic() - t1))
-        if bytes(v) != b"tsx-test-peer":
+        if bytes(v) != args.gap_name.encode():
             raise Failed(f"cycle {i + 1}: read {v!r}")
         t_between.append(time.monotonic())
         await asyncio.sleep(args.pause)
@@ -190,7 +209,7 @@ async def run(args):
 
     # the peer drops the link, then a reconnect
     peer = make(args.addr, args.atype)
-    await peer.connect(pair=False, dangerous_use_bleak_cache=True)
+    await connect(peer, dangerous_use_bleak_cache=True)
     ctrl = peer.services.get_characteristic(U_CTRL)
     dropped.clear()
     t0 = time.monotonic()
@@ -204,9 +223,9 @@ async def run(args):
     check(bool(dropped) and not peer.is_connected, f"the peer drops the link: the client sees it in {res['peer_drop_s']:.2f} s")
     await asyncio.sleep(args.pause)
     t0 = time.monotonic()
-    await peer.connect(pair=False, dangerous_use_bleak_cache=True)
+    await connect(peer, dangerous_use_bleak_cache=True)
     res["reconnect_s"] = round(time.monotonic() - t0, 3)
-    check(peer.is_connected and bytes(await peer.read_gatt_char(peer.services.get_characteristic(U_NAME))) == b"tsx-test-peer",
+    check(peer.is_connected and bytes(await peer.read_gatt_char(peer.services.get_characteristic(U_NAME))) == args.gap_name.encode(),
           f"reconnect after the drop in {res['reconnect_s']:.2f} s")
     await peer.disconnect()
 
@@ -224,6 +243,9 @@ async def run(args):
                 break
             await asyncio.sleep(0.1)
         check(bdev.ble_connections_free == args.limit, "all slots free at the end")
+    res["failed_attempts"] = failed
+    if failed:
+        print(f"NOTE: {len(failed)} connect attempt(s) failed while the link came up and were tried again", flush=True)
     await cli.disconnect()
     if args.json:
         with open(args.json, "w", encoding="ascii") as fobj:
@@ -244,6 +266,10 @@ def main():
     ap.add_argument("--key")
     ap.add_argument("--adv", action="store_true")
     ap.add_argument("--json")
+    ap.add_argument("--retries", type=int, default=0,
+                    help="connect attempts to repeat after a link that failed while it came up")
+    ap.add_argument("--gap-name", default="tsx-test-peer",
+                    help="the device name (0x2A00) of the peer: the adapter name for bt-gatt-peer-bluez.py")
     args = ap.parse_args()
     try:
         return asyncio.run(run(args))

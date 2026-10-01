@@ -70,12 +70,35 @@ out=$(run "tsx_psr_collect '$W/out5' '$W/does-not-exist'"); rc=$?
 [ $rc = 0 ] && [ "$(printf '%s\n' "$out" | tail -n 1)" = "PSR-RESULT source=none ok=0" ] \
 	&& ok "a root that does not mount: source=none, exit 0 (never fatal)" || bad "no root: rc $rc, $out"
 
+echo "== government=1: no PSR file needed =="
+printf 'rootfstype=ramfs androidboot.lcdsize=7inch androidboot.government=1 console=tty0\n' > "$W/cmdline-gov"
+printf 'console=tty0 androidboot.government=0\n' > "$W/cmdline-0"
+printf 'console=tty0\n' > "$W/cmdline-none"
+[ "$(run "tsx_psr_government '$W/cmdline-gov'")" = 1 ] && [ "$(run "tsx_psr_government '$W/cmdline-0'")" = 0 ] \
+	&& ok "the flag from the kernel command line (1 and 0)" || bad "flag from the command line"
+[ -z "$(run "tsx_psr_government '$W/cmdline-none'")" ] && ok "no flag and no U-Boot env reader: nothing (unknown)" || bad "no flag: $(run "tsx_psr_government '$W/cmdline-none'")"
+out=$(run "FWP=/bin/true; tsx_env() { [ \"\$1\" = government ] && echo 1; }; tsx_psr_government '$W/cmdline-none'")
+[ "$out" = 1 ] && ok "no flag on the command line: the U-Boot env (tsx_env of tsx-lib.sh)" || bad "env fallback: '$out'"
+out=$(run "FWP=/bin/true; tsx_env() { echo 1; }; tsx_psr_government '$W/cmdline-0'")
+[ "$out" = 0 ] && ok "the command line wins over the U-Boot env" || bad "command line vs env: '$out'"
+mkdir -p "$W/out6"; mkpsr "$W/out6/PSR-CSR8811.psr" 44
+out=$(run "tsx_psr_not_needed '$W/out6'")
+[ "$(printf '%s\n' "$out" | tail -n 1)" = "PSR-RESULT source=not-needed ok=0 government=1" ] && [ ! -e "$W/out6/PSR-CSR8811.psr" ] \
+	&& grep -qx 'source=not-needed' "$W/out6/SOURCE" && grep -qx 'firmware=none (government=1: this panel has no Bluetooth module)' "$W/out6/SOURCE" \
+	&& ok "not needed: SOURCE says source=not-needed, no PSR file (an older one is removed)" || bad "not needed: $out / $(cat "$W/out6/SOURCE" 2>/dev/null)"
+
 echo "== the host plan (--psr-source MODE, the result of the panel) =="
 for c in auto:1:use-panel auto:0:puf auto:-:puf panel:1:use-panel panel:0:none panel:-:none \
 	puf:1:puf puf:-:puf none:1:none none:-:none; do
 	m=${c%%:*} r=${c#*:}; p=${r%%:*} want=${r#*:}
 	got=$(run "tsx_psr_plan $m $p")
 	[ "$got" = "$want" ] && ok "tsx_psr_plan $m $p = $want" || bad "tsx_psr_plan $m $p = $got, want $want"
+done
+for c in auto:0:1:not-needed panel:0:1:not-needed auto:1:0:use-panel auto:0:0:puf auto:0::puf panel:0:0:none \
+	puf:-:1:puf none:-:1:none; do
+	m=${c%%:*} r=${c#*:}; p=${r%%:*} r=${r#*:}; g=${r%%:*} want=${r#*:}
+	got=$(run "tsx_psr_plan $m $p '$g'")
+	[ "$got" = "$want" ] && ok "tsx_psr_plan $m $p government=${g:-?} = $want" || bad "tsx_psr_plan $m $p $g = $got, want $want"
 done
 run "tsx_psr_plan cloud 1" >/dev/null && bad "tsx_psr_plan accepts an unknown mode" || ok "tsx_psr_plan refuses an unknown mode"
 

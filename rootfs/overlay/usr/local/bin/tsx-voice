@@ -23,6 +23,8 @@ cmd) [ -n "${2:-}" ] || { echo "usage: tsx-voice cmd COMMAND" >&2; exit 1; }
 	case $2 in *[!a-z_]*) echo "tsx-voice: bad command name" >&2; exit 1;; esac
 	send "$2";;
 status)
+	[ "$(sed -n 's/^MIC=//p' "${TSX_HW_CONF:-/run/tsx/hw.conf}" 2>/dev/null)" = no ] \
+		&& echo "voice: not available. No microphone on this panel ($(sed -n 's/^REASON=//p' "${TSX_HW_CONF:-/run/tsx/hw.conf}"))"
 	rc-service tsx-voice status 2>/dev/null
 	[ -r "$RUN/voice.state" ] && cat "$RUN/voice.state"
 	tail -n 5 /var/log/tsx-voice.log 2>/dev/null

@@ -280,6 +280,15 @@ def _patch_names():
 
 
 def _patch():
+    # No microphone (MIC=no in /run/tsx/hw.conf, government=1): no voice
+    # satellite. /etc/init.d/tsx-voice already refuses to start. This
+    # covers a start by hand, so the device never offers voice features.
+    from tsx_panel import hw  # noqa: WPS433
+
+    if not hw.present("MIC"):
+        print(f"tsx_lva: no microphone on this panel ({hw.reason()}). The voice satellite does not start",
+              file=sys.stderr, flush=True)
+        sys.exit(1)
     # HA_API_KEY + HA_ALLOW_FROM (panel.conf): enforced unconditionally,
     # even when HA_TRANSPORT=mqtt opted the panel entities out -- the
     # satellite's own entities (assist_satellite, its media player, ...)

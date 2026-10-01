@@ -15,6 +15,9 @@ start() {
 	# fail the runlevel.
 	transport=$(tsx-config get HA_TRANSPORT 2>/dev/null) || transport=esphome
 	voice=$(tsx-config get VOICE 2>/dev/null) || voice=
+	# No microphone (government=1): the voice satellite never runs, so
+	# this device serves the entities whatever VOICE says.
+	[ "$(sed -n 's/^MIC=//p' /run/tsx/hw.conf 2>/dev/null)" = no ] && voice=off
 	if [ "$transport" = mqtt ]; then
 		einfo "tsx-esphome: HA_TRANSPORT=mqtt, not started"
 		return 0

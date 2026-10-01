@@ -466,6 +466,24 @@ if [ -n "$LANIP" ]; then
 	[ "$(status_of "$out")" = 0 ] && ok "LAN cannot connect again once the reopened window expired" || bad "LAN still reachable after the window expired: $(status_of "$out")"
 fi
 
+# ---- 5b. a panel without a microphone or a Bluetooth module (hw.conf, government=1)
+echo "== government=1 (hw.conf): voice and the Bluetooth proxy are not available =="
+out=$(call GET /setup/api/state); body=$(body_of "$out")
+[ "$(jget unavailable <<<"$body")" = "{}" ] && ok "no hw.conf: nothing is marked not available" || bad "no hw.conf: unavailable = $(jget unavailable <<<"$body")"
+printf 'GOVERNMENT=1\nMIC=no\nBT=no\nCAMERA=no\nREASON=government=1 (TSW-760-NC): no microphone, no camera, no Bluetooth module\n' > "$RUNDIR/hw.conf"
+out=$(call GET /setup/api/state); body=$(body_of "$out")
+[ "$(jget unavailable.VOICE <<<"$body")" = "no microphone on this panel (government=1)" ] \
+	&& [ "$(jget unavailable.BT_PROXY <<<"$body")" = "no Bluetooth module on this panel (government=1)" ] \
+	&& ok "state: VOICE and BT_PROXY not available, with the reason" || bad "state unavailable: $(jget unavailable <<<"$body")"
+out=$(call GET /setup); page=$(body_of "$out")
+case "$page" in *'id="hw-hint"'*"function applyUnavailable"*) ok "the page has the not-available hint and disables the voice switch";; *) bad "the page has no not-available hint";; esac
+GSUBMIT='{"KIOSK_URL":"https://ha.example.org/lovelace/0","HA_LOGIN_METHOD":"token","VOICE":"off","WAKE_WORD":"hey_jarvis"}'
+out=$(call POST /setup/api/submit --data "$GSUBMIT")
+[ "$(status_of "$out")" = 200 ] && grep -q '^VOICE="on"$' "$CONF" && grep -q '^WAKE_WORD="okay_nabu"$' "$CONF" \
+	&& ok "a submit leaves VOICE and WAKE_WORD as they are (a panel.conf from another panel keeps them)" \
+	|| bad "government=1 submit: $(status_of "$out"), $(grep -E '^(VOICE|WAKE_WORD)=' "$CONF" | tr '\n' ' ')"
+rm -f "$RUNDIR/hw.conf"
+
 # ---- 8. unconfigured trigger, from tsx-kiosk-url's own point of view ----
 echo "== tsx-kiosk-url: unconfigured always shows setup =="
 R=$(TSX_SETUP_CONF="$T/setup.conf" TSX_RUN_DIR="$RUNDIR" busybox sh "$KIOSKURL" "")
