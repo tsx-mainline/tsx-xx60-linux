@@ -10,6 +10,8 @@
 #   tsx-audio mute on|off|toggle    Master mute (softvol has no switch, so it
 #                                   sets 0 % and keeps the level in RUN/audio-mute)
 #   tsx-audio speaker hold|release  keep the amplifiers and SPK_EN on (plays silence)
+#   tsx-audio mic-check [SECONDS]   record the raw microphone beside the processed
+#                                   capture and print both levels (default 5 s)
 #   tsx-audio enable|disable sendspin|voice
 #                                   runlevel + start/stop (sendspin also uses dbus
 #                                   and avahi-daemon. Voice = tsx-voice)
@@ -22,6 +24,10 @@ RUN=${TSX_RUN_DIR:-/run/tsx}
 AMIXER=${AMIXER:-amixer}
 ALSACTL=${ALSACTL:-alsactl}
 APLAY=${APLAY:-aplay}
+ARECORD=${ARECORD:-arecord}
+I2CTRANSFER=${I2CTRANSFER:-i2ctransfer}
+PYTHON3=${PYTHON3:-python3}
+ZL_SYSFS=${TSX_ZL_SYSFS:-/sys/bus/i2c/drivers/zl38060}
 
 . "${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}"
 CARD=$TSX_SOUND_CARD CARD_WAIT=15 STATE=/var/lib/tsx/asound.state
@@ -142,6 +148,95 @@ cmd_status() {
 	return 0
 }
 
+# The ZL38051 echo canceller gates a quiet room to digital silence or to a
+# low comfort noise. A plain capture can then not show if the microphones
+# work. mic-check sends the raw microphone MIC3 to the right slot of the
+# capture (crosspoint TDMA-2, register 0x0216) for the time of the check.
+# The left slot keeps the processed signal. The "mic" PCM and the voice
+# satellite use only the left slot. The check restores the original routing
+# at the end, also after an error or a signal.
+ZL_XP_TDMA2=0x0216 ZL_SRC_MIC3=0x0003
+
+zl_dev() {  # print "BUS ADDR" of the bound ZL38051, for example "1 0x45"
+	for d in "$ZL_SYSFS"/*-*; do
+		[ -e "$d" ] || continue
+		b=${d##*/}
+		case $b in [0-9]*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) continue;; esac
+		printf '%s 0x%02x\n' "${b%%-*}" "$((0x${b#*-}))"
+		return 0
+	done
+	return 1
+}
+
+# HBI access to a register of page 1 or higher (0x0100..0x0fff)
+zl_hdr() { printf '0xfe 0x%02x 0x%02x' $((($1 >> 8) - 1)) $((($1 & 0xff) >> 1)); }
+zl_read() {  # REG: print the value as 0xNNNN
+	v=$($I2CTRANSFER -f -y "$ZL_BUS" w4@"$ZL_ADDR" $(zl_hdr "$1") 0x00 r2) || return 1
+	set -- $v
+	[ $# = 2 ] || return 1
+	printf '0x%04x\n' $((($1 << 8) | $2))
+}
+zl_write() {  # REG VALUE
+	$I2CTRANSFER -f -y "$ZL_BUS" w6@"$ZL_ADDR" $(zl_hdr "$1") 0x80 \
+		"$(printf '0x%02x' $((($2 >> 8) & 0xff)))" "$(printf '0x%02x' $(($2 & 0xff)))"
+}
+
+zl_restore() {
+	[ -n "${ZL_OLD:-}" ] || return 0
+	if zl_write $ZL_XP_TDMA2 "$ZL_OLD" && [ "$(zl_read $ZL_XP_TDMA2)" = "$ZL_OLD" ]; then
+		ZL_OLD=
+	else
+		echo "tsx-audio: could not restore ZL38051 register $ZL_XP_TDMA2 to $ZL_OLD" >&2
+		return 1
+	fi
+}
+
+cmd_mic_check() {
+	need_card
+	s=${1:-5}
+	case $s in ''|*[!0-9]*) echo "usage: tsx-audio mic-check [SECONDS]" >&2; exit 1;; esac
+	if [ "$s" -lt 2 ] || [ "$s" -gt 60 ]; then echo "tsx-audio: mic-check takes 2 to 60 seconds" >&2; exit 1; fi
+	zl=$(zl_dev) || { echo "tsx-audio: no ZL38051 on I2C (driver zl38060 not bound)" >&2; exit 2; }
+	ZL_BUS=${zl% *} ZL_ADDR=${zl#* }
+	ZL_OLD=$(zl_read $ZL_XP_TDMA2) || { echo "tsx-audio: cannot read the ZL38051 at $ZL_BUS-$ZL_ADDR" >&2; exit 2; }
+	wav=$(mktemp "${TMPDIR:-/tmp}/tsx-mic-check.XXXXXX") || exit 2
+	trap 'zl_restore; rm -f "$wav"' EXIT
+	trap 'exit 130' INT TERM HUP
+	zl_write $ZL_XP_TDMA2 $ZL_SRC_MIC3 || { echo "tsx-audio: cannot route the raw microphone" >&2; exit 2; }
+	echo "recording $s s: left = processed capture (echo canceller output), right = raw microphone (MIC3)"
+	$ARECORD -q -D tsx_dsnoop -t wav -f S16_LE -r 48000 -c 2 -d "$s" "$wav" || { echo "tsx-audio: arecord failed" >&2; exit 2; }
+	zl_restore || exit 2
+	mic=$(sed -n 's/^MIC=//p' "$RUN/hw.conf" 2>/dev/null)
+	$PYTHON3 - "$wav" "${mic:-yes}" <<'EOF'
+import math, struct, sys, wave
+w = wave.open(sys.argv[1])
+n, fs = w.getnframes(), w.getframerate()
+d = struct.unpack('<%dh' % (2 * n), w.readframes(n))
+skip, win = fs // 2, fs // 2          # skip the first 0.5 s, then 0.5 s windows
+def rms(x):
+    return math.sqrt(sum(v * v for v in x) / len(x)) if x else 0.0
+def db(r):
+    return 20 * math.log10(r / 32768) if r > 0 else -150.0
+out = []
+for c, name in ((0, 'processed (left, echo canceller output)'), (1, 'raw microphone (right, MIC3)')):
+    x = d[c::2][skip:]
+    wins = [rms(x[i:i + win]) for i in range(0, len(x) - win + 1, win)]
+    quiet = sum(1 for r in wins if r < 1.0)
+    r = rms(x)
+    out.append(r)
+    print('%s: rms %.1f (%.1f dBFS), %d of %d windows below rms 1' % (name, r, db(r), quiet, len(wins)))
+if out[1] < 2.0:
+    if sys.argv[2] == 'no':
+        print('result: no microphone signal. This panel has no microphone (/run/tsx/hw.conf MIC=no)')
+        sys.exit(0)
+    print('result: FAIL, no signal from the raw microphone')
+    sys.exit(1)
+print('result: microphone OK')
+if out[0] < out[1] / 4:
+    print('note: the echo canceller gates a quiet room to silence or comfort noise. Speech near the panel passes.')
+EOF
+}
+
 svc_enable() {  # $1 = add|del, services...
 	a=$1; shift
 	for s in "$@"; do
@@ -201,7 +296,8 @@ card) echo "$CARD";;
 volume) shift; cmd_volume "$@";;
 mute) shift; cmd_mute "$@";;
 speaker) shift; cmd_speaker "$@";;
+mic-check) shift; cmd_mic_check "$@";;
 enable) cmd_enable add "${2:-}";;
 disable) cmd_enable del "${2:-}";;
-*) sed -n '2,18p' "$0"; exit 1;;
+*) sed -n '2,20p' "$0"; exit 1;;
 esac
