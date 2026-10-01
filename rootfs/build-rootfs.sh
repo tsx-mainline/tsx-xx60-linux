@@ -119,6 +119,7 @@ rootfs() {
 		[ -d "$TSX_APK_LOCAL/$ALPINE" ] || { echo "TSX_APK_LOCAL=$TSX_APK_LOCAL has no $ALPINE/ (a tsx-aports published tree)"; exit 1; }
 		mnt+=(-v "$(cd "$TSX_APK_LOCAL" && pwd):/aports:ro"); apk=(-e TSX_APK_LOCAL=/aports)
 	fi
+	mnt+=(-v "$(cd "$HERE/../kernel" && pwd):/kernel:ro")   # the kernel pins (check-boot-images.py)
 	docker run --rm --platform linux/arm/v7 -v "$HERE:/w" "${mnt[@]}" "${apk[@]}" \
 		-e ALPINE="$ALPINE" -e PROFILE="${PROFILE:-ha}" -e TSX_DEV_ROOT_HASH="${TSX_DEV_ROOT_HASH:-}" -e KVER="$KVER" -e OUT=/w/out -e UIDGID="$UIDGID" -e IMG_MB="$IMG_MB" -e CHROMIUM_ES2_PATCH="${CHROMIUM_ES2_PATCH:-1}" \
 		-e TSX_APK_URL="${TSX_APK_URL:-https://tsx-aports.unexceptional.net}" \

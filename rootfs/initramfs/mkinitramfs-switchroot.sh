@@ -60,6 +60,11 @@ cp "$HERE"/../install.sh "$HERE"/../tsx-disk.sh $R/usr/share/tsx/
 chmod 755 $R/usr/share/tsx/install.sh
 [ -x $R/usr/sbin/tsx-autoinstall ] || { echo "tsx-autoinstall missing in the overlay"; exit 1; }
 chmod 755 $R/init $R/etc/init.d/rcS
+# The stamp of these sources. The kernel packages carry this image, and
+# rootfs/check-boot-images.py refuses a package whose stamp is not the stamp of
+# the checkout.
+mkdir -p $R/usr/share/tsx
+sh "$HERE/../initramfs-stamp.sh" > $R/usr/share/tsx/initramfs.stamp
 rm -f $R/etc/fw_env.config     # fw_setenv must not default to the Android mmcblk0 copy
 if [ -n "$KEYS" ] && [ -s "$KEYS" ]; then
   mkdir -p $R/root/.ssh; cp "$KEYS" $R/root/.ssh/authorized_keys

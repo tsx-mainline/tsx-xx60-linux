@@ -88,6 +88,8 @@ jobs:
         run: rootfs/tests/test-bt.sh
       - name: rootfs/tests/test-build-modules.sh - both flavors' module trees staged
         run: rootfs/tests/test-build-modules.sh
+      - name: rootfs/tests/test-boot-images.sh - kernel pins and initramfs stamp of the kernel packages
+        run: rootfs/tests/test-boot-images.sh
       - name: tools/build/tests/test-push-protect.sh - remote push keeps host-only inputs
         run: tools/build/tests/test-push-protect.sh
       - name: tools/build/tests/test-no-pull.sh - remote build can leave artifacts on the host

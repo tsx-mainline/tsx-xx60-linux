@@ -423,6 +423,16 @@ else
 	log "no kernel modules copied (KVER=${KVER:-unset})"
 fi
 
+# The kernel packages must carry the pinned kernels (kernel/KERNEL_REV.*) and
+# the initramfs of this checkout. An old package in the local tree would put an
+# old /boot/tsxboot-emmc-<flavor>.img in the image, and tsx-kernel-flavor would
+# boot it.
+if [ $TSXREPO = 1 ]; then
+	log "check the kernel packages against kernel/KERNEL_REV.* and the initramfs"
+	apk add -q --no-cache python3 >/dev/null
+	python3 "$HERE/check-boot-images.py" "$R" "$HERE/../kernel" || { echo "ERROR: the kernel packages in $TSX_APK_LOCAL do not match the kernel pins or the initramfs of this checkout"; exit 1; }
+fi
+
 log "manifest and sizes"
 mkdir -p "$OUT"
 apk info --root $R -v 2>/dev/null | sort > "$OUT/rootfs.manifest"
