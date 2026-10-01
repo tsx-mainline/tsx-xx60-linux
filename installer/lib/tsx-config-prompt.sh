@@ -133,6 +133,10 @@ tsx_config_prompt() {
 		_tcp_ask MQTT_PASSWORD "MQTT password" "" 1
 	fi
 
+	# Sensors (docs/rootfs.md "Ambient light sensor"). A blank answer keeps
+	# the default of the panel.
+	_tcp_ask AUTO_BRIGHTNESS "Backlight follows the ambient light sensor, on or off" "$(_tcp_default AUTO_BRIGHTNESS)"
+
 	# This function does not prompt for KERNEL_FLAVOR. The caller sets it from
 	# --kernel of the installer (already required and validated). So panel.conf
 	# never disagrees with the kernel that --kernel installs.

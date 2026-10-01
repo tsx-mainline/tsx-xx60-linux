@@ -231,6 +231,19 @@ grep -qx 'ACTIVE="on"' "$FX/run/tsx/bt.conf" && ok "BT_ACTIVE=on reaches bt.conf
 	|| bad "BT_ACTIVE=on: $(restarts)/$(vrestarts)/$(btl restart) restarts (was $r0/$v0/$s0)"
 set_ BT_PROXY off >/dev/null; applyp
 [ "$(btl stop)" -ge 1 ] && ok "BT_PROXY=off stops tsx-bt" || bad "BT_PROXY=off did not stop tsx-bt"
+echo "== AUTO_BRIGHTNESS and ALS_SCALE: /run/tsx/als.panel for tsx-als =="
+rm -f "$FX/run/tsx/als.panel"; applyp
+[ ! -e "$FX/run/tsx/als.panel" ] && ok "als.panel: not written while neither key is set" || bad "als.panel written by default: $(cat "$FX/run/tsx/als.panel")"
+set_ AUTO_BRIGHTNESS off >/dev/null; set_ ALS_SCALE 2.5 >/dev/null; applyp
+grep -qx 'ALS_AUTO="0"' "$FX/run/tsx/als.panel" && grep -qx 'ALS_SCALE="2.5"' "$FX/run/tsx/als.panel" \
+	&& ok "AUTO_BRIGHTNESS=off, ALS_SCALE=2.5 reach als.panel (ALS_AUTO=0)" || bad "als.panel: $(cat "$FX/run/tsx/als.panel" 2>/dev/null)"
+[ "$(stat -c '%a' "$FX/run/tsx/als.panel")" = 644 ] && ok "als.panel mode 644" || bad "als.panel mode"
+busybox sh -c '. "'"$FX"'/run/tsx/als.panel"; [ "$ALS_AUTO" = 0 ] && [ "$ALS_SCALE" = 2.5 ]' && ok "als.panel sources back" || bad "als.panel does not source"
+set_ AUTO_BRIGHTNESS on >/dev/null; applyp
+grep -qx 'ALS_AUTO="1"' "$FX/run/tsx/als.panel" && ok "AUTO_BRIGHTNESS=on -> ALS_AUTO=1" || bad "als.panel on: $(cat "$FX/run/tsx/als.panel")"
+for k in AUTO_BRIGHTNESS ALS_SCALE; do TSX_CONF="$CFG" busybox sh "$SCRIPT" unset $k >/dev/null; done; applyp
+[ ! -e "$FX/run/tsx/als.panel" ] && ok "both keys unset: als.panel removed" || bad "als.panel left behind"
+
 echo "== a panel without a microphone or a Bluetooth module (hw.conf, government=1) =="
 CFG3="$W/panel-gov.conf"; FX3="$W/fx-gov"; mkdir -p "$FX3/run/tsx" "$FX3/etc"
 printf '#!/bin/sh\necho "tsx-audio $*" >> "%s/audio.log"\nexit 0\n' "$W" > "$W/bin/tsx-audio"; chmod +x "$W/bin/tsx-audio"
@@ -257,6 +270,14 @@ grep -qx 'tsx-audio disable voice' "$W/audio.log" 2>/dev/null && ! grep -q 'enab
 	&& ok "apply: VOICE=on is treated as off (tsx-audio disable voice)" || bad "apply voice: $(cat "$W/audio.log" 2>/dev/null)"
 case "$out" in *"WARNING: VOICE=on is set, but this panel has no microphone"*"WARNING: BT_PROXY=on is set"*) ok "apply: the log says why";; *) bad "apply log: $out";; esac
 grep -q '|off|' "$FX3/run/tsx/.esphome-sig" && ok "apply: tsx-esphome sees VOICE off (it serves the entities)" || bad ".esphome-sig: $(cat "$FX3/run/tsx/.esphome-sig")"
+# a panel with ALS=no in hw.conf: AUTO_BRIGHTNESS=on is saved with a warning, apply treats it as off
+printf 'ALS=no\n' >> "$FX3/run/tsx/hw.conf"
+out=$(cfg3 set AUTO_BRIGHTNESS on 2>&1); rc=$?
+[ $rc = 0 ] && case "$out" in *"WARNING: AUTO_BRIGHTNESS=on is saved, but this panel has no ambient light sensor"*) true;; *) false;; esac \
+	&& ok "ALS=no: set AUTO_BRIGHTNESS on is saved, with a warning" || bad "ALS=no set: exit $rc, '$out'"
+cfg3 apply >/dev/null 2>&1
+[ ! -e "$FX3/run/tsx/als.panel" ] && ok "ALS=no: apply writes no ALS_AUTO" || bad "ALS=no: $(cat "$FX3/run/tsx/als.panel")"
+cfg3 unset AUTO_BRIGHTNESS >/dev/null 2>&1; gov_conf 1
 grep -q 'tsx-bt' "$W/rc.log" 2>/dev/null && bad "the first apply touched tsx-bt" || ok "the first apply does not touch tsx-bt"
 cfg3 apply >/dev/null 2>&1
 grep -q 'tsx-bt' "$W/rc.log" 2>/dev/null && bad "an unchanged apply touched tsx-bt" || ok "an unchanged apply does not touch tsx-bt"

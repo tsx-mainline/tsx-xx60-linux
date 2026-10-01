@@ -99,6 +99,19 @@ for v in sideways Portrait 90 "portrait " "" "landscape;reboot"; do
 done
 run validate ORIENTATION portrait && ok "validate ORIENTATION portrait (the setup page's check)" || bad "validate ORIENTATION portrait"
 
+echo "== AUTO_BRIGHTNESS and ALS_SCALE =="
+for kv in "AUTO_BRIGHTNESS on" "AUTO_BRIGHTNESS off" "ALS_SCALE 1" "ALS_SCALE 0.01" "ALS_SCALE 16" "ALS_SCALE 2.5" "ALS_SCALE 1000" "ALS_SCALE 1.125"; do
+	set -- $kv
+	run set "$1" "$2" && [ "$(run get "$1")" = "$2" ] && ok "$1 $2 accepted" || bad "$1 $2"
+done
+for kv in "AUTO_BRIGHTNESS auto" "AUTO_BRIGHTNESS 1" "AUTO_BRIGHTNESS ON" "ALS_SCALE 0" "ALS_SCALE 0.009" "ALS_SCALE 1000.1" "ALS_SCALE 1001" "ALS_SCALE abc" "ALS_SCALE -2" "ALS_SCALE 1.2345" "ALS_SCALE 1e2"; do
+	set -- $kv
+	run set "$1" "$2" >/dev/null 2>&1 && bad "$1 '$2' accepted" || ok "$1 '$2' rejected"
+done
+run set ALS_SCALE "" && ok "ALS_SCALE empty accepted (= 1.0)" || bad "ALS_SCALE empty"
+run validate ALS_SCALE 2.5 && ok "validate ALS_SCALE 2.5 (the setup page's check)" || bad "validate ALS_SCALE"
+run unset ALS_SCALE; run unset AUTO_BRIGHTNESS
+
 echo "== a value containing a literal newline is rejected =="
 V=$(printf 'line1\nline2')
 run set MQTT_USER "$V" >/dev/null 2>&1 && bad "embedded newline accepted" || ok "embedded newline rejected"

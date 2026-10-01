@@ -374,7 +374,7 @@ print(json.dumps({
 	'KIOSK_URL': 'https://ha.example.org/lovelace/0',
 	'HA_LOGIN_METHOD': 'token', 'HA_TOKEN': '$TOKEN_VAL',
 	'PANEL_NAME': 'test-panel-1', 'TZ_NAME': 'America/Denver', 'VOICE': 'on', 'WAKE_WORD': 'okay_nabu',
-	'ORIENTATION': 'portrait',
+	'ORIENTATION': 'portrait', 'AUTO_BRIGHTNESS': 'off', 'ALS_SCALE': '2.5',
 	'ROOT_PASSWORD': '$ROOTPW', 'SSH_AUTHORIZED_KEY': '$SSHKEY',
 	# the rest exactly as the page sends an untouched field: empty strings
 	'MQTT_HOST': '', 'MQTT_PORT': '', 'MQTT_USER': '', 'MQTT_PASSWORD': '',
@@ -386,6 +386,8 @@ out=$(call POST /setup/api/submit --data "$SUBMIT")
 grep -q '^KIOSK_URL="https://ha.example.org/lovelace/0"$' "$CONF" && ok "KIOSK_URL landed in the temp panel.conf" || bad "KIOSK_URL missing from $CONF"
 grep -q '^PANEL_NAME="test-panel-1"$' "$CONF" && ok "PANEL_NAME landed in panel.conf" || bad "PANEL_NAME missing"
 grep -q '^ORIENTATION="portrait"$' "$CONF" && ok "ORIENTATION landed in panel.conf" || bad "ORIENTATION missing"
+grep -q '^AUTO_BRIGHTNESS="off"$' "$CONF" && grep -q '^ALS_SCALE="2.5"$' "$CONF" && ok "AUTO_BRIGHTNESS and ALS_SCALE landed in panel.conf" || bad "AUTO_BRIGHTNESS or ALS_SCALE missing"
+grep -q '^ALS_AUTO="0"$' "$T/prefix/run/tsx/als.panel" "$RUNDIR/als.panel" 2>/dev/null && ok "apply wrote ALS_AUTO to als.panel" || echo "  (als.panel not checked: apply run dir differs)"
 [ "$(cat "$T/prefix/etc/tsx/orientation" 2>/dev/null)" = portrait ] && ok "apply left /etc/tsx/orientation (portrait) in the prefix" || bad "no orientation file after apply"
 grep -q '^HA_TOKEN=' "$CONF" && ok "HA_TOKEN was written" || bad "HA_TOKEN missing"
 grep -Eq '^MQTT_(HOST|PORT|USER)=' "$CONF" && bad "cleared MQTT fields were written as KEY=\"\" instead of removed" || ok "cleared MQTT host/port/user are removed from panel.conf"
@@ -482,6 +484,26 @@ out=$(call POST /setup/api/submit --data "$GSUBMIT")
 [ "$(status_of "$out")" = 200 ] && grep -q '^VOICE="on"$' "$CONF" && grep -q '^WAKE_WORD="okay_nabu"$' "$CONF" \
 	&& ok "a submit leaves VOICE and WAKE_WORD as they are (a panel.conf from another panel keeps them)" \
 	|| bad "government=1 submit: $(status_of "$out"), $(grep -E '^(VOICE|WAKE_WORD)=' "$CONF" | tr '\n' ' ')"
+rm -f "$RUNDIR/hw.conf"
+
+echo "== settings that the page sends for the light sensor =="
+out=$(call GET /setup); page=$(body_of "$out")
+case "$page" in *'id="sensors-wrap"'*'name="AUTO_BRIGHTNESS"'*'name="ALS_SCALE"'*) ok "the page has the Sensors section with AUTO_BRIGHTNESS and ALS_SCALE";; *) bad "no Sensors section";; esac
+out=$(call POST /setup/api/submit --data '{"KIOSK_URL":"https://ha.example.org/lovelace/0","HA_LOGIN_METHOD":"token","ALS_SCALE":"abc"}')
+[ "$(jget errors.ALS_SCALE <<<"$(body_of "$out")")" != "" ] && ok "a bad ALS_SCALE is rejected" || bad "ALS_SCALE abc accepted: $out"
+out=$(call POST /setup/api/submit --data '{"KIOSK_URL":"https://ha.example.org/lovelace/0","HA_LOGIN_METHOD":"token","AUTO_BRIGHTNESS":"maybe"}')
+[ "$(jget errors.AUTO_BRIGHTNESS <<<"$(body_of "$out")")" != "" ] && ok "a bad AUTO_BRIGHTNESS is rejected" || bad "AUTO_BRIGHTNESS maybe accepted"
+out=$(call POST /setup/api/submit --data '{"KIOSK_URL":"https://ha.example.org/lovelace/0","HA_LOGIN_METHOD":"token","AUTO_BRIGHTNESS":"","ALS_SCALE":""}')
+! grep -Eq '^(AUTO_BRIGHTNESS|ALS_SCALE)=' "$CONF" && ok "empty fields remove both keys (back to the defaults)" || bad "empty fields left keys: $(grep -E '^(AUTO_BRIGHTNESS|ALS_SCALE)=' "$CONF")"
+echo "== ALS=no (hw.conf): the light sensor settings are not available =="
+printf 'GOVERNMENT=0\nMIC=yes\nBT=yes\nALS=no\n' > "$RUNDIR/hw.conf"
+TSX_CONF="$CONF" busybox sh "$TSXCONFIG" set AUTO_BRIGHTNESS on >/dev/null 2>&1; TSX_CONF="$CONF" busybox sh "$TSXCONFIG" set ALS_SCALE 3 >/dev/null 2>&1
+out=$(call GET /setup/api/state); body=$(body_of "$out")
+[ "$(jget unavailable.AUTO_BRIGHTNESS <<<"$body")" = "no ambient light sensor on this panel" ] && ok "state: AUTO_BRIGHTNESS not available, with the reason" || bad "ALS=no state: $(jget unavailable <<<"$body")"
+out=$(call GET /setup); page=$(body_of "$out")
+case "$page" in *'Not available on this panel: '*) ok "the page has the Not available on this panel text";; *) bad "no Not available text for the sensor";; esac
+out=$(call POST /setup/api/submit --data '{"KIOSK_URL":"https://ha.example.org/lovelace/0","HA_LOGIN_METHOD":"token","AUTO_BRIGHTNESS":"off","ALS_SCALE":"7"}')
+grep -q '^AUTO_BRIGHTNESS="on"$' "$CONF" && grep -q '^ALS_SCALE="3"$' "$CONF" && ok "a submit leaves the light sensor keys as they are" || bad "ALS=no submit changed them: $(grep -E '^(AUTO_BRIGHTNESS|ALS_SCALE)=' "$CONF" | tr '\n' ' ')"
 rm -f "$RUNDIR/hw.conf"
 
 # ---- 8. unconfigured trigger, from tsx-kiosk-url's own point of view ----

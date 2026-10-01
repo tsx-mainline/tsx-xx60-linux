@@ -74,6 +74,13 @@
 #   Home Assistant reads the new feature flags.
 # BT_MAC: the Bluetooth address that tsx-bt loads into the chip. Empty = the
 #   eth0 MAC, the same value as the vendor firmware.
+# AUTO_BRIGHTNESS (on|off, default on): the backlight follows the ambient
+#   light sensor (tsx-als). Apply writes it to /run/tsx/als.panel, which
+#   tsx-als reads in place of ALS_AUTO of /etc/tsx/als.conf. `tsx-als auto`
+#   and the Home Assistant "Auto brightness" switch write this key.
+# ALS_SCALE (lux = sensor lux x this; 0.01-1000; empty = 1.0, for example
+#   a factor for the front glass). Apply writes it to /run/tsx/als.panel. The curve and the timing stay in
+#   /etc/tsx/als.conf.
 # A panel without a microphone or a Bluetooth module (government=1, the
 # TSW-760-NC: /run/tsx/hw.conf, written by tsx-hw at boot) accepts VOICE=on,
 # BT_PROXY=on and BT_ACTIVE=on, so that a panel.conf from another panel
@@ -96,10 +103,10 @@ PREFIX=${TSX_APPLY_PREFIX:-}
 # (host tooling, an early boot) means a panel with all parts.
 HW_CONF=${TSX_HW_CONF:-$RUN/hw.conf}
 
-KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT BOOT_VERBOSE ORIENTATION BT_PROXY BT_ACTIVE BT_MAC ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
+KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT BOOT_VERBOSE ORIENTATION BT_PROXY BT_ACTIVE BT_MAC AUTO_BRIGHTNESS ALS_SCALE ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 SECRET_KEYS="HA_TOKEN HA_API_KEY MQTT_PASSWORD ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 
-usage() { sed -n '2,83p' "$0" >&2; exit 2; }
+usage() { sed -n '2,91p' "$0" >&2; exit 2; }
 die() { echo "tsx-config: ERROR: $*" >&2; exit 2; }
 log() { echo "tsx-config: $*" >&2; }
 
@@ -122,6 +129,8 @@ hw_missing() {
 		echo "this panel has no microphone (government=$(hw_get GOVERNMENT))";;
 	BT_PROXY|BT_ACTIVE) [ "$(hw_get BT)" = no ] || return 1
 		echo "this panel has no Bluetooth module (government=$(hw_get GOVERNMENT))";;
+	AUTO_BRIGHTNESS|ALS_SCALE) [ "$(hw_get ALS)" = no ] || return 1
+		echo "this panel has no ambient light sensor";;
 	*) return 1;;
 	esac
 }
@@ -209,6 +218,9 @@ val_ok() {
 	BOOT_VERBOSE) case "$v" in 0|1) return 0;; esac; return 1;;
 	ORIENTATION) case "$v" in landscape|portrait|landscape-flipped|portrait-flipped) return 0;; esac; return 1;;
 	BT_PROXY|BT_ACTIVE) case "$v" in on|off) return 0;; esac; return 1;;
+	AUTO_BRIGHTNESS) case "$v" in on|off|"") return 0;; esac; return 1;;
+	# lux = sensor lux x ALS_SCALE; empty = 1.0
+	ALS_SCALE) [ -z "$v" ] && return 0; printf '%s' "$v" | grep -Eq '^[0-9]{1,4}(\.[0-9]{1,3})?$' && awk -v x="$v" 'BEGIN{exit !(x >= 0.01 && x <= 1000)}';;
 	# empty = derived from eth0. A unicast address, not all zeros
 	BT_MAC) [ -z "$v" ] && return 0; printf '%s' "$v" | grep -Eq '^[0-9A-Fa-f][02468ACEace](:[0-9A-Fa-f]{2}){5}$' \
 		&& [ "$v" != 00:00:00:00:00:00 ];;
@@ -298,7 +310,7 @@ cfg_show() {
 		is_secret "$k" && v="********"
 		printf '%s=%s\n' "$k" "$v"
 	done
-	for k in VOICE BT_PROXY BT_ACTIVE; do
+	for k in VOICE BT_PROXY BT_ACTIVE AUTO_BRIGHTNESS; do
 		v=$(cfg_get "$k") || continue
 		hw_warn "$k" "$v" 2>&1 | sed 's/^tsx-config: /# /' >&2
 	done
@@ -474,6 +486,19 @@ apply() {
 		printf 'TRANSPORT="%s"\n' "$(shq "$transport")"
 		printf 'ALLOW_FROM="%s"\n' "$(shq "$allow")"
 	} > "$tmp" && mv "$tmp" "$RUN/esphome.conf" && chmod 644 "$RUN/esphome.conf"
+	# AUTO_BRIGHTNESS and ALS_SCALE: /run/tsx/als.panel for tsx-als (shell-style
+	# KEY="value" lines, only the keys that are set). tsx-als reads it every
+	# few seconds, so it needs no restart. AUTO_BRIGHTNESS goes in as
+	# ALS_AUTO=1|0, the name that als.conf uses.
+	{
+		ab=$(cfg_get AUTO_BRIGHTNESS) || ab=
+		if hw_missing AUTO_BRIGHTNESS >/dev/null; then hw_warn AUTO_BRIGHTNESS "$ab"; ab=; fi
+		case "$ab" in on) printf 'ALS_AUTO="1"\n';; off) printf 'ALS_AUTO="0"\n';; esac
+		sv=$(cfg_get ALS_SCALE) || sv=
+		[ -n "$sv" ] && printf 'ALS_SCALE="%s"\n' "$(shq "$sv")"
+		true
+	} | write_override "$RUN/als.panel" 644
+
 	# BT_PROXY/BT_ACTIVE/BT_MAC: /run/tsx/bt.conf, world-readable (no
 	# secret). tsx-bt (root), tsx-btscan (it connects only with ACTIVE=on)
 	# and the Bluetooth proxy of both ESPHome front ends

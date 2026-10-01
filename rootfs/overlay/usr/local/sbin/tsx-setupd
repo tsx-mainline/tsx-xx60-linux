@@ -40,7 +40,8 @@ body.
 On a panel without a microphone or a Bluetooth module (government=1, the
 TSW-760-NC: /run/tsx/hw.conf from tsx-hw), the page shows the voice
 assistant and the Bluetooth proxy as not available. A submit then leaves
-VOICE and WAKE_WORD as they are.
+VOICE and WAKE_WORD as they are. The same holds for the light sensor
+settings (AUTO_BRIGHTNESS and ALS_SCALE) on a panel with ALS=no in hw.conf.
 
 Env overrides for host tests (rootfs/tests/test-setup.sh): TSX_SETUP_PORT,
 TSX_SETUP_CONF, TSX_HW_CONF, TSX_RUN_DIR, TSX_CONFIG_BIN, TSX_SETUP_HELPER_REQ,
@@ -529,12 +530,14 @@ PAIRING = Pairing()
 # value).
 SIMPLE_KEYS = ["PANEL_NAME", "TZ_NAME", "VOICE", "WAKE_WORD", "MQTT_HOST",
                "MQTT_PORT", "MQTT_USER", "MQTT_PASSWORD", "SSH_AUTHORIZED_KEY",
-               "KERNEL_FLAVOR", "BLANK_TIMEOUT", "ORIENTATION"]
+               "KERNEL_FLAVOR", "BLANK_TIMEOUT", "ORIENTATION",
+               "AUTO_BRIGHTNESS", "ALS_SCALE"]
 # Empty = cleared. The page pre-fills these keys, so an empty one was cleared
 # on purpose, and the script removes the key. MQTT_PASSWORD is not one of
 # them. The page never pre-fills it ("already set; leave blank to keep"), so
 # empty = no change.
-CLEARABLE_BLANK = {"MQTT_HOST", "MQTT_PORT", "MQTT_USER"}
+CLEARABLE_BLANK = {"MQTT_HOST", "MQTT_PORT", "MQTT_USER", "AUTO_BRIGHTNESS",
+                   "ALS_SCALE"}
 
 
 def hw_unavailable():
@@ -547,6 +550,8 @@ def hw_unavailable():
         out["VOICE"] = "no microphone on this panel (government=%s)" % gov
     if hw.get("BT") == "no":
         out["BT_PROXY"] = "no Bluetooth module on this panel (government=%s)" % gov
+    if hw.get("ALS") == "no":
+        out["AUTO_BRIGHTNESS"] = "no ambient light sensor on this panel"
     return out
 
 
@@ -556,6 +561,9 @@ def handle_submit(fields):
         # Not available on this panel: the page does not send them. Keep
         # what panel.conf has (tsx-config apply treats VOICE=on as off).
         fields = {k: v for k, v in fields.items() if k not in ("VOICE", "WAKE_WORD")}
+    if "AUTO_BRIGHTNESS" in hw_unavailable():
+        # Same for the light sensor settings.
+        fields = {k: v for k, v in fields.items() if k not in ("AUTO_BRIGHTNESS", "ALS_SCALE")}
     to_set = {}
     to_unset = []
 
@@ -961,6 +969,20 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
       <div class="hint" id="hw-hint" style="display:none"></div>
     </div>
 
+    <details id="sensors-wrap"><summary>Sensors</summary>
+      <div class="card">
+        <label for="f-autobri">Backlight follows the ambient light</label>
+        <select id="f-autobri" name="AUTO_BRIGHTNESS">
+          <option value="">(default: on)</option>
+          <option value="on">On</option>
+          <option value="off">Off</option>
+        </select>
+        <label for="f-alsscale">Light sensor scale (0.01 to 1000)</label>
+        <input id="f-alsscale" name="ALS_SCALE" type="text" inputmode="decimal" placeholder="(default: 1)" maxlength="8">
+        <div class="hint" id="als-hint">The light sensor sits behind the front window, which passes only part of the light. Lux is the sensor lux times this scale.</div>
+      </div>
+    </details>
+
     <details><summary>MQTT (optional)</summary>
       <div class="card">
         <label for="f-mqtt-host">Broker host</label>
@@ -1052,6 +1074,8 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
     if (fields.KIOSK_URL) $("f-url").value = fields.KIOSK_URL;
     if (fields.PANEL_NAME) $("f-name").value = fields.PANEL_NAME;
     if (fields.ORIENTATION) $("f-orient").value = fields.ORIENTATION;
+    if (fields.AUTO_BRIGHTNESS) $("f-autobri").value = fields.AUTO_BRIGHTNESS;
+    if (fields.ALS_SCALE) $("f-alsscale").value = fields.ALS_SCALE;
     if (fields.VOICE === "on") { $("f-voice").checked = true; $("wake-wrap").style.display = "block"; }
     if (fields.WAKE_WORD) $("f-wake").value = fields.WAKE_WORD;
     if (fields.MQTT_HOST) $("f-mqtt-host").value = fields.MQTT_HOST;
@@ -1075,6 +1099,10 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
       $("f-voice").checked = false; $("f-voice").disabled = true;
       $("wake-wrap").style.display = "none";
       notes.push("Voice assistant: not available, " + u.VOICE + ".");
+    }
+    if (u.AUTO_BRIGHTNESS) {
+      $("f-autobri").disabled = true; $("f-alsscale").disabled = true;
+      $("als-hint").textContent = "Not available on this panel: " + u.AUTO_BRIGHTNESS + ".";
     }
     if (u.BT_PROXY) notes.push("Bluetooth proxy: not available, " + u.BT_PROXY + ".");
     if (notes.length) { $("hw-hint").textContent = notes.join(" "); $("hw-hint").style.display = "block"; }
@@ -1160,6 +1188,8 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
       PANEL_NAME: $("f-name").value.trim(),
       TZ_NAME: $("f-tz").value,
       ORIENTATION: $("f-orient").value,
+      AUTO_BRIGHTNESS: $("f-autobri").disabled ? undefined : $("f-autobri").value,
+      ALS_SCALE: $("f-alsscale").disabled ? undefined : $("f-alsscale").value.trim(),
       VOICE: $("f-voice").disabled ? undefined : ($("f-voice").checked ? "on" : "off"),
       WAKE_WORD: $("f-voice").disabled ? undefined : $("f-wake").value.trim(),
       MQTT_HOST: $("f-mqtt-host").value.trim(),

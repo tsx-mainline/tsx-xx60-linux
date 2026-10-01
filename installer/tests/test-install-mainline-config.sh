@@ -70,6 +70,7 @@ off
 1883
 tss10
 hunter2
+off
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test@host
 EOF
 )
@@ -82,6 +83,9 @@ GOT=$(TSX_CONF="$PCONF" "$TSX_CONFIG_BIN" get HA_LOGIN_METHOD 2>/dev/null)
 TSX_CONF="$PCONF" "$TSX_CONFIG_BIN" get HA_TOKEN >/dev/null 2>&1 && bad "HA_TOKEN got set despite trusted login" || ok "HA_TOKEN correctly left unset (trusted login)"
 GOT=$(TSX_CONF="$PCONF" "$TSX_CONFIG_BIN" get HA_ALLOW_FROM 2>/dev/null)
 [ "$GOT" = 192.0.2.9 ] && ok "HA_ALLOW_FROM answer landed" || bad "HA_ALLOW_FROM wrong: got '$GOT'"
+GOT=$(TSX_CONF="$PCONF" "$TSX_CONFIG_BIN" get AUTO_BRIGHTNESS 2>/dev/null)
+[ "$GOT" = off ] && ok "AUTO_BRIGHTNESS answer landed" || bad "AUTO_BRIGHTNESS wrong: got '$GOT'"
+TSX_CONF="$PCONF" "$TSX_CONFIG_BIN" get SSH_AUTHORIZED_KEY >/dev/null 2>&1 && ok "the SSH key prompt after it still works" || bad "SSH_AUTHORIZED_KEY not set"
 GOT=$(TSX_CONF="$PCONF" "$TSX_CONFIG_BIN" get MQTT_PASSWORD 2>/dev/null)
 [ "$GOT" = hunter2 ] && ok "MQTT_PASSWORD answer landed unmasked in the actual file" || bad "MQTT_PASSWORD wrong"
 echo "$PROMPT_OUT" | grep -q '^MQTT_PASSWORD=\*\*\*\*' && ok "the printed summary masks MQTT_PASSWORD" || bad "printed summary did not mask MQTT_PASSWORD"

@@ -3,13 +3,18 @@
 #
 #   tsx-als                 daemon (OpenRC service tsx-als)
 #   tsx-als status          current lux, level, auto state
-#   tsx-als auto on|off     runtime switch: on = back to automatic (drops the
-#                           manual level and offset). Off = keep the level on
-#                           the glass as a fixed level (/run/tsx/brightness)
+#   tsx-als auto on|off     on = back to automatic (drops the manual level
+#                           and offset). Off = keep the level on the glass as
+#                           a fixed level (/run/tsx/brightness). It also
+#                           changes AUTO_BRIGHTNESS in panel.conf and applies
+#                           it, so the setting stays after a reboot. The Home
+#                           Assistant "Auto brightness" switch calls it.
 #   tsx-als lux             one reading in lux (no smoothing)
 #
-# It reads the MAX44009 through IIO (in_illuminance_input, lux) and smooths
-# the value. It maps the value to a backlight step with ALS_CURVE
+# It reads the MAX44009 through IIO (in_illuminance_input, lux), multiplies
+# it by ALS_SCALE and smooths the value. The front window passes only part of
+# the light, and ALS_SCALE corrects that (lux = sensor lux x ALS_SCALE). An
+# empty ALS_SCALE means 1.0. It maps the value to a backlight step with ALS_CURVE
 # (/etc/tsx/als.conf) and applies hysteresis. The step goes to
 # /run/tsx/als-level. tsx-idled uses that file in place of the day/night
 # level while the file is fresh (< 30 s). An absolute manual level still wins
@@ -20,10 +25,16 @@
 # a time, so the change is smooth and immediate. While the screen is blank,
 # it never touches the backlight.
 #
+# panel.conf: AUTO_BRIGHTNESS and ALS_SCALE reach this script through
+# /run/tsx/als.panel (written by "tsx-config apply", the lines ALS_AUTO and
+# ALS_SCALE). They win over the same names in als.conf. The script reads the
+# file again every 5 readings. A change of AUTO_BRIGHTNESS there (the setup
+# page) acts like "tsx-als auto on|off".
+#
 # State for tsx-mqtt: /run/tsx/als.state ("lux N", "raw N", "report N",
 # "level N", "auto on|off"). Lux values are integers.
 #
-# Env overrides for tests: TSX_ALS_CONF, TSX_KIOSK_CONF, TSX_RUN_DIR,
+# Env overrides for tests: TSX_ALS_CONF, TSX_ALS_PANEL, TSX_CONFIG_BIN, TSX_KIOSK_CONF, TSX_RUN_DIR,
 # TSX_IIO_DIR, TSX_BACKLIGHT_DIR, TSX_IDLED_STATE, TSX_ALS_LOOPS (stop after N
 # readings), TSX_ALS_NOW (fixed epoch seconds per reading: start value).
 set -u
@@ -33,16 +44,48 @@ R=${TSX_RUN_DIR:-/run/tsx}
 IIO=${TSX_IIO_DIR:-/sys/bus/iio/devices}
 BLBASE=${TSX_BACKLIGHT_DIR:-/sys/class/backlight}
 IDLED=${TSX_IDLED_STATE:-/run/tsx-idled.state}
+PANEL=${TSX_ALS_PANEL:-$R/als.panel}
+CONFIG=${TSX_CONFIG_BIN:-tsx-config}
 
 ALS_AUTO=1 ALS_CURVE="0:3 5:5 20:8 80:12 300:17 1000:21 3000:23" ALS_INTERVAL=1
 ALS_SMOOTH=5 ALS_HYST_PCT=25 ALS_HYST_ABS=2 ALS_HOLD=10 ALS_RAMP_MS=150
 ALS_NIGHT_CAP=0 ALS_BL_COMP=0 ALS_REPORT_PCT=10 ALS_REPORT_MAX=300 ALS_DEVICE=auto
-ALS_START_WAIT=12
+ALS_START_WAIT=12 ALS_SCALE=
 [ -r "$CONF" ] && . "$CONF"
 BACKLIGHT_MAX=23 NIGHT_START=22 NIGHT_END=7
 [ -r "$KCONF" ] && eval "$(grep -E '^(BACKLIGHT_MAX|NIGHT_START|NIGHT_END)=[0-9]+$' "$KCONF")"
 
 log() { echo "$(date '+%F %T') tsx-als: $*"; }
+
+# The values of /run/tsx/als.panel (panel.conf). Empty = not set there.
+PANEL_AUTO= PANEL_SCALE=
+SCALE_MILLI=1000 scale_bad=
+load_panel() {
+	PANEL_AUTO= PANEL_SCALE=
+	[ -r "$PANEL" ] || return 0
+	PANEL_AUTO=$(sed -n 's/^ALS_AUTO="\([01]\)"$/\1/p' "$PANEL" | tail -n 1)
+	PANEL_SCALE=$(sed -n 's/^ALS_SCALE="\([0-9.]*\)"$/\1/p' "$PANEL" | tail -n 1)
+}
+
+# Work out SCALE_MILLI (ALS_SCALE x 1000, an integer): the panel.conf value,
+# else ALS_SCALE of als.conf, else 1.0.
+load_scale() {
+	s=${PANEL_SCALE:-$ALS_SCALE}; src=ALS_SCALE
+	if [ -n "$s" ]; then
+		if printf '%s' "$s" | grep -Eq '^[0-9]{1,4}(\.[0-9]{1,3})?$' \
+			&& awk -v x="$s" 'BEGIN{exit !(x >= 0.01 && x <= 1000)}'; then
+			SCALE_MILLI=$(awk -v x="$s" 'BEGIN{printf "%d", x * 1000 + 0.5}')
+			scale_bad=
+			return 0
+		fi
+		[ "$scale_bad" = "$src:$s" ] || log "bad value '$s' in $src (need 0.01 to 1000). Using 1.0"
+		scale_bad="$src:$s"
+	fi
+	SCALE_MILLI=1000
+}
+
+# Apply a deci-lux value of the sensor: lux x scale
+scale_dlux() { echo $(( ($1 * SCALE_MILLI + 500) / 1000 )); }
 
 find_dev() {
 	if [ "$ALS_DEVICE" != auto ]; then echo "$ALS_DEVICE"; return; fi
@@ -77,7 +120,7 @@ curve_level() {
 }
 
 auto_on() {
-	a=$ALS_AUTO
+	a=${PANEL_AUTO:-$ALS_AUTO}
 	[ -r "$R/als-auto" ] && a=$(cat "$R/als-auto")
 	case $a in 1|on|ON|yes) return 0;; esac
 	return 1
@@ -92,17 +135,9 @@ is_night() {
 	else [ "$h" -ge "$NIGHT_START" ] || [ "$h" -lt "$NIGHT_END" ]; fi
 }
 
-state_field() { [ -r "$R/als.state" ] && sed -n "s/^$1 //p" "$R/als.state" | head -1; }
-
-case ${1:-} in
-status)
-	if [ -r "$R/als.state" ]; then cat "$R/als.state"; else echo "tsx-als not running"; fi
-	[ -r "$R/brightness" ] && echo "manual override $(cat "$R/brightness")"
-	[ -r "$R/brightness-offset" ] && echo "manual offset $(cat "$R/brightness-offset")"
-	exit 0;;
-auto)
-	mkdir -p "$R"
-	case ${2:-} in
+# The run-time part of "auto on|off"
+do_auto() {
+	case $1 in
 	on)  echo on > "$R/als-auto"; rm -f "$R/brightness" "$R/brightness-offset";;
 	off) echo off > "$R/als-auto"
 	     # Freeze what is on the glass. Otherwise the offset would suddenly
@@ -114,12 +149,31 @@ auto)
 	         case $l in [1-9]|[1-9][0-9]) [ "$st" = on ] && echo "$l" > "$R/brightness";; esac
 	     fi
 	     rm -f "$R/brightness-offset" "$R/als-level";;
+	esac
+}
+
+state_field() { [ -r "$R/als.state" ] && sed -n "s/^$1 //p" "$R/als.state" | head -1; }
+
+case ${1:-} in
+status)
+	if [ -r "$R/als.state" ]; then cat "$R/als.state"; else echo "tsx-als not running"; fi
+	[ -r "$R/brightness" ] && echo "manual override $(cat "$R/brightness")"
+	[ -r "$R/brightness-offset" ] && echo "manual offset $(cat "$R/brightness-offset")"
+	exit 0;;
+auto)
+	mkdir -p "$R"
+	case ${2:-} in
+	on|off) do_auto "$2"
+	     # Keep the setting in panel.conf. If that fails, the run-time change stays.
+	     "$CONFIG" set AUTO_BRIGHTNESS "$2" && "$CONFIG" apply \
+	         || echo "tsx-als: could not save AUTO_BRIGHTNESS in panel.conf" >&2;;
 	*)   echo "usage: tsx-als auto on|off"; exit 2;;
 	esac
 	echo "auto ${2}"; exit 0;;
 lux)
 	d=$(find_dev); [ -n "$d" ] || { echo "no max44009 in $IIO" >&2; exit 1; }
 	v=$(read_dlux "$d") || exit 1
+	load_panel; load_scale; v=$(scale_dlux "$v")
 	echo "$((v / 10)).$((v % 10))"; exit 0;;
 '') ;;
 *)  echo "usage: tsx-als [status | auto on|off | lux]"; exit 2;;
@@ -128,6 +182,8 @@ esac
 # ---- daemon ------------------------------------------------------------------
 mkdir -p "$R"
 [ "$ALS_SMOOTH" -ge 1 ] 2>/dev/null || ALS_SMOOTH=1
+load_panel; load_scale
+seen_auto=$PANEL_AUTO
 dev= acc= cur=0 last_dl=-1 last_change=0 rep=-1 rep_t=0 n=0 warned=
 now=${TSX_ALS_NOW:-}
 trap 'rm -f "$R/als-level"; exit 0' INT TERM
@@ -140,6 +196,16 @@ while :; do
 	if [ -z "$dev" ]; then
 		[ -n "$warned" ] || { log "no max44009 IIO device yet (CONFIG_MAX44009, DT node light-sensor@4a). Waiting"; warned=1; }
 		rm -f "$R/als-level"; sleep 10; continue
+	fi
+	if [ $(( n % 5 )) -eq 1 ] && [ "$n" -gt 1 ]; then
+		load_panel; load_scale
+		# AUTO_BRIGHTNESS changed in panel.conf (the setup page): act as "auto on|off"
+		if [ "$PANEL_AUTO" != "$seen_auto" ]; then
+			seen_auto=$PANEL_AUTO
+			case $PANEL_AUTO in 1) w=on;; 0) w=off;; *) w=;; esac
+			cur_a=; [ -r "$R/als-auto" ] && cur_a=$(cat "$R/als-auto")
+			if [ -n "$w" ] && [ "$cur_a" != "$w" ]; then log "panel.conf: AUTO_BRIGHTNESS $w"; do_auto "$w"; fi
+		fi
 	fi
 	raw=$(read_dlux "$dev") || { sleep "$ALS_INTERVAL"; continue; }
 	# Right after a cold boot, the MAX44009 can read 0 lx for several seconds
@@ -158,6 +224,7 @@ while :; do
 	bd=$(bl_dir); bl=0
 	[ -n "$bd" ] && bl=$(cat "$bd/brightness" 2>/dev/null || echo 0)
 	amb=$(( raw - ALS_BL_COMP * bl )); [ "$amb" -ge 0 ] || amb=0
+	amb=$(scale_dlux "$amb")
 
 	# Smooth the value
 	if [ -z "$acc" ]; then acc=$(( amb * ALS_SMOOTH )); else acc=$(( acc - acc / ALS_SMOOTH + amb )); fi

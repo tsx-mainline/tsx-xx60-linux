@@ -7,6 +7,7 @@ ALS=$O/usr/local/sbin/tsx-als
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/iio/iio:device0" "$T/bl/mp3309c" "$T/run" "$T/bin"
 printf '#!/bin/sh\n:\n' > "$T/bin/usleep"; chmod +x "$T/bin/usleep"
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/tsx-config"; chmod +x "$T/bin/tsx-config"
 echo max44009 > "$T/iio/iio:device0/name"
 echo 17 > "$T/bl/mp3309c/brightness"; echo "on 17" > "$T/idled"
 fail=0
@@ -91,13 +92,67 @@ TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$T/k1 TSX_RUN_DIR=$T/run TSX_IIO_DIR=$T/
 # 9. status / lux CLI
 TSX_IIO_DIR=$T/iio sh "$ALS" lux | grep -qx '3000.0' && ok "tsx-als lux" || bad "tsx-als lux"
 TSX_RUN_DIR=$T/run sh "$ALS" status | grep -q '^level 8' && ok "tsx-als status" || bad "status"
+# 9b. ALS_SCALE: lux = sensor lux x scale, before the curve. The panel value
+# (/run/tsx/als.panel) wins over als.conf. Empty = 1.0.
+PAN=$T/run/als.panel
+srun() { TSX_ALS_PANEL=$PAN run "$@"; }
+rm -f "$T/run/"*; lux 100.0; srun 1
+[ "$(st lux)" = 100 ] && ok "no scale: factor 1.0" || bad "default scale: lux $(st lux)"
+rm -f "$T/run/"*; srun 1 "ALS_SCALE=2.5"
+[ "$(st lux)" = 250 ] && [ "$(st raw)" = 100 ] && ok "als.conf ALS_SCALE=2.5: 250 lx, raw stays 100" || bad "conf scale: lux $(st lux) raw $(st raw)"
+rm -f "$T/run/"*; printf 'ALS_SCALE="4"\n' > "$PAN"; srun 1 "ALS_SCALE=2.5"
+[ "$(st lux)" = 400 ] && [ "$(cat "$T/run/als-level")" = 18 ] && ok "als.panel ALS_SCALE=4 wins over als.conf: 400 lx, level 18" || bad "panel scale: lux $(st lux)"
+rm -f "$T/run/"*; printf 'ALS_SCALE="0.5"\n' > "$PAN"; srun 1
+[ "$(st lux)" = 50 ] && ok "ALS_SCALE=0.5 -> 50 lx" || bad "scale 0.5: lux $(st lux)"
+rm -f "$T/run/"*; printf 'ALS_SCALE="abc"\n' > "$PAN"; srun 1
+[ "$(st lux)" = 100 ] || bad "bad scale: lux $(st lux)"
+rm -f "$T/run/"*; printf 'ALS_SCALE="5000"\n' > "$PAN"; srun 1
+[ "$(st lux)" = 100 ] && ok "a bad or out-of-range scale: 1.0" || bad "range: lux $(st lux)"
+rm -f "$T/run/"*; printf 'ALS_SCALE="2"\n' > "$PAN"
+[ "$(TSX_ALS_PANEL=$PAN TSX_ALS_CONF=$T/als.conf TSX_IIO_DIR=$T/iio sh "$ALS" lux)" = 200.0 ] && ok "tsx-als lux applies the scale" || bad "lux CLI scale"
+# 9c. panel.conf link: AUTO_BRIGHTNESS from als.panel, and "auto on|off" saves it
+rm -f "$T/run/"* "$PAN"; lux 300.0; srun 1
+[ "$(st auto)" = on ] && ok "no AUTO_BRIGHTNESS: als.conf ALS_AUTO (default on)" || bad "default auto $(st auto)"
+printf 'ALS_AUTO="0"\n' > "$PAN"; srun 1
+[ "$(st auto)" = off ] && [ ! -e "$T/run/als-level" ] && ok "AUTO_BRIGHTNESS=off in als.panel: auto off" || bad "panel auto off"
+printf 'ALS_AUTO="1"\n' > "$PAN"; srun 1 "ALS_AUTO=0"
+[ "$(st auto)" = on ] && ok "AUTO_BRIGHTNESS=on in als.panel wins over ALS_AUTO=0" || bad "panel auto on"
+cat > "$T/bin/tsx-config" <<'STUB'
+#!/bin/sh
+echo "tsx-config $*" >> "$TSX_TEST_CMDS"
+STUB
+chmod +x "$T/bin/tsx-config"; : > "$T/cmds.log"
+rm -f "$T/run/"*; TSX_TEST_CMDS=$T/cmds.log TSX_CONFIG_BIN=$T/bin/tsx-config TSX_RUN_DIR=$T/run sh "$ALS" auto off >/dev/null
+TSX_TEST_CMDS=$T/cmds.log TSX_CONFIG_BIN=$T/bin/tsx-config TSX_RUN_DIR=$T/run sh "$ALS" auto on >/dev/null
+[ "$(cat "$T/cmds.log")" = "$(printf 'tsx-config set AUTO_BRIGHTNESS off\ntsx-config apply\ntsx-config set AUTO_BRIGHTNESS on\ntsx-config apply')" ] \
+	&& ok "auto on/off: tsx-config set AUTO_BRIGHTNESS + apply" || bad "auto cmds: $(cat "$T/cmds.log")"
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/tsx-config"; rm -f "$PAN" "$T/run/"*
+# 9d. a change of AUTO_BRIGHTNESS in als.panel while the daemon runs (setup page) acts like "auto off"
+printf 'ALS_SMOOTH=1\nALS_HOLD=0\nALS_RAMP_MS=0\nALS_INTERVAL=0\n' > "$T/als.conf"; lux 300.0; echo "on 17" > "$T/idled"
+printf 'ALS_AUTO="1"\n' > "$PAN"; rm -f "$T/run/"*
+( i=0; while [ $i -lt 40 ]; do [ -e "$T/run/als.state" ] && break; sleep 0.05; i=$((i+1)); done; printf 'ALS_AUTO="0"\n' > "$PAN" ) &
+PATH=$T/bin:$PATH TSX_ALS_CONF=$T/als.conf TSX_ALS_PANEL=$PAN TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_RUN_DIR=$T/run \
+	TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_NOW=1000 \
+	sh -c 'trap "exit 0" TERM; exec sh "$0"' "$ALS" >> "$T/log" 2>&1 &
+P=$!; sleep 1.5; kill $P 2>/dev/null; wait $P 2>/dev/null || true; wait
+[ "$(cat "$T/run/als-auto" 2>/dev/null)" = off ] && ok "als.panel AUTO_BRIGHTNESS change while running: auto off" || bad "panel change not taken: $(cat "$T/run/als-auto" 2>/dev/null)"
+rm -f "$PAN" "$T/run/"*; echo "on 17" > "$T/idled"
+# Every discovery payload is valid JSON. An empty payload clears the topic
+# of an absent part (for example the LED bar), so it is skipped.
+json_ok() {
+	n=$(grep '/config ' "$1" | while read -r _ _ t j; do
+		[ -n "$j" ] || continue
+		echo "$j" | jq -e . >/dev/null 2>&1 || echo "$t"
+	done)
+	[ -z "$n" ] && ok "$2: discovery payloads are valid JSON" || bad "$2: bad JSON: $n"
+}
 # 10. MQTT entities (dry run)
 printf 'NODE_ID=tsx-kiosk\n' > "$T/mqtt.conf"; : > "$T/buttons.conf"
 printf 'lux 250\nraw 250\nreport 248\nlevel 16\nauto on\n' > "$T/run/als.state"
 echo 'tsx/tsx-kiosk/als_auto/set OFF' | PATH=$T/bin:$PATH TSX_MQTT_DRY=1 TSX_MQTT_CONF=$T/mqtt.conf TSX_RUN_DIR=$T/run \
 	TSX_IDLED_STATE=$T/idled TSX_BUTTONS_CONF=$T/buttons.conf TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_ALS_CONF=$O/etc/tsx/als.conf \
 	TSX_BACKLIGHT_DIR=$T/bl PATH=$O/usr/local/sbin:$T/bin:$PATH sh "$O/usr/local/sbin/tsx-mqtt" > "$T/mq" 2>&1 || true
-grep '/config ' "$T/mq" | while read -r _ _ t j; do echo "$j" | jq -e . >/dev/null || echo "FAIL bad JSON $t"; done
+json_ok "$T/mq" "mqtt"
 grep -q 'homeassistant/sensor/tsx-kiosk/illuminance/config .*"dev_cla":"illuminance"' "$T/mq" && ok "mqtt: illuminance discovery" || bad "mqtt discovery sensor"
 grep -q 'homeassistant/switch/tsx-kiosk/als_auto/config' "$T/mq" && ok "mqtt: auto brightness discovery" || bad "mqtt discovery switch"
 grep -q 'tsx/tsx-kiosk/als/lux 248' "$T/mq" && grep -q 'tsx/tsx-kiosk/als_auto/state ON' "$T/mq" && ok "mqtt: lux 248, auto ON published" || bad "mqtt state"
@@ -108,7 +163,7 @@ printf '#!/bin/sh\ncase "$*" in *sget*) echo "  Front Left: 128 [42%%]";; *) ech
 echo 'tsx/tsx-kiosk/volume/set 55' | PATH=$T/bin:$PATH TSX_MQTT_DRY=1 TSX_MQTT_CONF=$T/mqtt.conf TSX_RUN_DIR=$T/run \
 	TSX_IDLED_STATE=$T/idled TSX_BUTTONS_CONF=$T/buttons.conf TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_ASOUND_DIR=$T/asound \
 	TSX_BACKLIGHT_DIR=$T/bl sh "$O/usr/local/sbin/tsx-mqtt" > "$T/mv" 2>&1 || true
-grep '/config ' "$T/mv" | while read -r _ _ t j; do echo "$j" | jq -e . >/dev/null || echo "FAIL bad JSON $t"; done
+json_ok "$T/mv" "mqtt volume"
 grep -q 'homeassistant/number/tsx-kiosk/volume/config' "$T/mv" && grep -q 'tsx/tsx-kiosk/volume/state 42' "$T/mv" && grep -q 'AMIXER -q -c TSW1060 sset Master 55%' "$T/mv" \
 	&& ok "mqtt: volume number (discovery, state 42 %, set 55 %)" || { bad "mqtt volume"; cat "$T/mv"; }
 TSX_MQTT_DRY=1 TSX_MQTT_CONF=$T/mqtt.conf TSX_RUN_DIR=$T/run TSX_IDLED_STATE=$T/idled TSX_BUTTONS_CONF=$T/buttons.conf \
