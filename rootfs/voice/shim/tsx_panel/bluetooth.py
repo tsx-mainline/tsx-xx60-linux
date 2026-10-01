@@ -1,8 +1,10 @@
-"""Passive Bluetooth proxy for the ESPHome device of the panel.
+"""Bluetooth proxy for the ESPHome device of the panel.
 
 Home Assistant uses an ESPHome device as a remote Bluetooth adapter when the
-DeviceInfoResponse announces Bluetooth proxy feature flags. This module adds
-the passive part of that protocol (aioesphomeapi 46.2.0, bleak-esphome 4.1):
+DeviceInfoResponse announces Bluetooth proxy feature flags. This module
+serves that protocol (aioesphomeapi 46.2.0, bleak-esphome 4.1).
+
+Passive part (BT_PROXY=on):
 
   DeviceInfoResponse
       bluetooth_proxy_feature_flags = PASSIVE_SCAN | RAW_ADVERTISEMENTS (33)
@@ -13,8 +15,39 @@ the passive part of that protocol (aioesphomeapi 46.2.0, bleak-esphome 4.1):
   UnsubscribeBluetoothLEAdvertisementsRequest, or a closed connection
       -> no more advertisements for that connection
 
-No active connections (GATT), no pairing, no scanner mode switch: Home
-Assistant then treats the panel as a non-connectable, passive scanner.
+Active part (BT_PROXY=on and BT_ACTIVE=on): the flags add
+ACTIVE_CONNECTIONS | REMOTE_CACHING | CACHE_CLEARING (55 in total), and
+Home Assistant can connect to BLE devices through the panel:
+
+  SubscribeBluetoothConnectionsFreeRequest
+      -> BluetoothConnectionsFreeResponse (free, limit, allocated) now and
+         on each change
+  BluetoothDeviceRequest CONNECT_V3_WITH_CACHE / _WITHOUT_CACHE
+      -> BluetoothDeviceConnectionResponse connected=true with the ATT
+         MTU, or connected=false with an HCI reason. The link comes up
+         within 20 s or fails.
+  BluetoothDeviceRequest DISCONNECT
+      -> BluetoothDeviceConnectionResponse connected=false
+  BluetoothDeviceRequest CLEAR_CACHE
+      -> BluetoothDeviceClearCacheResponse success (the panel keeps no
+         GATT cache: Home Assistant keeps it, REMOTE_CACHING)
+  BluetoothGATTGetServicesRequest
+      -> one BluetoothGATTGetServicesResponse for each primary service,
+         then BluetoothGATTGetServicesDoneResponse
+  BluetoothGATTReadRequest, BluetoothGATTReadDescriptorRequest
+      -> BluetoothGATTReadResponse
+  BluetoothGATTWriteRequest, BluetoothGATTWriteDescriptorRequest
+      -> BluetoothGATTWriteResponse (none for a write without response)
+  BluetoothGATTNotifyRequest
+      -> BluetoothGATTNotifyResponse, then BluetoothGATTNotifyDataResponse
+         for each notification or indication. Home Assistant writes the
+         CCCD itself (REMOTE_CACHING).
+  A GATT request that fails -> BluetoothGATTErrorResponse with the ATT
+  error code, or -1 when the link is down.
+  A closed Home Assistant connection takes its links down.
+
+No pairing and no scanner mode switch. PAIR and UNPAIR get a negative
+answer.
 
 The advertisements come from tsx-btscan (/usr/local/lib/tsx/btscan.py, run
 as root by /etc/init.d/tsx-bt) over a SOCK_SEQPACKET Unix socket. The
@@ -22,14 +55,22 @@ format of one message is in the docstring of btscan.py. This module connects
 only while at least one Home Assistant connection is subscribed, and
 tsx-btscan scans only while a client is connected.
 
+The links and GATT run in tsx-btscan too (btgatt.py). This module talks
+to it over a second socket, bt-gatt.sock, with the JSON messages in the
+docstring of btscan.py. A reader thread turns the answers into ESPHome
+messages for the Home Assistant connection that owns the link.
+
 The proxy is on when $TSX_RUN_DIR/bt.conf (written by tsx-config apply from
-panel.conf BT_PROXY) says PROXY="on". Both front ends use one module-level
-instance (PROXY): tsx-esphome (esphome_server.py) and the voice satellite
-(tsx_lva). The voice satellite runs as the kiosk user. It can read bt.conf
-and bt.mac (mode 644) and connect to the socket (group kiosk).
-Test hooks: TSX_RUN_DIR, TSX_BT_CONF, TSX_BT_MAC_FILE, TSX_BT_ADV_SOCKET.
+panel.conf BT_PROXY and BT_ACTIVE) says PROXY="on". The active part also
+needs ACTIVE="on". Both front ends use one module-level instance (PROXY):
+tsx-esphome (esphome_server.py) and the voice satellite (tsx_lva). The voice
+satellite runs as the kiosk user. It can read bt.conf and bt.mac (mode 644)
+and connect to both sockets (group kiosk).
+Test hooks: TSX_RUN_DIR, TSX_BT_CONF, TSX_BT_MAC_FILE, TSX_BT_ADV_SOCKET,
+TSX_BT_GATT_SOCKET.
 """
 
+import json
 import logging
 import os
 import socket
@@ -40,8 +81,17 @@ import time
 _LOGGER = logging.getLogger("tsx_panel.bluetooth")
 
 FEATURE_PASSIVE_SCAN = 1
+FEATURE_ACTIVE_CONNECTIONS = 2
+FEATURE_REMOTE_CACHING = 4
+FEATURE_CACHE_CLEARING = 16
 FEATURE_RAW_ADVERTISEMENTS = 32
 FEATURES = FEATURE_PASSIVE_SCAN | FEATURE_RAW_ADVERTISEMENTS
+ACTIVE_FEATURES = FEATURE_ACTIVE_CONNECTIONS | FEATURE_REMOTE_CACHING | FEATURE_CACHE_CLEARING
+# BluetoothDeviceRequestType
+REQ_CONNECT, REQ_DISCONNECT, REQ_PAIR, REQ_UNPAIR = 0, 1, 2, 3
+REQ_CONNECT_V3_WITH_CACHE, REQ_CONNECT_V3_WITHOUT_CACHE, REQ_CLEAR_CACHE = 4, 5, 6
+ERR_NOT_CONNECTED = -1
+ERR_NOT_SUPPORTED = 6
 SUBSCRIPTION_FLAG_RAW = 1
 BATCH_MAX = 16
 FLUSH_INTERVAL = 0.1
@@ -80,6 +130,7 @@ class BtProxy:
         self.conf_path = os.environ.get("TSX_BT_CONF", os.path.join(run, "bt.conf"))
         self.mac_path = os.environ.get("TSX_BT_MAC_FILE", os.path.join(run, "bt.mac"))
         self.sock_path = os.environ.get("TSX_BT_ADV_SOCKET", os.path.join(run, "bt-adv.sock"))
+        self.gatt = GattBridge(os.environ.get("TSX_BT_GATT_SOCKET", os.path.join(run, "bt-gatt.sock")))
         self._lock = threading.Lock()
         self._subscribers = []
         self._thread = None
@@ -88,6 +139,9 @@ class BtProxy:
     # ---- configuration ---------------------------------------------------
     def enabled(self):
         return _conf_value(self.conf_path, "PROXY") == "on"
+
+    def active(self):
+        return self.enabled() and _conf_value(self.conf_path, "ACTIVE") == "on"
 
     def mac(self):
         try:
@@ -100,7 +154,8 @@ class BtProxy:
         """The DeviceInfoResponse fields of the proxy ({} when it is off)."""
         if not self.enabled():
             return {}
-        fields = {"bluetooth_proxy_feature_flags": FEATURES}
+        flags = FEATURES | (ACTIVE_FEATURES if self.active() else 0)
+        fields = {"bluetooth_proxy_feature_flags": flags}
         mac = self.mac()
         if mac:
             fields["bluetooth_mac_address"] = mac
@@ -140,6 +195,12 @@ class BtProxy:
     def _targets(self):
         with self._lock:
             return list(self._subscribers)
+
+    def connection_lost(self, conn):
+        """A Home Assistant connection closed: no advertisements, and its
+        BLE links go down."""
+        self.unsubscribe(conn)
+        self.gatt.release(conn)
 
     # ---- the reader thread ---------------------------------------------------
     def _send(self, batch):
@@ -211,21 +272,259 @@ class BtProxy:
             self._send(batch)
 
 
+def _uuid_words(text):
+    """A 128-bit UUID string -> [high 64 bits, low 64 bits] (ESPHome)."""
+    value = int(text.replace("-", ""), 16)
+    return [value >> 64, value & 0xFFFFFFFFFFFFFFFF]
+
+
+class GattBridge:
+    """Active connections: the requests of Home Assistant go to tsx-btscan
+    over bt-gatt.sock. A reader thread turns the answers into ESPHome
+    messages. Each link belongs to the Home Assistant connection that asked
+    for it (ESPHome allows one at a time, and so does this bridge)."""
+
+    def __init__(self, path):
+        self.path = path
+        self._lock = threading.Lock()
+        self._sock = None
+        self._thread = None
+        self._subscribers = []     # connections that want the slot count
+        self._owners = {}          # address -> connection
+        self._slots = None         # the last "slots" event
+
+    # ---- the socket to tsx-btscan ------------------------------------------
+    def _connect(self, quiet=False):
+        """Open the socket if it is closed. Return it, or None."""
+        with self._lock:
+            if self._sock is not None:
+                return self._sock
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+            try:
+                sock.connect(self.path)
+            except OSError as err:
+                sock.close()
+                if not quiet:
+                    _LOGGER.warning("active connections: cannot connect to %s (%s). Is tsx-bt running?", self.path, err)
+                return None
+            self._sock = sock
+            self._thread = threading.Thread(target=self._reader, args=(sock,), name="tsx-bt-gatt", daemon=True)
+            self._thread.start()
+            _LOGGER.info("active connections: connected to %s", self.path)
+            return sock
+
+    def _send(self, **msg):
+        sock = self._connect()
+        if sock is None:
+            return False
+        try:
+            sock.send(json.dumps(msg, separators=(",", ":")).encode())
+            return True
+        except OSError as err:
+            _LOGGER.warning("active connections: send: %s", err)
+            self._lost(sock)
+            return False
+
+    def _lost(self, sock):
+        with self._lock:
+            if self._sock is not sock:
+                return
+            self._sock = None
+            owners, self._owners = self._owners, {}
+            self._slots = None
+            subs = list(self._subscribers)
+        try:
+            sock.close()
+        except OSError:
+            pass
+        _LOGGER.warning("active connections: tsx-btscan closed the socket")
+        from aioesphomeapi.api_pb2 import (  # pylint: disable=no-name-in-module
+            BluetoothConnectionsFreeResponse,
+            BluetoothDeviceConnectionResponse,
+        )
+
+        for addr, conn in owners.items():
+            conn.send_messages([BluetoothDeviceConnectionResponse(address=addr, connected=False, error=0x16)])
+        for conn in subs:
+            conn.send_messages([BluetoothConnectionsFreeResponse(free=0, limit=0)])
+        if subs:
+            threading.Thread(target=self._reconnect, name="tsx-bt-gatt-retry", daemon=True).start()
+
+    def _reconnect(self):
+        """tsx-btscan went away (a restart of tsx-bt). Home Assistant still
+        waits for free slots: connect again as soon as it is back."""
+        while True:
+            time.sleep(RECONNECT_DELAY)
+            with self._lock:
+                if not self._subscribers or self._sock is not None:
+                    return
+            if self._connect(quiet=True) is not None:
+                return
+
+    def _reader(self, sock):
+        while True:
+            try:
+                data = sock.recv(65536)
+            except OSError:
+                data = b""
+            if not data:
+                self._lost(sock)
+                return
+            try:
+                self._dispatch(json.loads(data))
+            except Exception:  # noqa: BLE001 - one bad message must not stop the reader
+                _LOGGER.warning("active connections: bad message %r", data[:120], exc_info=True)
+
+    # ---- tsx-btscan -> Home Assistant ---------------------------------------
+    def _dispatch(self, ev):
+        from aioesphomeapi import api_pb2 as pb  # pylint: disable=no-name-in-module
+
+        kind = ev.get("ev")
+        if kind == "slots":
+            with self._lock:
+                self._slots = ev
+                subs = list(self._subscribers)
+            msg = pb.BluetoothConnectionsFreeResponse(free=ev["free"], limit=ev["limit"], allocated=ev["allocated"])
+            for conn in subs:
+                conn.send_messages([msg])
+            return
+        addr = ev.get("addr", 0)
+        with self._lock:
+            conn = self._owners.get(addr)
+            if kind == "conn" and not ev.get("connected"):
+                self._owners.pop(addr, None)
+        if conn is None:
+            _LOGGER.debug("active connections: %s for %x with no owner", kind, addr)
+            return
+        if kind == "conn":
+            msg = pb.BluetoothDeviceConnectionResponse(address=addr, connected=ev["connected"], mtu=ev["mtu"],
+                                                       error=ev["error"])
+        elif kind == "services":
+            msg = pb.BluetoothGATTGetServicesResponse(address=addr, services=[
+                pb.BluetoothGATTService(uuid=_uuid_words(svc["uuid"]), handle=svc["handle"], characteristics=[
+                    pb.BluetoothGATTCharacteristic(uuid=_uuid_words(ch["uuid"]), handle=ch["handle"],
+                                                   properties=ch["props"], descriptors=[
+                        pb.BluetoothGATTDescriptor(uuid=_uuid_words(d["uuid"]), handle=d["handle"])
+                        for d in ch["descs"]])
+                    for ch in svc["chars"]])
+                for svc in ev["services"]])
+        elif kind == "services_done":
+            msg = pb.BluetoothGATTGetServicesDoneResponse(address=addr)
+        elif kind == "read":
+            msg = pb.BluetoothGATTReadResponse(address=addr, handle=ev["handle"], data=bytes.fromhex(ev["data"]))
+        elif kind == "write":
+            msg = pb.BluetoothGATTWriteResponse(address=addr, handle=ev["handle"])
+        elif kind == "notify":
+            msg = pb.BluetoothGATTNotifyResponse(address=addr, handle=ev["handle"])
+        elif kind == "notify_data":
+            msg = pb.BluetoothGATTNotifyDataResponse(address=addr, handle=ev["handle"], data=bytes.fromhex(ev["data"]))
+        elif kind == "error":
+            msg = pb.BluetoothGATTErrorResponse(address=addr, handle=ev["handle"], error=ev["error"])
+        else:
+            _LOGGER.debug("active connections: unknown event %r", kind)
+            return
+        conn.send_messages([msg])
+
+    # ---- Home Assistant -> tsx-btscan ---------------------------------------
+    def subscribe_free(self, conn):
+        from aioesphomeapi.api_pb2 import BluetoothConnectionsFreeResponse  # pylint: disable=no-name-in-module
+
+        with self._lock:
+            if conn not in self._subscribers:
+                self._subscribers.append(conn)
+            slots = self._slots
+        if slots is not None:
+            conn.send_messages([BluetoothConnectionsFreeResponse(
+                free=slots["free"], limit=slots["limit"], allocated=slots["allocated"])])
+        elif self._connect() is None:
+            conn.send_messages([BluetoothConnectionsFreeResponse(free=0, limit=0)])
+        # else: the "slots" event of the new socket answers
+
+    def release(self, conn):
+        with self._lock:
+            if conn in self._subscribers:
+                self._subscribers.remove(conn)
+            mine = [a for a, c in self._owners.items() if c is conn]
+            for addr in mine:
+                del self._owners[addr]
+        for addr in mine:
+            _LOGGER.info("active connections: %x: the Home Assistant connection closed, disconnecting", addr)
+            self._send(op="disconnect", addr=addr)
+
+    def device_request(self, conn, msg):
+        from aioesphomeapi import api_pb2 as pb  # pylint: disable=no-name-in-module
+
+        addr, kind = msg.address, msg.request_type
+        if kind in (REQ_CONNECT, REQ_CONNECT_V3_WITH_CACHE, REQ_CONNECT_V3_WITHOUT_CACHE):
+            with self._lock:
+                self._owners[addr] = conn
+            atype = msg.address_type if msg.has_address_type else 0
+            if not self._send(op="connect", addr=addr, atype=atype):
+                with self._lock:
+                    self._owners.pop(addr, None)
+                conn.send_messages([pb.BluetoothDeviceConnectionResponse(address=addr, connected=False)])
+        elif kind == REQ_DISCONNECT:
+            with self._lock:
+                self._owners[addr] = conn
+            if not self._send(op="disconnect", addr=addr):
+                conn.send_messages([pb.BluetoothDeviceConnectionResponse(address=addr, connected=False)])
+        elif kind == REQ_CLEAR_CACHE:
+            conn.send_messages([pb.BluetoothDeviceClearCacheResponse(address=addr, success=True)])
+        elif kind == REQ_PAIR:
+            conn.send_messages([pb.BluetoothDevicePairingResponse(address=addr, paired=False, error=ERR_NOT_SUPPORTED)])
+        elif kind == REQ_UNPAIR:
+            conn.send_messages([pb.BluetoothDeviceUnpairingResponse(address=addr, success=False,
+                                                                    error=ERR_NOT_SUPPORTED)])
+
+    def gatt_request(self, conn, op, msg, **extra):
+        from aioesphomeapi.api_pb2 import BluetoothGATTErrorResponse  # pylint: disable=no-name-in-module
+
+        addr = msg.address
+        handle = getattr(msg, "handle", 0)
+        with self._lock:
+            owned = self._owners.get(addr) is conn
+        if not owned or not self._send(op=op, addr=addr, handle=handle, **extra):
+            conn.send_messages([BluetoothGATTErrorResponse(address=addr, handle=handle, error=ERR_NOT_CONNECTED)])
+
+
 PROXY = BtProxy()
 
 
 def handle_message(conn, msg):
     """Handle the Bluetooth proxy messages of one connection. Return True if
     msg was one of them (the caller then has nothing more to do)."""
-    from aioesphomeapi.api_pb2 import (  # pylint: disable=no-name-in-module
-        SubscribeBluetoothLEAdvertisementsRequest,
-        UnsubscribeBluetoothLEAdvertisementsRequest,
-    )
+    from aioesphomeapi import api_pb2 as pb  # pylint: disable=no-name-in-module
 
-    if isinstance(msg, SubscribeBluetoothLEAdvertisementsRequest):
+    if isinstance(msg, pb.SubscribeBluetoothLEAdvertisementsRequest):
         PROXY.subscribe(conn, msg.flags)
         return True
-    if isinstance(msg, UnsubscribeBluetoothLEAdvertisementsRequest):
+    if isinstance(msg, pb.UnsubscribeBluetoothLEAdvertisementsRequest):
         PROXY.unsubscribe(conn)
         return True
+    gatt = PROXY.gatt
+    if isinstance(msg, pb.SubscribeBluetoothConnectionsFreeRequest):
+        if PROXY.active():
+            gatt.subscribe_free(conn)
+        else:
+            conn.send_messages([pb.BluetoothConnectionsFreeResponse(free=0, limit=0)])
+        return True
+    if isinstance(msg, pb.BluetoothDeviceRequest):
+        if PROXY.active() or msg.request_type == REQ_DISCONNECT:
+            gatt.device_request(conn, msg)
+        else:
+            _LOGGER.info("Bluetooth connect request ignored: BT_ACTIVE is off")
+            conn.send_messages([pb.BluetoothDeviceConnectionResponse(address=msg.address, connected=False)])
+        return True
+    gatt_ops = (
+        (pb.BluetoothGATTGetServicesRequest, "services", lambda m: {}),
+        (pb.BluetoothGATTReadRequest, "read", lambda m: {}),
+        (pb.BluetoothGATTReadDescriptorRequest, "read_desc", lambda m: {}),
+        (pb.BluetoothGATTWriteRequest, "write", lambda m: {"data": m.data.hex(), "response": m.response}),
+        (pb.BluetoothGATTWriteDescriptorRequest, "write_desc", lambda m: {"data": m.data.hex()}),
+        (pb.BluetoothGATTNotifyRequest, "notify", lambda m: {"enable": m.enable}),
+    )
+    for cls, op, extra in gatt_ops:
+        if isinstance(msg, cls):
+            gatt.gatt_request(conn, op, msg, **extra(msg))
+            return True
     return False

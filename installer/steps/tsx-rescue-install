@@ -24,6 +24,8 @@
 # panel itself: the current mainline root on eMMC p8, else the stock Android
 # system partition in the same region (installer/lib/tsx-psr.sh). A valid
 # file goes to BUNDLE_DIR/psr/, and "run" deploys it. It stays on the panel.
+# If the panel has no valid file, the host can put the file of the .puf
+# download there instead (rootfs/vendor-fetch.sh --psr).
 #
 # --keep-data (a mainline -> mainline reinstall, docs/install.md "Reinstalling
 # or updating a mainline panel"): if the card is already folded and p4 is a
@@ -54,6 +56,10 @@
 #                          puts them there, from the panel (tfa-panel/, above)
 #                          or pushed from rootfs/vendor-fetch.sh. tfa/SOURCE
 #                          says where they came from. It is deployed with them.
+#   psr/PSR-CSR8811.psr    (optional) the Bluetooth PSR file, from the panel
+#                          (the psr command, above) or pushed from
+#                          rootfs/vendor-fetch.sh --psr. psr/SOURCE says where
+#                          it came from. It is deployed with it.
 #   kiosk-url.txt          (optional) one line: the KIOSK_URL to set
 #   panel.conf             (optional) installer/panel.conf.example, built by
 #                          the prompts of tsx-install-mainline or by
@@ -71,10 +77,10 @@ set -eu
 RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
 say() { echo "tsx-rescue-install: $(date +%T 2>/dev/null) $*" >&2; }
 die() { say "ERROR: $*"; set_state "failed: $*"; exit 1; }
-CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,69p' "$0"; exit 2; }
+CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,/^set -eu$/p' "$0" | sed '$d'; exit 2; }
 YES=0 KEEP_DATA=0
 while [ $# -gt 0 ]; do case "$1" in --yes) YES=1;; --keep-data) KEEP_DATA=1;; *) die "unknown option $1";; esac; shift; done
-case "$CMD" in check|run|tfa|psr) ;; *) sed -n '2,69p' "$0"; exit 2;; esac
+case "$CMD" in check|run|tfa|psr) ;; *) sed -n '2,/^set -eu$/p' "$0" | sed '$d'; exit 2;; esac
 [ -f "$B/manifest" ] && grep -q '^format=tsx-rescue-install-1$' "$B/manifest" || die "$B is not a v2 install bundle (no manifest)"
 . "$B/tsx-rescue.sh"
 . /usr/share/tsx/tsx-lib.sh   # tsx_find_disk, TSX_MBR_P4_TYPE_OFFSET, TSX_ENV_OFFSET/SIZE (already on the rescue image)

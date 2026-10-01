@@ -96,6 +96,8 @@ jobs:
         run: installer/lib/tests/test-tsx-tfa.sh
       - name: installer/lib/tests/test-tsx-psr.sh - Bluetooth PSR file from the panel itself (made-up PSR files)
         run: installer/lib/tests/test-tsx-psr.sh
+      - name: rootfs/tests/test-vendor-fetch-psr.sh - Bluetooth PSR file from the .puf (a made-up package, no network)
+        run: rootfs/tests/test-vendor-fetch-psr.sh
       - name: installer/tests/test-arm-reboot.sh - the arm step's detached reboot on stock Android, and the host's check
         run: installer/tests/test-arm-reboot.sh
       - name: installer/tests/test-tsxdata-keep.sh - keep /data on a reinstall (file-backed ext4)

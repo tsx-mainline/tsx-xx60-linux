@@ -70,6 +70,15 @@ out=$(run "tsx_psr_collect '$W/out5' '$W/does-not-exist'"); rc=$?
 [ $rc = 0 ] && [ "$(printf '%s\n' "$out" | tail -n 1)" = "PSR-RESULT source=none ok=0" ] \
 	&& ok "a root that does not mount: source=none, exit 0 (never fatal)" || bad "no root: rc $rc, $out"
 
+echo "== the host plan (--psr-source MODE, the result of the panel) =="
+for c in auto:1:use-panel auto:0:puf auto:-:puf panel:1:use-panel panel:0:none panel:-:none \
+	puf:1:puf puf:-:puf none:1:none none:-:none; do
+	m=${c%%:*} r=${c#*:}; p=${r%%:*} want=${r#*:}
+	got=$(run "tsx_psr_plan $m $p")
+	[ "$got" = "$want" ] && ok "tsx_psr_plan $m $p = $want" || bad "tsx_psr_plan $m $p = $got, want $want"
+done
+run "tsx_psr_plan cloud 1" >/dev/null && bad "tsx_psr_plan accepts an unknown mode" || ok "tsx_psr_plan refuses an unknown mode"
+
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-tsx-psr || echo FAIL test-tsx-psr
 exit $F

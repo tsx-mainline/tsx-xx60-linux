@@ -47,8 +47,12 @@ LVA_SRC=$T/linux-voice-assistant-$LVA
 # ---- python venv with the (loosely-versioned. This is a host test, not the
 # panel image) client + server dependencies -----------------------------
 python3 -m venv "$T/venv"
-"$T/venv/bin/pip" -q install --disable-pip-version-check --only-binary :all: \
-	"aioesphomeapi==46.2.0" getmac netifaces2 zeroconf "websockets==12.0" python-mpv
+# bleak-esphome is the bleak backend of Home Assistant for an ESPHome proxy
+# (the active Bluetooth proxy check). One of its dependencies (PyRIC) has no
+# wheel. Its source package is pure Python, so pip builds it without a
+# compiler.
+"$T/venv/bin/pip" -q install --disable-pip-version-check --only-binary :all: --no-binary pyric \
+	"aioesphomeapi==46.2.0" "bleak-esphome==4.1.0" getmac netifaces2 zeroconf "websockets==12.0" python-mpv
 
 # ---- fixtures ------------------------------------------------------------
 F=$T/fixture
@@ -224,20 +228,29 @@ grep -q "api_encryption" "$T/voice-plain.log" && { echo "FAIL: plaintext satelli
 grep -q 'Unknown message type' "$T/voice-plain.log" && { echo "FAIL: MediaPlayerEntity logged Unknown message type noise (voice-plain.log)"; rc=1; } \
 	|| echo "OK: no Unknown message type noise for panel-entity commands (voice-plain.log)"
 
-# ---- the passive Bluetooth proxy (BT_PROXY, tsx_panel/bluetooth.py) -------
+# ---- the Bluetooth proxy (BT_PROXY, BT_ACTIVE, tsx_panel/bluetooth.py) -----
 # A fake controller (bt-fake-hci.py) feeds the real scanner daemon
 # (btscan.py). Both front ends take the advertisements from its socket. A
 # third server has BT_PROXY off. The other servers above have no bt.conf,
-# which also means off.
+# which also means off. The BLE links of the active proxy go to fake peers
+# (bt-gatt-peer.py) instead of L2CAP sockets.
 echo "== Bluetooth proxy: feature flags, raw advertisements, the off switch =="
 python3 "$HERE/bt-fake-hci.py" "$T/hci.sock" "$T/hci.log" > "$T/fakehci.out" 2>&1 &
 PIDS="$PIDS $!"
-for _ in $(seq 1 50); do [ -S "$T/hci.sock" ] && break; sleep 0.1; done
-TSX_BTSCAN_FAKE_HCI="$T/hci.sock" python3 "$HERE/../overlay/usr/local/lib/tsx/btscan.py" \
-	--socket "$F/run/tsx/bt-adv.sock" --group "" > "$T/btscan.log" 2>&1 &
+python3 "$HERE/bt-gatt-peer.py" fake "$T/peer.sock" "$T/peer.log" > "$T/peer.out" 2>&1 &
 PIDS="$PIDS $!"
+for _ in $(seq 1 50); do [ -S "$T/hci.sock" ] && [ -S "$T/peer.sock" ] && break; sleep 0.1; done
 printf 'PROXY="on"\nMAC=""\n' > "$F/run/tsx/bt-on.conf"
 printf 'PROXY="off"\nMAC=""\n' > "$F/run/tsx/bt-off.conf"
+printf 'PROXY="on"\nACTIVE="on"\nMAC=""\n' > "$F/run/tsx/bt-active.conf"
+start_btscan() {
+	TSX_BTSCAN_FAKE_HCI="$T/hci.sock" TSX_BTSCAN_FAKE_L2CAP="$T/peer.sock" TSX_BT_CONF="$F/run/tsx/bt-active.conf" \
+		TSX_BT_CONNECT_TIMEOUT=2 python3 "$HERE/../overlay/usr/local/lib/tsx/btscan.py" \
+		--socket "$F/run/tsx/bt-adv.sock" --group "" >> "$T/btscan.log" 2>&1 &
+	BTSCAN_PID=$!
+	PIDS="$PIDS $!"
+}
+start_btscan
 echo 02:AA:BB:CC:DD:EE > "$F/run/tsx/bt.mac"
 BT_PORT=$((API_PORT + 50)); VBT_PORT=$((API_PORT + 51)); NOBT_PORT=$((API_PORT + 52))
 start_server standalone "$T/server-bt.log" "$BT_PORT" Bt-Panel TSX_HA_API_KEY= TSX_BT_CONF="$F/run/tsx/bt-on.conf"
@@ -260,6 +273,49 @@ on = [e for e in en if e == "0100"]
 assert len(on) == 2, en        # two subscribed checks, none for the off one
 assert en[-1] == "0000", en
 PYEOF
+
+# The active proxy (BT_ACTIVE=on): the bleak backend of Home Assistant
+# (bleak-esphome ESPHomeClient) connects to a fake peer through each front
+# end. C0:FF:EE:00:00:EE never answers (a connect timeout).
+echo "== Bluetooth proxy: active connections (GATT) =="
+ACT_PORT=$((API_PORT + 53)); VACT_PORT=$((API_PORT + 54))
+TSX_TEST_SERVER_ARGS=--no-zeroconf start_server standalone "$T/server-act.log" "$ACT_PORT" Act-Panel TSX_HA_API_KEY= TSX_BT_CONF="$F/run/tsx/bt-active.conf"
+start_server voice "$T/voice-act.log" "$VACT_PORT" Act-Voice TSX_HA_API_KEY="$KEY" TSX_BT_CONF="$F/run/tsx/bt-active.conf"
+wait_listening "$T/server-act.log" "$T/voice-act.log"
+"$T/venv/bin/python3" "$HERE/esphome-btactive-check.py" 127.0.0.1 "$ACT_PORT" --addr C0:FF:EE:00:00:01 --atype 1 \
+	--silent C0:FF:EE:00:00:EE --cycles 5 --adv || { rc=1; tail -20 "$T/btscan.log"; }
+"$T/venv/bin/python3" "$HERE/esphome-btactive-check.py" 127.0.0.1 "$VACT_PORT" --key "$KEY" --addr C0:FF:EE:00:00:02 \
+	--cycles 2 || { rc=1; tail -20 "$T/btscan.log"; }
+grep -q 'tsx_lva: Bluetooth proxy on, active connections' "$T/voice-act.log" && echo "OK: the voice satellite logs the active proxy" \
+	|| { echo "FAIL: no active proxy line in voice-act.log"; rc=1; }
+grep -q 'Unknown message type' "$T/voice-act.log" && { echo "FAIL: Bluetooth messages reached satellite.py (voice-act.log)"; rc=1; } \
+	|| echo "OK: the GATT messages never reach satellite.py"
+# tsx-bt restarts (tsx-btscan goes away and comes back): Home Assistant sees
+# no free slot while it is away, and 3 free slots again after
+"$T/venv/bin/python3" - "$ACT_PORT" > "$T/slots.out" 2>&1 <<'PYEOF' &
+import asyncio, sys
+from aioesphomeapi import APIClient
+async def main():
+    cli = APIClient("127.0.0.1", int(sys.argv[1]), None)
+    await cli.connect(login=False)
+    seen = []
+    cli.subscribe_bluetooth_connections_free(lambda free, limit, alloc: seen.append((free, limit)))
+    for _ in range(80):
+        await asyncio.sleep(0.1)
+        if (0, 0) in seen and seen[-1] == (3, 3):
+            break
+    print(seen)
+    await cli.disconnect()
+    assert seen[0] == (3, 3) and (0, 0) in seen and seen[-1] == (3, 3), seen
+asyncio.run(main())
+PYEOF
+SLOTS_PID=$!
+sleep 1.5
+kill "$BTSCAN_PID"; wait "$BTSCAN_PID" 2>/dev/null
+sleep 0.5
+start_btscan
+wait "$SLOTS_PID" && echo "OK: a restart of tsx-btscan: 0 slots while it is away, 3 again after ($(cat "$T/slots.out"))" \
+	|| { echo "FAIL: slots across a tsx-btscan restart: $(cat "$T/slots.out")"; rc=1; }
 
 # ---- a configured key that cannot be used: refuse to start, never plaintext
 echo "== unusable key file: fail closed =="

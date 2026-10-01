@@ -68,6 +68,10 @@
 #   Assistant (docs/ha.md "Bluetooth proxy"). Apply writes /run/tsx/bt.conf
 #   (world-readable, no secret) for tsx-bt and both ESPHome front ends, and
 #   starts or stops the tsx-bt service when the value changes.
+# BT_ACTIVE (on|off, default off): with BT_PROXY=on, also active connections:
+#   Home Assistant can connect to BLE devices through the panel (GATT).
+#   Apply writes it to bt.conf and restarts the ESPHome front end, so that
+#   Home Assistant reads the new feature flags.
 # BT_MAC: the Bluetooth address that tsx-bt loads into the chip. Empty = the
 #   eth0 MAC, the same value as the vendor firmware.
 # ROOT_PASSWORD_HASH, SSH_AUTHORIZED_KEY.
@@ -85,7 +89,7 @@ SEED=${TSX_CONF_SEED:-/etc/tsx/panel.conf.seed}
 # absolute.
 PREFIX=${TSX_APPLY_PREFIX:-}
 
-KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT BOOT_VERBOSE ORIENTATION BT_PROXY BT_MAC ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
+KNOWN_KEYS="PANEL_NAME KIOSK_URL HA_LOGIN_METHOD HA_TOKEN TZ_NAME VOICE WAKE_WORD HA_TRANSPORT HA_API_KEY HA_ALLOW_FROM MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASSWORD KERNEL_FLAVOR APK_URL BLANK_TIMEOUT BOOT_VERBOSE ORIENTATION BT_PROXY BT_ACTIVE BT_MAC ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 SECRET_KEYS="HA_TOKEN HA_API_KEY MQTT_PASSWORD ROOT_PASSWORD_HASH SSH_AUTHORIZED_KEY"
 
 usage() { sed -n '2,26p' "$0" >&2; exit 2; }
@@ -176,7 +180,7 @@ val_ok() {
 	BLANK_TIMEOUT) printf '%s' "$v" | grep -Eq '^[0-9]{1,5}$' && [ "$v" -le 86400 ];;
 	BOOT_VERBOSE) case "$v" in 0|1) return 0;; esac; return 1;;
 	ORIENTATION) case "$v" in landscape|portrait|landscape-flipped|portrait-flipped) return 0;; esac; return 1;;
-	BT_PROXY) case "$v" in on|off) return 0;; esac; return 1;;
+	BT_PROXY|BT_ACTIVE) case "$v" in on|off) return 0;; esac; return 1;;
 	# empty = derived from eth0. A unicast address, not all zeros
 	BT_MAC) [ -z "$v" ] && return 0; printf '%s' "$v" | grep -Eq '^[0-9A-Fa-f][02468ACEace](:[0-9A-Fa-f]{2}){5}$' \
 		&& [ "$v" != 00:00:00:00:00:00 ];;
@@ -435,15 +439,18 @@ apply() {
 		printf 'TRANSPORT="%s"\n' "$(shq "$transport")"
 		printf 'ALLOW_FROM="%s"\n' "$(shq "$allow")"
 	} > "$tmp" && mv "$tmp" "$RUN/esphome.conf" && chmod 644 "$RUN/esphome.conf"
-	# BT_PROXY/BT_MAC: /run/tsx/bt.conf, world-readable (no secret). tsx-bt
-	# (root) and the Bluetooth proxy of both ESPHome front ends
+	# BT_PROXY/BT_ACTIVE/BT_MAC: /run/tsx/bt.conf, world-readable (no
+	# secret). tsx-bt (root), tsx-btscan (it connects only with ACTIVE=on)
+	# and the Bluetooth proxy of both ESPHome front ends
 	# (rootfs/voice/shim/tsx_panel/bluetooth.py) read it. The voice satellite
 	# runs as kiosk and cannot read $TSX_CONF.
 	btp=$(cfg_get BT_PROXY) || btp=off
+	bta=$(cfg_get BT_ACTIVE) || bta=off
 	btm=$(cfg_get BT_MAC) || btm=
 	tmp="$RUN/bt.conf.tmp.$$"
 	{
 		printf 'PROXY="%s"\n' "$(shq "$btp")"
+		printf 'ACTIVE="%s"\n' "$(shq "$bta")"
 		printf 'MAC="%s"\n' "$(shq "$btm")"
 	} > "$tmp" && mv "$tmp" "$RUN/bt.conf" && chmod 644 "$RUN/bt.conf"
 	# The tsx-bt service (the Bluetooth controller and the scanner) follows
@@ -473,22 +480,24 @@ apply() {
 	# apply() runs before the runlevel entry of tsx-esphome starts it. Then
 	# there is nothing to restart yet, and the restart does nothing.
 	# Restart it only when something that it reads changed (esphome.conf, the
-	# panel name, VOICE, the API key). tsx-esphome itself runs `tsx-config
+	# panel name, VOICE, the API key, BT_PROXY, BT_ACTIVE: Home Assistant reads
+	# the Bluetooth feature flags only when it connects). tsx-esphome itself runs `tsx-config
 	# apply` for its Kiosk URL entity. An unconditional restart killed it in
 	# the middle of that command (and dropped the connection of Home Assistant
 	# each time).
-	sig="$(cat "$RUN/esphome.conf" 2>/dev/null)|$name|$voice|$keysum|$btp"
+	sig="$(cat "$RUN/esphome.conf" 2>/dev/null)|$name|$voice|$keysum|$btp|$bta"
 	oldsig=; [ -r "$RUN/.esphome-sig" ] && oldsig=$(cat "$RUN/.esphome-sig")
 	printf '%s\n' "$sig" > "$RUN/.esphome-sig"
 	if [ "$sig" != "$oldsig" ] && command -v rc-service >/dev/null 2>&1 && rc-service tsx-esphome status >/dev/null 2>&1; then
 		rc-service tsx-esphome restart >/dev/null 2>&1 || true
 	fi
 	# The voice satellite also reads the panel name (device name) and the API
-	# key at start. Restart it when either changed and it is running. Do not
+	# key at start, and it announces the Bluetooth feature flags. Restart it
+	# when one of them changed and it is running. Do not
 	# restart it on the first apply after boot (no signature yet), because that
 	# apply runs before tsx-voice starts. Its kiosk URL entity runs `apply`
 	# through tsx-panelctl, which changes neither, so that never restarts it.
-	vsig="$name|$keysum|$btp"
+	vsig="$name|$keysum|$btp|$bta"
 	oldvsig=; [ -r "$RUN/.voice-sig" ] && oldvsig=$(cat "$RUN/.voice-sig")
 	printf '%s\n' "$vsig" > "$RUN/.voice-sig"
 	if [ -n "$oldvsig" ] && [ "$vsig" != "$oldvsig" ] && command -v rc-service >/dev/null 2>&1 \

@@ -23,7 +23,7 @@ Modules:
                shared linux_voice_assistant APIServer for both front ends.
   noise.py     the server side of ESPHome's "noise" API encryption.
   naming.py    the one ESPHome device name both front ends present.
-  bluetooth.py the passive Bluetooth proxy (BT_PROXY in panel.conf): the
-               feature flags in the device info and the advertisements
-               from tsx-btscan.
+  bluetooth.py the Bluetooth proxy (BT_PROXY and BT_ACTIVE in panel.conf):
+               the feature flags in the device info, the advertisements
+               from tsx-btscan and the BLE links (GATT) through it.
 """

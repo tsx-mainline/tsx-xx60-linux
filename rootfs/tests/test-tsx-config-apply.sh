@@ -205,11 +205,12 @@ set_ ORIENTATION landscape >/dev/null; applyo
 set_ ORIENTATION landscape-flipped >/dev/null; applyo
 TSX_CONF="$CFG" busybox sh "$SCRIPT" unset ORIENTATION >/dev/null; applyo
 [ ! -e "$FX/etc/tsx/orientation" ] && [ "$(lives)" = 5 ] && ok "unset again: file removed, kiosk turned back" || bad "unset: $(lives)"
-echo "== BT_PROXY / BT_MAC: /run/tsx/bt.conf, tsx-bt follows the key =="
+echo "== BT_PROXY / BT_ACTIVE / BT_MAC: /run/tsx/bt.conf, tsx-bt follows the key =="
 btl() { grep -c "tsx-bt $1" "$W/rc.log" 2>/dev/null || true; }
 applyp
 grep -qx 'PROXY="off"' "$FX/run/tsx/bt.conf" 2>/dev/null && grep -qx 'MAC=""' "$FX/run/tsx/bt.conf" \
-	&& ok "bt.conf: PROXY off and an empty MAC by default" || bad "bt.conf default: $(cat "$FX/run/tsx/bt.conf" 2>/dev/null)"
+	&& grep -qx 'ACTIVE="off"' "$FX/run/tsx/bt.conf" \
+	&& ok "bt.conf: PROXY and ACTIVE off and an empty MAC by default" || bad "bt.conf default: $(cat "$FX/run/tsx/bt.conf" 2>/dev/null)"
 [ "$(stat -c '%a' "$FX/run/tsx/bt.conf" 2>/dev/null)" = 644 ] && ok "bt.conf is world-readable (the voice satellite reads it)" || bad "bt.conf mode $(stat -c '%a' "$FX/run/tsx/bt.conf" 2>/dev/null)"
 r0=$(restarts); v0=$(vrestarts); s0=$(btl restart)
 set_ BT_PROXY on >/dev/null; applyp
@@ -222,6 +223,12 @@ set_ BT_MAC 02:11:22:33:44:55 >/dev/null; applyp
 grep -qx 'MAC="02:11:22:33:44:55"' "$FX/run/tsx/bt.conf" && ok "BT_MAC reaches bt.conf" || bad "bt.conf after BT_MAC: $(cat "$FX/run/tsx/bt.conf")"
 [ "$(btl restart)" = $((s0 + 2)) ] && ok "a BT_MAC change restarts tsx-bt" || bad "BT_MAC change: $(btl restart) tsx-bt restarts"
 applyp; [ "$(btl restart)" = $((s0 + 2)) ] && ok "an unchanged apply leaves tsx-bt alone" || bad "unchanged apply touched tsx-bt"
+r0=$(restarts); v0=$(vrestarts); s0=$(btl restart)
+set_ BT_ACTIVE on >/dev/null; applyp
+grep -qx 'ACTIVE="on"' "$FX/run/tsx/bt.conf" && ok "BT_ACTIVE=on reaches bt.conf" || bad "bt.conf after BT_ACTIVE=on: $(cat "$FX/run/tsx/bt.conf")"
+[ "$(restarts)/$(vrestarts)/$(btl restart)" = "$((r0 + 1))/$((v0 + 1))/$s0" ] \
+	&& ok "BT_ACTIVE=on restarts tsx-esphome and tsx-voice (new feature flags), not tsx-bt" \
+	|| bad "BT_ACTIVE=on: $(restarts)/$(vrestarts)/$(btl restart) restarts (was $r0/$v0/$s0)"
 set_ BT_PROXY off >/dev/null; applyp
 [ "$(btl stop)" -ge 1 ] && ok "BT_PROXY=off stops tsx-bt" || bad "BT_PROXY=off did not stop tsx-bt"
 echo "== unconfigured panel (no KIOSK_URL, no TZ_NAME): apply runs to the end =="

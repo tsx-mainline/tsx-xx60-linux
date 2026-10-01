@@ -9,8 +9,10 @@ Each HCI command gets a Command Complete with status 0, except "LE Set Scan
 Enable (disable)" while no scan runs: that gets status 0x0C (Command
 Disallowed), as a real controller answers. While the scan is on, the fake
 sends the ADVERTS below every 0.2 s: one LE Advertising Report event with
-two reports, then one with a single report. LOG gets one line per command:
-"cmd OPCODE PARAMS-HEX". The advertisement data is made up.
+two reports, then one with a single report. HCI Disconnect (0x0406) gets a
+Command Status and a Disconnection Complete (reason 0x16) for the handle.
+LOG gets one line per command: "cmd OPCODE PARAMS-HEX". The advertisement
+data is made up.
 """
 import os
 import select
@@ -74,6 +76,13 @@ def main():
             params = pkt[4:4 + pkt[3]]
             log.write(f"cmd {opcode:04x} {params.hex()}\n")
             status = 0
+            if opcode == 0x0406:
+                try:
+                    conn.send(bytes((0x04, 0x0F, 4, 0, 1)) + struct.pack("<H", opcode))
+                    conn.send(bytes((0x04, 0x05, 4, 0)) + params[:2] + bytes((0x16,)))
+                except OSError:
+                    pass
+                continue
             if opcode == 0x200C:
                 if params[0] == 0 and not scanning:
                     status = 0x0C

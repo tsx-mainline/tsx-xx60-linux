@@ -90,7 +90,7 @@ class PanelAPIServer(APIServer):
 
     def connection_lost(self, exc) -> None:
         super().connection_lost(exc)
-        bluetooth.PROXY.unsubscribe(self)
+        bluetooth.PROXY.connection_lost(self)
         if self in PanelAPIServer.connections:
             PanelAPIServer.connections.remove(self)
             _LOGGER.info("connection closed: %s (%s)", getattr(self, "_tsx_peer", "?"),
@@ -198,7 +198,8 @@ async def async_main() -> None:
         discovery = HomeAssistantZeroconf(port=args.port, name=device_name, mac_address=mac, host_ip_address=host_ip)
         await discovery.register_server()
 
-    _LOGGER.info("Bluetooth proxy: %s", "on (BT_PROXY)" if bluetooth.PROXY.enabled() else "off")
+    _LOGGER.info("Bluetooth proxy: %s", "off" if not bluetooth.PROXY.enabled() else
+                 "on, active connections (BT_ACTIVE)" if bluetooth.PROXY.active() else "on (BT_PROXY)")
     _LOGGER.info("tsx-esphome: %s (%s) listening on %s:%s (%d entities, %s)", device_name, friendly_name, host_ip, args.port,
                  len(device.entities), "encrypted" if security.encryption_enabled() else "plaintext")
     await asyncio.Future()  # run forever

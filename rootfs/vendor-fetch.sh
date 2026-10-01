@@ -1,11 +1,12 @@
 #!/bin/sh
-# vendor-fetch.sh [--check|--force]
+# vendor-fetch.sh [--check|--force] [--psr]
 #
 # Fetch the TFA9890 CoolFlux DSP tuning containers (.cnt) from the public
-# Crestron firmware package. The Android vendor tree is proprietary and not
-# published, so this script does not use it. Crestron ships the containers
-# inside the panel firmware .puf. Anyone can download the .puf from the
-# Crestron update CDN:
+# Crestron firmware package. With --psr, fetch the CSR8811 Bluetooth PSR file
+# from the same package instead (see --psr below). The Android vendor tree is
+# proprietary and not published, so this script does not use it. Crestron
+# ships the containers inside the panel firmware .puf. Anyone can download the
+# .puf from the Crestron update CDN:
 #
 #   index    https://crestrondevicefiles.blob.core.windows.net/tsx-firmware/touchscreen.txt
 #            (JSON; deviceModel "TSW-1060*" etc -> fileUrl of the .puf)
@@ -22,21 +23,34 @@
 # This script downloads the .puf (cached, sha256-pinned). It unzips only the
 # two intermediate zip layers (tsx.zip and image.zip, about 370 MB each),
 # because it must write them out to read them at random. From image.zip it
-# pulls only the small boot.img entry. It never writes the 650 MB system.img
-# entry of the same zip.
+# pulls only the small boot.img entry. Without --psr, it never writes the
+# 650 MB system.img entry of the same zip.
 # It then parses the Android boot header by hand (it does not need python) and
 # cuts the gzip ramdisk out of boot.img. It extracts the ramdisk with busybox
 # cpio and copies the DSP containers into vendor-local/tfa9890/. It checks
 # the three stereo.cnt files against the sha256 values pinned below.
 #
-# --check    only verify vendor-local/tfa9890/*/stereo.cnt against the pinned
-#            hashes. No network, no extraction. Exit 0 means all files are
-#            present and correct. Exit 1 means a file is missing or wrong.
+# --psr      work on the CSR8811 Bluetooth PSR file (PSR-CSR8811.psr) instead
+#            of the DSP containers. The file is /bin/PSR-CSR8811.psr in the
+#            system.img entry of image.zip (a raw ext4 image, 650 MB). The
+#            script writes system.img to its temporary directory, reads the
+#            one file out of it with debugfs (e2fsprogs, no mount, no root)
+#            and deletes system.img again. It checks the file against the
+#            sha256 pinned below and puts it in vendor-local/csr8811/. The
+#            installer uses this as the fallback when the panel has no PSR
+#            file (docs/install.md "Bluetooth PSR file"). mkrootfs.sh never
+#            reads vendor-local/csr8811/: no image ever carries the file.
+# --check    only verify the output (vendor-local/tfa9890/*/stereo.cnt, or
+#            with --psr vendor-local/csr8811/PSR-CSR8811.psr) against the
+#            pinned hashes. No network, no extraction. Exit 0 means all files
+#            are present and correct. Exit 1 means a file is missing or wrong.
 # --force    redo the download and extraction even if vendor-local already has
 #            correct files. By default the script then skips straight to "ok".
 #
 # Env overrides: TFA_PUF_URL, TFA_PUF_SHA256, TFA_PUF_CACHE (download cache
-# dir), TFA_VENDOR_LOCAL (output dir, the same variable mkrootfs.sh reads).
+# dir), TFA_VENDOR_LOCAL (output dir, the same variable mkrootfs.sh reads),
+# PSR_VENDOR_LOCAL (the output dir of --psr), PSR_SHA256 (the pinned sha256 of
+# the PSR file, for tests with a made-up package).
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 log() { echo "vendor-fetch: $*" >&2; }
@@ -46,6 +60,11 @@ TFA_PUF_URL=${TFA_PUF_URL:-https://devicefiles.crestron.io/firmware/tsw-xx60_3.0
 TFA_PUF_SHA256=${TFA_PUF_SHA256:-96438108e3175b66c09f1df284ded5fe155593ba06e069e154688b04f395e40b}
 TFA_PUF_CACHE=${TFA_PUF_CACHE:-"$HERE/vendor-cache"}
 TFA_VENDOR_LOCAL=${TFA_VENDOR_LOCAL:-"$HERE/vendor-local/tfa9890"}
+PSR_VENDOR_LOCAL=${PSR_VENDOR_LOCAL:-"$HERE/vendor-local/csr8811"}
+PSR_NAME=PSR-CSR8811.psr
+# The sha256 of /bin/PSR-CSR8811.psr in system.img of the .puf above (7814
+# bytes). installer/lib/tsx-psr.sh and tsx-bt pin the same value.
+PSR_SHA256=${PSR_SHA256:-96709f6ca529efb0dc8cf48165ba0c1c1934236794424aa539810376676aa8be}
 
 # Pinned sha256 of the stereo.cnt of each variant. The values come from the
 # .puf above (2026-09-26). They match the table in vendor-local/README.md
@@ -80,6 +99,7 @@ ensure_tool() { # ensure_tool BINARY [APK_PACKAGE]
 }
 
 do_check() { # do_check: verify vendor-local against the pinned hashes, with no network
+	[ "$WHAT" = psr ] && { do_check_psr; return; }
 	ok=1
 	for v in $VARIANTS; do
 		f="$TFA_VENDOR_LOCAL/$v/stereo.cnt"
@@ -100,21 +120,39 @@ do_check() { # do_check: verify vendor-local against the pinned hashes, with no 
 	[ "$ok" = 1 ]
 }
 
-MODE=fetch
-case "${1:-}" in
---check) MODE=check ;;
---force) MODE=force ;;
-"") ;;
-*) die "usage: $0 [--check|--force]" ;;
-esac
+do_check_psr() { # do_check_psr: verify vendor-local/csr8811 against the pinned hash
+	f="$PSR_VENDOR_LOCAL/$PSR_NAME"
+	if [ ! -r "$f" ]; then
+		echo "vendor-fetch: MISSING $PSR_NAME"
+		return 1
+	fi
+	got=$(sha256_of "$f")
+	if [ "$got" = "$PSR_SHA256" ]; then
+		echo "vendor-fetch: ok      $PSR_NAME ($got)"
+		return 0
+	fi
+	echo "vendor-fetch: MISMATCH $PSR_NAME: got $got, want $PSR_SHA256"
+	return 1
+}
+
+MODE=fetch WHAT=tfa
+for a in "$@"; do
+	case $a in
+	--check) MODE=check ;;
+	--force) MODE=force ;;
+	--psr) WHAT=psr ;;
+	*) die "usage: $0 [--check|--force] [--psr]" ;;
+	esac
+done
+if [ "$WHAT" = psr ]; then OUT_LABEL="vendor-local/csr8811 ($PSR_NAME)"; else OUT_LABEL=vendor-local/tfa9890; fi
 
 if [ "$MODE" = check ]; then
-	do_check && { log "all TFA9890 containers present and verified"; exit 0; }
+	do_check && { log "$OUT_LABEL: present and verified"; exit 0; }
 	exit 1
 fi
 
 if [ "$MODE" != force ] && do_check > /dev/null 2>&1; then
-	log "vendor-local/tfa9890 already present and verified. There is nothing to do (use --force to redo)"
+	log "$OUT_LABEL already present and verified. There is nothing to do (use --force to redo)"
 	exit 0
 fi
 
@@ -161,9 +199,33 @@ unzip -p "$PUF_PATH" "$TSX_NAME" > "$WORK/tsx.zip"
 
 IMAGE_NAME=$(zip_entry "$WORK/tsx.zip" 'image_.*\.zip$')
 [ -n "$IMAGE_NAME" ] || die "no image_*.zip inside $TSX_NAME"
-log "extracting $IMAGE_NAME (not system.img)"
+if [ "$WHAT" = psr ]; then log "extracting $IMAGE_NAME"; else log "extracting $IMAGE_NAME (not system.img)"; fi
 unzip -p "$WORK/tsx.zip" "$IMAGE_NAME" > "$WORK/image.zip"
 rm -f "$WORK/tsx.zip"
+
+if [ "$WHAT" = psr ]; then
+	# The PSR file: /bin/PSR-CSR8811.psr on the system partition. debugfs
+	# reads it out of the ext4 image without a mount. It is in /sbin on some
+	# distributions, which is not always in PATH.
+	DEBUGFS=$(command -v debugfs 2> /dev/null || true)
+	for d in /sbin/debugfs /usr/sbin/debugfs; do [ -n "$DEBUGFS" ] || { [ -x "$d" ] && DEBUGFS=$d; }; done
+	if [ -z "$DEBUGFS" ]; then ensure_tool debugfs e2fsprogs-extra; DEBUGFS=$(command -v debugfs); fi
+	log "extracting system.img (650 MB, temporary) to read /bin/$PSR_NAME"
+	unzip -p "$WORK/image.zip" system.img > "$WORK/system.img"
+	rm -f "$WORK/image.zip"
+	# ext4 superblock magic 0xEF53 at byte 1080 (little endian: 53 ef)
+	[ "$(od -An -tx1 -j 1080 -N2 "$WORK/system.img" | tr -d ' \n')" = "53ef" ] \
+		|| die "system.img is not a raw ext4 image (no superblock magic)"
+	"$DEBUGFS" -R "dump /bin/$PSR_NAME $WORK/$PSR_NAME" "$WORK/system.img" > /dev/null 2>&1 || true
+	rm -f "$WORK/system.img"
+	[ -s "$WORK/$PSR_NAME" ] || die "system.img has no /bin/$PSR_NAME"
+	got=$(sha256_of "$WORK/$PSR_NAME")
+	[ "$got" = "$PSR_SHA256" ] || die "$PSR_NAME sha256 $got != pinned $PSR_SHA256 (Crestron shipped a different file. Update PSR_SHA256 here and in installer/lib/tsx-psr.sh on purpose. Do not ignore this)"
+	mkdir -p "$PSR_VENDOR_LOCAL"
+	install -m 644 "$WORK/$PSR_NAME" "$PSR_VENDOR_LOCAL/$PSR_NAME"
+	log "done: $PSR_VENDOR_LOCAL/$PSR_NAME from the public .puf (sha256 $got, ok)"
+	exit 0
+fi
 
 unzip -p "$WORK/image.zip" boot.img > "$WORK/boot.img"
 rm -f "$WORK/image.zip"

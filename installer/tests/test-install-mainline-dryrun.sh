@@ -87,7 +87,23 @@ echo "$OUT" | grep -q "(--tfa-source none): none" && ok "none: no DSP files" || 
 "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --dry-run --tfa-source cloud >"$W/o6.txt" 2>&1 && bad "--tfa-source cloud accepted" || ok "--tfa-source cloud refused"
 grep -q "tfa-source must be auto, panel, puf, or none" "$W/o6.txt" && ok "error names the valid values" || bad "no useful error: $(cat "$W/o6.txt")"
 
-echo "== 7. --help exits 0 with no payload at all"
+echo "== 7. Bluetooth PSR file: the panel first, the .puf download as the fallback (--psr-source)"
+OUT=$(TSX_PANEL_KIND=android "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run 2>&1)
+echo "$OUT" | grep -q "psr-source=auto" && ok "default --psr-source is auto" || bad "default psr-source not auto: $OUT"
+echo "$OUT" | grep -q "(--psr-source auto): tsx-rescue-install psr /tmp/b (read-only" && ok "auto: the panel is searched first" || bad "auto plan does not search the panel: $OUT"
+echo "$OUT" | grep -q "Only if that finds no valid file: rootfs/vendor-fetch.sh --psr" && ok "auto: the .puf download only as the fallback" || bad "auto plan has no .puf fallback"
+OUT=$(TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run --psr-source puf 2>&1)
+echo "$OUT" | grep -q "(--psr-source puf): rootfs/vendor-fetch.sh --psr here" && ok "puf: the download only" || bad "puf plan wrong: $OUT"
+echo "$OUT" | grep -q "tsx-rescue-install psr" && bad "puf still searches the panel" || ok "puf: the panel is not searched"
+echo "$OUT" | grep -q "tsx-rescue-install tfa /tmp/b" && ok "puf for the PSR leaves the DSP search as it is" || bad "--psr-source changed the DSP plan"
+OUT=$("$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run --psr-source panel 2>&1)
+echo "$OUT" | grep -q "(--psr-source panel): tsx-rescue-install psr /tmp/b only.*No .puf download" && ok "panel: no .puf download" || bad "panel plan wrong: $OUT"
+OUT=$("$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run --psr-source none 2>&1)
+echo "$OUT" | grep -q "(--psr-source none): none" && ok "none: no PSR file" || bad "none plan wrong: $OUT"
+"$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --dry-run --psr-source cloud >"$W/o7.txt" 2>&1 && bad "--psr-source cloud accepted" || ok "--psr-source cloud refused"
+grep -q "psr-source must be auto, panel, puf, or none" "$W/o7.txt" && ok "error names the valid values" || bad "no useful error: $(cat "$W/o7.txt")"
+
+echo "== 8. --help exits 0 with no payload at all"
 "$DRIVER" --help >/dev/null 2>&1 && ok "--help exits 0"
 
 echo "== $N ok, $F failed"

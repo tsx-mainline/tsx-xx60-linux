@@ -44,6 +44,7 @@
 #                        [--uart auto|yes|no] [--kiosk-url URL] [--sshshell FILE]
 #                        [--config FILE] [--wipe-data] [--yes] [--dry-run]
 #                        [--tfa-source auto|panel|puf|none]
+#                        [--psr-source auto|panel|puf|none]
 #
 # PANEL CONFIGURATION (docs/rootfs.md "Panel configuration"): without
 # --config, and unless --yes is also given, the script prompts for panel.conf
@@ -75,17 +76,22 @@
 # A missing DSP set never stops the install. The speakers work without the
 # vendor EQ and volume presets.
 #
-# BLUETOOTH PSR FILE (docs/hardware.md "Bluetooth (CSR8811)"), step 3b: the
-# rescue looks for PSR-CSR8811.psr on the panel in the same read-only way
-# (installer/lib/tsx-psr.sh): the current mainline root, else the stock
-# Android system partition. There is no download fallback. Without the file,
-# the Bluetooth proxy loads only its address.
+# BLUETOOTH PSR FILE (docs/install.md "Bluetooth PSR file"), step 3b,
+# --psr-source (default auto): the rescue looks for PSR-CSR8811.psr on the
+# panel in the same read-only way (installer/lib/tsx-psr.sh): the current
+# mainline root, else the stock Android system partition. If the panel has no
+# valid file, rootfs/vendor-fetch.sh --psr takes it from the same .puf
+# download on THIS machine, and the script pushes it to the rescue.
+#   panel = the panel only. puf = the download only. none = no PSR file.
+# A missing PSR file never stops the install. Without it, the Bluetooth
+# proxy loads only its address.
 #
 # Needs: $TSX_ADMIN_PW (the Crestron console and web UI admin password) for
 # step 1, not for a reinstall. The user is $TSX_ADMIN_USER, default admin.
 # Host tools: sshpass ssh python3 curl sha256sum ip. unzip is needed only for
-# the .puf download. Without that download, a panel that has no DSP files gets
-# no vendor speaker tuning. The panel must be able to connect back to this
+# the .puf download, and debugfs (e2fsprogs) only for the PSR file from it.
+# Without that download, a panel that has no DSP files gets no vendor speaker
+# tuning. The panel must be able to connect back to this
 # host (HTTP on ports 8079 and 8081). Panel logins: rescue root/tsx, mainline
 # kiosk root/$TSX_MAINLINE_PW (default tsx).
 # Test hook: TSX_PANEL_KIND=android|mainline|rescue|unreachable skips the
@@ -94,13 +100,15 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/lib/tsx-rescue.sh"
 . "$HERE/lib/tsx-tfa.sh"   # tsx_tfa_plan (the rest of it runs in the rescue)
+. "$HERE/lib/tsx-psr.sh"   # tsx_psr_plan (the rest of it runs in the rescue)
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' >&2; }   # the whole header comment
-PANEL= PAYLOAD=$HERE/out/payload KERNEL= UART_OPT=auto URL= SSHSHELL= CONFIG= YES=0 DRYRUN=0 RESULTS= WIPE_DATA=0 TFA_SOURCE=auto
+PANEL= PAYLOAD=$HERE/out/payload KERNEL= UART_OPT=auto URL= SSHSHELL= CONFIG= YES=0 DRYRUN=0 RESULTS= WIPE_DATA=0 TFA_SOURCE=auto PSR_SOURCE=auto
 while [ $# -gt 0 ]; do case "$1" in
 	--payload) PAYLOAD=$2; shift 2;; --kernel) KERNEL=$2; shift 2;; --uart) UART_OPT=$2; shift 2;;
 	--kiosk-url) URL=$2; shift 2;; --sshshell) SSHSHELL=$2; shift 2;; --results) RESULTS=$2; shift 2;;
 	--config) CONFIG=$2; shift 2;; --wipe-data) WIPE_DATA=1; shift;; --tfa-source) TFA_SOURCE=$2; shift 2;;
+	--psr-source) PSR_SOURCE=$2; shift 2;;
 	--yes) YES=1; shift;; --dry-run) DRYRUN=1; shift;; -h|--help) usage; exit 0;;
 	--*) echo "unknown option $1" >&2; usage; exit 2;;
 	*) [ -z "$PANEL" ] || { echo "extra argument $1" >&2; exit 2; }; PANEL=$1; shift;;
@@ -109,6 +117,7 @@ esac; done
 case "$KERNEL" in lts|stable) ;; *) echo "tsx-install-mainline: --kernel lts|stable is required" >&2; exit 2;; esac
 case "$UART_OPT" in auto|yes|no) ;; *) echo "--uart must be auto, yes, or no" >&2; exit 2;; esac
 case "$TFA_SOURCE" in auto|panel|puf|none) ;; *) echo "--tfa-source must be auto, panel, puf, or none" >&2; exit 2;; esac
+case "$PSR_SOURCE" in auto|panel|puf|none) ;; *) echo "--psr-source must be auto, panel, puf, or none" >&2; exit 2;; esac
 [ -z "$CONFIG" ] || [ -f "$CONFIG" ] || { echo "tsx-install-mainline: --config file not found: $CONFIG" >&2; exit 2; }
 TSX_CONFIG_BIN=$(cd "$HERE/../rootfs/overlay/usr/local/sbin" && pwd -P)/tsx-config
 [ -n "$RESULTS" ] || RESULTS="$HERE/results/tsx-install-mainline-$(date +%Y%m%d-%H%M).txt"
@@ -124,7 +133,7 @@ for f in "$RESCUE_IMG" "$FLAVOR_DIR/manifest" "$FLAVOR_DIR/root.img" "$FLAVOR_DI
 done
 (cd "$FLAVOR_DIR" && sha256sum -c --quiet SHA256SUMS) || die "$FLAVOR_DIR/SHA256SUMS mismatch"
 [ ! -f "$RESCUE_IMG.sha256" ] || { GOT=$(sha256sum < "$RESCUE_IMG" | cut -d' ' -f1); WANT=$(awk '{print $1}' "$RESCUE_IMG.sha256"); [ "$GOT" = "$WANT" ] || die "$RESCUE_IMG sha256 mismatch"; }
-log "== tsx-install-mainline v2: PANEL=$PANEL PAYLOAD=$PAYLOAD KERNEL=$KERNEL uart=$UART_OPT tfa-source=$TFA_SOURCE dry-run=$DRYRUN"
+log "== tsx-install-mainline v2: PANEL=$PANEL PAYLOAD=$PAYLOAD KERNEL=$KERNEL uart=$UART_OPT tfa-source=$TFA_SOURCE psr-source=$PSR_SOURCE dry-run=$DRYRUN"
 
 MPW=${TSX_MAINLINE_PW:-tsx}
 RPW=tsx   # the rescue's documented default (docs/recovery.md); never overridden here
@@ -193,7 +202,12 @@ if [ "$DRYRUN" = 1 ]; then
 	puf) log "[dry-run] 3: TFA9890 DSP files (--tfa-source puf): rootfs/vendor-fetch.sh here (the .puf download), push its files to the rescue. The panel is not searched";;
 	none) log "[dry-run] 3: TFA9890 DSP files (--tfa-source none): none. The speakers run without the vendor tuning";;
 	esac
-	log "[dry-run] 3b: Bluetooth PSR file: tsx-rescue-install psr /tmp/b (read-only: the current root on eMMC p8, or stock Android's system partition there. The file stays on the panel). Never fatal"
+	case "$PSR_SOURCE" in
+	auto) log "[dry-run] 3b: Bluetooth PSR file (--psr-source auto): tsx-rescue-install psr /tmp/b (read-only: the current root on eMMC p8, or stock Android's system partition there. The file stays on the panel). Only if that finds no valid file: rootfs/vendor-fetch.sh --psr here (the .puf download) and push its file. Never fatal";;
+	panel) log "[dry-run] 3b: Bluetooth PSR file (--psr-source panel): tsx-rescue-install psr /tmp/b only (current root, or stock Android's system partition). No .puf download";;
+	puf) log "[dry-run] 3b: Bluetooth PSR file (--psr-source puf): rootfs/vendor-fetch.sh --psr here (the .puf download), push its file to the rescue. The panel is not searched";;
+	none) log "[dry-run] 3b: Bluetooth PSR file (--psr-source none): none. Bluetooth loads only its address";;
+	esac
 	if [ -n "$CONFIG" ]; then log "[dry-run] panel configuration: --config $CONFIG (prompts would be skipped)"
 	elif [ "$YES" = 1 ] && [ "$KIND" = mainline ] && [ "$KEEP_DATA" = 1 ]; then log "[dry-run] panel configuration: --yes with no --config on a reinstall: the panel's own /data/tsx/panel.conf would be kept in place on the kept tsxdata (only KERNEL_FLAVOR updated)"
 	elif [ "$YES" = 1 ] && [ "$KIND" = mainline ]; then log "[dry-run] panel configuration: --yes with no --config on a reinstall: the panel's own /data/tsx/panel.conf would be kept (copied onto the new tsxdata, if it has one)"
@@ -436,15 +450,51 @@ puf-or-panel)
 none) run_stream_at "$RSSH" "rm -rf /tmp/b/tfa /tmp/b/tfa-panel" || true;;
 esac
 # ------------------------------------------ step 3b: Bluetooth PSR file -----
-# Read-only on the panel, like the DSP files. The file stays on the panel, and
-# there is no download fallback. A failure is never fatal: without the file,
-# the Bluetooth proxy loads only its address (docs/hardware.md).
-log "== step 3b: Bluetooth PSR file: looking on the panel (read-only, the file stays on the panel)"
-if run_stream_at "$RSSH" "sh /tmp/b/tsx-rescue-install psr /tmp/b 2>&1"; then
-	PSR_RES=$(printf '%s\n' "$RS_OUT" | sed -n 's/^PSR-RESULT //p' | tail -n 1)
-	log "  Bluetooth PSR: ${PSR_RES:-no result line}"
+# --psr-source (see the header): read-only on the panel first, like the DSP
+# files. That file stays on the panel. The .puf download on this host is the
+# fallback. A failure is never fatal: without the file, the Bluetooth proxy
+# loads only its address (docs/hardware.md "Bluetooth (CSR8811)").
+psr_puf() {  # rootfs/vendor-fetch.sh --psr here, then push the file into /tmp/b/psr
+	local fetch="$HERE/../rootfs/vendor-fetch.sh" local_dir sha
+	local_dir=${PSR_VENDOR_LOCAL:-"$HERE/../rootfs/vendor-local/csr8811"}
+	log "  Bluetooth PSR: rootfs/vendor-fetch.sh --psr on this host (Crestron's .puf, 357 MB, downloaded once and cached). The log is in $RESULTS"
+	[ -x "$fetch" ] && "$fetch" --psr >>"$RESULTS" 2>&1 || { log "  WARNING: rootfs/vendor-fetch.sh --psr failed (see $RESULTS)"; return 1; }
+	[ -f "$local_dir/$TSX_PSR_NAME" ] || { log "  WARNING: vendor-fetch.sh --psr left no $TSX_PSR_NAME in $local_dir"; return 1; }
+	rm -rf "$STAGE2/psr"; mkdir -p "$STAGE2/psr"
+	cp "$local_dir/$TSX_PSR_NAME" "$STAGE2/psr/"
+	sha=$(sha256sum < "$STAGE2/psr/$TSX_PSR_NAME" | cut -d' ' -f1)
+	{ echo "source=puf"; echo "firmware=$(basename "${TFA_PUF_URL:-tsw-xx60_3.002.1061.001.puf}") (rootfs/vendor-fetch.sh --psr, pinned sha256)"
+	  echo "sha256=$sha $([ "$sha" = "$(tsx_psr_pinned)" ] && echo pinned || echo unpinned)"; } > "$STAGE2/psr/SOURCE"
+	(cd "$STAGE2/psr" && sha256sum "$TSX_PSR_NAME" SOURCE > SHA256SUMS)
+	run_stream_at "$RSSH" "set -e; rm -rf /tmp/b/psr.new; mkdir -p /tmp/b/psr.new; cd /tmp/b/psr.new; for f in $TSX_PSR_NAME SOURCE SHA256SUMS; do wget -q -O \"\$f\" $BASEURL2/psr/\$f; done; sha256sum -c SHA256SUMS >/dev/null; rm SHA256SUMS; cd /tmp/b; rm -rf psr; mv psr.new psr; echo \"psr: \$(sed -n 's/^sha256=//p' psr/SOURCE) in /tmp/b/psr, sha256 checked\"" \
+		|| { log "  WARNING: pushing the .puf's PSR file to the rescue failed"; return 1; }
+	PSR_USED="puf (rootfs/vendor-fetch.sh --psr), sha256 $sha"
+}
+PSR_USED=none PSR_OK=- PSR_SRC=
+if [ "$PSR_SOURCE" = auto ] || [ "$PSR_SOURCE" = panel ]; then
+	log "== step 3b: Bluetooth PSR file (--psr-source $PSR_SOURCE): looking on the panel first (read-only, the file stays on the panel)"
+	if run_stream_at "$RSSH" "sh /tmp/b/tsx-rescue-install psr /tmp/b 2>&1"; then
+		PSR_RES=$(printf '%s\n' "$RS_OUT" | sed -n 's/^PSR-RESULT //p' | tail -n 1)
+		PSR_OK=$(printf '%s\n' "$PSR_RES" | sed -n 's/.*ok=\([01]\).*/\1/p')
+		PSR_SRC=$(printf '%s\n' "$PSR_RES" | sed -n 's/.*source=\([^ ]*\).*/\1/p')
+		[ -n "$PSR_OK" ] || PSR_OK=-
+		log "  Bluetooth PSR on the panel: ${PSR_RES:-no result line}"
+	else
+		log "  WARNING: tsx-rescue-install psr failed (see above)"
+	fi
 else
-	log "  WARNING: tsx-rescue-install psr failed (see above). Bluetooth will load only its address"
+	log "== step 3b: Bluetooth PSR file (--psr-source $PSR_SOURCE): the panel is not searched"
+fi
+PSR_ACTION=$(tsx_psr_plan "$PSR_SOURCE" "$PSR_OK") || true
+case "$PSR_ACTION" in
+use-panel) PSR_USED="panel: $PSR_SRC (no .puf download)";;
+puf) psr_puf || true;;
+none) run_stream_at "$RSSH" "rm -rf /tmp/b/psr" || true;;
+esac
+if [ "$PSR_USED" = none ]; then
+	log "  Bluetooth PSR: no file will be installed: Bluetooth loads only its address (docs/install.md \"Bluetooth PSR file\")"
+else
+	log "  Bluetooth PSR source used: $PSR_USED"
 fi
 if [ "$TFA_USED" = none ]; then
 	log "  TFA9890: no DSP files will be installed: the speakers work, without the vendor EQ/volume presets (later: installer/steps/tsx-deploy-tfa.sh $PANEL)"

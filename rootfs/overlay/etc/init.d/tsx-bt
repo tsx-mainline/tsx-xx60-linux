@@ -6,10 +6,11 @@
 # start: tsx-bt up (chip reset, PSR upload, hciattach, hciN up), then the
 # scanner daemon (tsx-btscan, /usr/local/lib/tsx/btscan.py). It hands the
 # advertising reports to tsx-esphome or the voice satellite over
-# /run/tsx/bt-adv.sock.
+# /run/tsx/bt-adv.sock. With BT_ACTIVE=on it also holds the BLE links of
+# Home Assistant (/run/tsx/bt-gatt.sock, btgatt.py).
 # A failed bring-up never fails the boot: the service logs why
 # (/var/log/tsx-bt.log, /run/tsx/bt.state) and ends without the scanner.
-description="Bluetooth controller and passive BLE scanner for the Home Assistant Bluetooth proxy"
+description="Bluetooth controller, BLE scanner and BLE links for the Home Assistant Bluetooth proxy"
 LOG=/var/log/tsx-bt.log
 PIDFILE=/run/tsx-btscan.pid
 

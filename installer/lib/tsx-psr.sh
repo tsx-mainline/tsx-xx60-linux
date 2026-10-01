@@ -6,6 +6,7 @@
 # These files source it:
 #   - installer/steps/tsx-rescue-install (the `psr` command, in the rescue:
 #     busybox ash, RAM root). It runs BEFORE anything is written to the eMMC.
+#   - installer/tsx-install-mainline (host: tsx_psr_plan only)
 #   - installer/lib/tests/test-tsx-psr.sh (host tests, made-up files only)
 # Use POSIX sh + `local`. The code reads block devices and never writes them.
 # It mounts the old root read-only with `noload` (no journal replay).
@@ -25,8 +26,10 @@
 #   every line that starts with '&' is "&KEY = WORD ...", one key at least)
 #                                                    -> accepted with a warning
 #   anything else                                    -> rejected
-# Without a file, the panel still works: tsx-bt then loads only the Bluetooth
-# address, and the chip runs on its ROM defaults.
+# If the panel has no valid file, the host can take it from the .puf download
+# (rootfs/vendor-fetch.sh --psr, see tsx_psr_plan below). Without a file, the
+# panel still works: tsx-bt then loads only the Bluetooth address, and the
+# chip runs on its ROM defaults.
 # Test hooks: TSX_PSR_PINNED (replaces the pinned sha256) and a directory as
 # the root device (used as the mounted root).
 
@@ -113,4 +116,21 @@ tsx_psr_collect() {
 	echo "psr: no Bluetooth PSR file on the panel. tsx-bt will load only the Bluetooth address"
 	echo "PSR-RESULT source=none ok=0"
 	return 0
+}
+
+# tsx_psr_plan MODE PANEL_OK: print what the host does next (--psr-source
+# MODE). PANEL_OK is 1 if the rescue found a valid file, 0 if it found none,
+# or "-" if nobody asked the rescue.
+#   use-panel   keep the file of the panel, no download
+#   puf         run rootfs/vendor-fetch.sh --psr (the .puf download) and push its file
+#   none        no PSR file
+tsx_psr_plan() {
+	case "$1:$2" in
+	none:*) echo none;;
+	puf:*) echo puf;;
+	panel:1|auto:1) echo use-panel;;
+	panel:*) echo none;;
+	auto:*) echo puf;;
+	*) echo none; return 1;;
+	esac
 }

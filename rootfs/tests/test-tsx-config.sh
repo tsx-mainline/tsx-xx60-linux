@@ -34,9 +34,11 @@ printf '\n# a comment\nPANEL_NAME="Comment-Test"\n' >> "$CFG"
 [ "$(run get PANEL_NAME)" = "Comment-Test" ] && ok "get reads a key after blank lines/comments" || bad "comment tolerance"
 run show >/dev/null 2>&1 && ok "show does not choke on comments" || bad "show choked on comments"
 
-echo "== BT_PROXY and BT_MAC =="
-for v in on off; do run validate BT_PROXY "$v" && ok "BT_PROXY=$v valid" || bad "BT_PROXY=$v rejected"; done
-run validate BT_PROXY yes && bad "BT_PROXY=yes accepted" || ok "BT_PROXY=yes rejected"
+echo "== BT_PROXY, BT_ACTIVE and BT_MAC =="
+for k in BT_PROXY BT_ACTIVE; do
+	for v in on off; do run validate $k "$v" && ok "$k=$v valid" || bad "$k=$v rejected"; done
+	run validate $k yes && bad "$k=yes accepted" || ok "$k=yes rejected"
+done
 run validate BT_MAC "" && ok "an empty BT_MAC is valid (derived from eth0)" || bad "empty BT_MAC rejected"
 run validate BT_MAC 02:aa:BB:cc:dd:0e && ok "a unicast BT_MAC is valid" || bad "unicast BT_MAC rejected"
 for v in 03:aa:bb:cc:dd:ee 00:00:00:00:00:00 02:aa:bb:cc:dd 02-aa-bb-cc-dd-ee "02:aa:bb:cc:dd:ee;x"; do

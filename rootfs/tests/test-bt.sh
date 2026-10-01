@@ -11,6 +11,10 @@
 #  - btscan.py (the passive scanner) against a fake controller
 #    (bt-fake-hci.py): passive scan parameters, the scan only while a client
 #    is connected, and the record format.
+#  - btscan.py + btgatt.py (the active connections) against fake peers
+#    (bt-gatt-peer.py): links, GATT, the slot count, timeouts, drops
+#    (bt-gatt-check.py), the pause of the passive scan around a connect,
+#    and the BT_ACTIVE switch.
 # The PSR files here are made up. They are not the vendor file.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -239,6 +243,70 @@ assert cmds[-1] == ["200c", "0000"], cmds
 EOF
 kill "$SCAN" 2>/dev/null; wait "$SCAN" 2>/dev/null
 [ ! -e "$W/adv.sock" ] && grep -q 'stopped' "$W/btscan.log" && ok "SIGTERM: clean stop, socket removed" || bad "stop: $(tail -3 "$W/btscan.log")"
+
+echo "== btscan.py + btgatt.py: active connections against fake peers =="
+G=$W/gatt; mkdir -p "$G"
+python3 "$HERE/bt-fake-hci.py" "$G/hci.sock" "$G/hci.log" > "$G/fakehci.out" 2>&1 &
+PIDS="$PIDS $!"
+python3 "$HERE/bt-gatt-peer.py" fake "$G/peer.sock" "$G/peer.log" > "$G/peer.out" 2>&1 &
+PIDS="$PIDS $!"
+for _ in $(seq 1 50); do [ -S "$G/hci.sock" ] && [ -S "$G/peer.sock" ] && break; sleep 0.1; done
+printf 'PROXY="on"\nACTIVE="on"\n' > "$G/bt.conf"
+TSX_BT_CONF="$G/bt.conf" TSX_BTSCAN_FAKE_HCI="$G/hci.sock" TSX_BTSCAN_FAKE_L2CAP="$G/peer.sock" TSX_BT_CONNECT_TIMEOUT=2 \
+	python3 "$LIB/btscan.py" --socket "$G/adv.sock" --group "" --max-connections 2 > "$G/btscan.log" 2>&1 &
+SCAN=$!; PIDS="$PIDS $SCAN"
+for _ in $(seq 1 50); do [ -S "$G/bt-gatt.sock" ] && grep -q 'HCI socket open' "$G/btscan.log" && break; sleep 0.1; done
+[ "$(stat -c '%a' "$G/bt-gatt.sock" 2>/dev/null)" = 660 ] && ok "the GATT socket is next to the advertisement socket, mode 660" || bad "GATT socket: $(ls -l "$G" | grep sock)"
+python3 "$HERE/bt-gatt-check.py" "$G/bt-gatt.sock" "$G/peer.log" > "$G/check.out" 2>&1; rc=$?
+sed 's/^/  /' "$G/check.out" | grep -v '^    ok:' || true
+[ $rc = 0 ] && ok "the GATT socket protocol: $(grep -c '  ok:' "$G/check.out") checks (bt-gatt-check.py)" || bad "bt-gatt-check.py: $rc failure(s)"
+# the passive scan pauses while a link comes up and starts again after it
+python3 - "$G/adv.sock" "$G/bt-gatt.sock" <<'PYEOF' && ok "advertisements flow again after a link came up" || bad "no advertisements after a connect: $(grep '^cmd' "$G/hci.log" | tail -12 | tr '\n' ' ')"
+import json, socket, sys, time
+adv = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET); adv.connect(sys.argv[1])
+time.sleep(0.5)
+g = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET); g.connect(sys.argv[2]); g.settimeout(3)
+g.recv(4096)
+g.send(json.dumps({"op": "connect", "addr": 0xC0FFEE000003, "atype": 0}).encode())
+while True:
+    m = json.loads(g.recv(4096))
+    if m.get("ev") == "conn":
+        assert m["connected"], m
+        break
+time.sleep(0.6)
+n0 = 0
+end = time.time() + 1
+adv.settimeout(0.3)
+while time.time() < end:
+    try:
+        adv.recv(128); n0 += 1
+    except socket.timeout:
+        pass
+assert n0 > 0, "no advertisements after the connect"
+g.close(); adv.close()
+PYEOF
+python3 - "$G/hci.log" <<'PYEOF' && ok "HCI order: LE host support once, the scan pauses for the connect and starts again after it" || bad "HCI order: $(grep '^cmd' "$G/hci.log" | tail -12 | tr '\n' ' ')"
+import sys
+cmds = [" ".join(l.split()[1:]) for l in open(sys.argv[1]) if l.startswith("cmd ")]
+# LE Host Supported once for the HCI socket (before the first link)
+assert cmds.count("0c6d 0100") == 1 and cmds[0] == "0c6d 0100", cmds
+# the check above: scan on, off for the connect (pause), then disable,
+# parameters, enable again. After that the stop disconnects the link.
+last_on = max(i for i, c in enumerate(cmds) if c == "200c 0100")
+assert cmds[last_on - 4:last_on + 1] == ["200c 0100", "200c 0000", "200c 0000", "200b 00a000a0000000", "200c 0100"], cmds
+PYEOF
+sed -i 's/ACTIVE="on"/ACTIVE="off"/' "$G/bt.conf"
+python3 - "$G/bt-gatt.sock" <<'PYEOF' && ok "BT_ACTIVE off (bt.conf ACTIVE): a connect is refused at once" || bad "ACTIVE off: see btscan.log"
+import json, socket, sys
+g = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET); g.connect(sys.argv[1]); g.settimeout(2)
+g.recv(4096)
+g.send(json.dumps({"op": "connect", "addr": 0xC0FFEE000001, "atype": 0}).encode())
+m = json.loads(g.recv(4096))
+assert m == {"ev": "conn", "addr": 0xC0FFEE000001, "connected": False, "mtu": 0, "error": 0}, m
+PYEOF
+grep -q 'connect refused: BT_ACTIVE is off' "$G/btscan.log" || bad "no log line for the refused connect"
+kill "$SCAN" 2>/dev/null; wait "$SCAN" 2>/dev/null
+[ ! -e "$G/bt-gatt.sock" ] && ok "SIGTERM: the GATT socket is removed" || bad "GATT socket left after the stop"
 
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-bt || echo FAIL test-bt

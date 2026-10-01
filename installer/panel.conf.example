@@ -97,11 +97,16 @@ KERNEL_FLAVOR=lts
 # Unset or 0 = the splash. See docs/boot.md "Boot splash".
 #BOOT_VERBOSE=
 
-# The passive Bluetooth proxy for Home Assistant (docs/ha.md "Bluetooth
-# proxy"): on or off. When it is on, the panel starts its Bluetooth chip and
-# passes the BLE advertisements that it hears to Home Assistant over the
-# ESPHome API. It never connects to a Bluetooth device. Default: off.
+# The Bluetooth proxy for Home Assistant (docs/ha.md "Bluetooth proxy"): on
+# or off. When it is on, the panel starts its Bluetooth chip and passes the
+# BLE advertisements that it hears to Home Assistant over the ESPHome API.
+# Default: off.
 #BT_PROXY=off
+# Active connections of the Bluetooth proxy: on or off. With BT_PROXY=on and
+# BT_ACTIVE=on, Home Assistant can also connect to BLE devices through the
+# panel (read, write and notifications). Up to 3 links at a time. With off,
+# the panel never connects to a Bluetooth device. Default: off.
+#BT_ACTIVE=off
 # The Bluetooth address of the panel. Empty (default) = the eth0 MAC. The
 # vendor firmware uses the same value.
 #BT_MAC=
