@@ -7,7 +7,8 @@ serves that protocol (aioesphomeapi 46.2.0, bleak-esphome 4.1).
 Passive part (BT_PROXY=on):
 
   DeviceInfoResponse
-      bluetooth_proxy_feature_flags = PASSIVE_SCAN | RAW_ADVERTISEMENTS (33)
+      bluetooth_proxy_feature_flags = PASSIVE_SCAN | RAW_ADVERTISEMENTS |
+                                      STATE_AND_MODE (97)
       bluetooth_mac_address         = the address that tsx-bt loaded
   SubscribeBluetoothLEAdvertisementsRequest (flags RAW_ADVERTISEMENTS)
       -> BluetoothLERawAdvertisementsResponse messages, up to 16
@@ -15,8 +16,15 @@ Passive part (BT_PROXY=on):
   UnsubscribeBluetoothLEAdvertisementsRequest, or a closed connection
       -> no more advertisements for that connection
 
+  BluetoothScannerStateResponse (state, mode, configured_mode)
+      after a subscription, a mode request, and each change of the scanner
+  BluetoothScannerSetModeRequest
+      -> the mode is active only with BT_ACTIVE=on. Otherwise the scan stays
+         passive and the response says so (mode passive, configured_mode as
+         asked).
+
 Active part (BT_PROXY=on and BT_ACTIVE=on): the flags add
-ACTIVE_CONNECTIONS | REMOTE_CACHING | CACHE_CLEARING (55 in total), and
+ACTIVE_CONNECTIONS | REMOTE_CACHING | CACHE_CLEARING (119 in total), and
 Home Assistant can connect to BLE devices through the panel:
 
   SubscribeBluetoothConnectionsFreeRequest
@@ -46,8 +54,9 @@ Home Assistant can connect to BLE devices through the panel:
   error code, or -1 when the link is down.
   A closed Home Assistant connection takes its links down.
 
-No pairing and no scanner mode switch. PAIR and UNPAIR get a negative
-answer.
+No pairing. PAIR and UNPAIR get a negative answer, and so does
+BluetoothSetConnectionParamsRequest (the controller keeps the parameters of the
+kernel).
 
 The advertisements come from tsx-btscan (/usr/local/lib/tsx/btscan.py, run
 as root by /etc/init.d/tsx-bt) over a SOCK_SEQPACKET Unix socket. The
@@ -88,15 +97,20 @@ FEATURE_ACTIVE_CONNECTIONS = 2
 FEATURE_REMOTE_CACHING = 4
 FEATURE_CACHE_CLEARING = 16
 FEATURE_RAW_ADVERTISEMENTS = 32
-FEATURES = FEATURE_PASSIVE_SCAN | FEATURE_RAW_ADVERTISEMENTS
+FEATURE_STATE_AND_MODE = 64
+FEATURES = FEATURE_PASSIVE_SCAN | FEATURE_RAW_ADVERTISEMENTS | FEATURE_STATE_AND_MODE
 ACTIVE_FEATURES = FEATURE_ACTIVE_CONNECTIONS | FEATURE_REMOTE_CACHING | FEATURE_CACHE_CLEARING
 # BluetoothDeviceRequestType
 REQ_CONNECT, REQ_DISCONNECT, REQ_PAIR, REQ_UNPAIR = 0, 1, 2, 3
 REQ_CONNECT_V3_WITH_CACHE, REQ_CONNECT_V3_WITHOUT_CACHE, REQ_CLEAR_CACHE = 4, 5, 6
 ERR_NOT_CONNECTED = -1
 ERR_NOT_SUPPORTED = 6
+ERR_GENERIC = 0x85          # the status of the ESP32 stack for "GATT error"
+MODE_PASSIVE, MODE_ACTIVE = 0, 1
 SUBSCRIPTION_FLAG_RAW = 1
 BATCH_MAX = 16
+QUEUE_MAX = 512             # advertisements that wait for the event loop
+BATCHES_PER_TICK = 8        # messages for each flush interval (128 advertisements)
 FLUSH_INTERVAL = 0.1
 RECONNECT_DELAY = 2.0
 
@@ -127,22 +141,62 @@ def parse_record(msg):
     return address, addr_type & 1, rssi, bytes(msg[9:9 + 62])
 
 
+class AdvQueue:
+    """The advertisements that wait to go to Home Assistant. Beyond QUEUE_MAX
+    the oldest ones are dropped, so a slow event loop or a busy radio never
+    makes the queue grow. Each flush sends at most BATCHES_PER_TICK messages
+    of BATCH_MAX advertisements."""
+
+    def __init__(self, limit=QUEUE_MAX):
+        self.limit = limit
+        self.items = []
+        self.dropped = 0
+
+    def push(self, rec):
+        self.items.append(rec)
+        if len(self.items) > self.limit:
+            over = len(self.items) - self.limit
+            del self.items[:over]
+            self.dropped += over
+
+    def full_batch(self):
+        return len(self.items) >= BATCH_MAX
+
+    def pop_batches(self, limit=BATCHES_PER_TICK):
+        """Up to limit batches (lists of at most BATCH_MAX records)."""
+        out = []
+        while self.items and len(out) < limit:
+            out.append(self.items[:BATCH_MAX])
+            del self.items[:BATCH_MAX]
+        return out
+
+    def __len__(self):
+        return len(self.items)
+
+
 class BtProxy:
     def __init__(self, run_dir=None):
         run = run_dir or os.environ.get("TSX_RUN_DIR", "/run/tsx")
         self.conf_path = os.environ.get("TSX_BT_CONF", os.path.join(run, "bt.conf"))
         self.hw_path = os.environ.get("TSX_HW_CONF", os.path.join(run, "hw.conf"))
         self.mac_path = os.environ.get("TSX_BT_MAC_FILE", os.path.join(run, "bt.mac"))
+        self.state_path = os.environ.get("TSX_BT_STATE", os.path.join(run, "bt.state"))
         self.sock_path = os.environ.get("TSX_BT_ADV_SOCKET", os.path.join(run, "bt-adv.sock"))
         self.gatt = GattBridge(os.environ.get("TSX_BT_GATT_SOCKET", os.path.join(run, "bt-gatt.sock")))
         self._lock = threading.Lock()
         self._subscribers = []
         self._thread = None
         self._wake = threading.Event()
+        self._modes = {}            # connection -> the mode it asked for
+        self._mode_sent = None      # the mode that the scanner got
+        self._scanner = None        # the last state message of the scanner: (state, mode)
 
     # ---- configuration ---------------------------------------------------
     def enabled(self):
-        return hw.present("BT", self.hw_path) and _conf_value(self.conf_path, "PROXY") == "on"
+        """On when panel.conf says so, the board has a module and tsx-bt did
+        not find the kernel without Bluetooth (bt.state says "absent")."""
+        return (hw.present("BT", self.hw_path) and _conf_value(self.conf_path, "PROXY") == "on"
+                and _conf_value(self.state_path, "state") != "absent")
 
     def active(self):
         return self.enabled() and _conf_value(self.conf_path, "ACTIVE") == "on"
@@ -188,6 +242,7 @@ class BtProxy:
                 self._thread = threading.Thread(target=self._run, name="tsx-bt-proxy", daemon=True)
                 self._thread.start()
         self._wake.set()
+        self._send_state([conn])
 
     def unsubscribe(self, conn):
         with self._lock:
@@ -195,6 +250,37 @@ class BtProxy:
                 self._subscribers.remove(conn)
                 _LOGGER.info("Bluetooth advertisements: %d subscriber(s)", len(self._subscribers))
         self._wake.set()
+
+    # ---- scanner state and mode (feature flag 64) ------------------------------
+    def set_mode(self, conn, mode):
+        """BluetoothScannerSetModeRequest: remember the mode of this
+        connection. The scanner uses the active mode if any connection asks
+        for it (and BT_ACTIVE is on)."""
+        if not self.enabled():
+            return
+        with self._lock:
+            self._modes[conn] = MODE_ACTIVE if mode == MODE_ACTIVE else MODE_PASSIVE
+        self._wake.set()
+        self._send_state([conn])
+
+    def _wanted_mode(self):
+        with self._lock:
+            subs = set(self._subscribers)
+            return MODE_ACTIVE if any(m == MODE_ACTIVE for c, m in self._modes.items() if c in subs) else MODE_PASSIVE
+
+    def _send_state(self, conns=None):
+        from aioesphomeapi.api_pb2 import BluetoothScannerStateResponse  # pylint: disable=no-name-in-module
+
+        if self._scanner is None:
+            return
+        state, mode = self._scanner
+        for conn in (conns if conns is not None else self._targets()):
+            with self._lock:
+                configured = self._modes.get(conn, MODE_PASSIVE)
+            try:
+                conn.send_messages([BluetoothScannerStateResponse(state=state, mode=mode, configured_mode=configured)])
+            except Exception:  # noqa: BLE001 - one bad connection must not stop the others
+                _LOGGER.debug("state message to a subscriber failed", exc_info=True)
 
     def _targets(self):
         with self._lock:
@@ -204,6 +290,8 @@ class BtProxy:
         """A Home Assistant connection closed: no advertisements, and its
         BLE links go down."""
         self.unsubscribe(conn)
+        with self._lock:
+            self._modes.pop(conn, None)
         self.gatt.release(conn)
 
     # ---- the reader thread ---------------------------------------------------
@@ -250,30 +338,51 @@ class BtProxy:
 
     def _pump(self, sock):
         sock.settimeout(FLUSH_INTERVAL)
-        batch = []
+        queue = AdvQueue()
+        self._mode_sent = None
+        self._scanner = None
         next_flush = time.monotonic() + FLUSH_INTERVAL
         while self._targets():
+            mode = self._wanted_mode()
+            if mode != self._mode_sent:
+                try:
+                    sock.send(b"m" + bytes((mode,)))
+                    self._mode_sent = mode
+                except OSError as err:
+                    _LOGGER.warning("scanner connection: %s", err)
+                    break
             try:
                 msg = sock.recv(128)
                 if not msg:
                     _LOGGER.warning("the scanner closed the connection")
                     break
-                rec = parse_record(msg)
-                if rec is not None:
-                    batch.append(rec)
+                if len(msg) == 3 and msg[:1] == b"S":
+                    scanner = (msg[1], msg[2])
+                    if scanner != self._scanner:
+                        self._scanner = scanner
+                        self._send_state()
+                else:
+                    rec = parse_record(msg)
+                    if rec is not None:
+                        queue.push(rec)
             except socket.timeout:
                 pass
             except OSError as err:
                 _LOGGER.warning("scanner connection: %s", err)
                 break
             now = time.monotonic()
-            if batch and (len(batch) >= BATCH_MAX or now >= next_flush):
-                self._send(batch)
-                batch = []
+            if queue and (queue.full_batch() or now >= next_flush):
+                for batch in queue.pop_batches():
+                    self._send(batch)
             if now >= next_flush:
                 next_flush = now + FLUSH_INTERVAL
-        if batch and self._targets():
-            self._send(batch)
+                if queue.dropped:
+                    _LOGGER.warning("advertisements dropped: %d (the queue holds at most %d)", queue.dropped, QUEUE_MAX)
+                    queue.dropped = 0
+        if queue and self._targets():
+            for batch in queue.pop_batches(limit=QUEUE_MAX):
+                self._send(batch)
+        self._scanner = None
 
 
 def _uuid_words(text):
@@ -504,6 +613,13 @@ def handle_message(conn, msg):
         return True
     if isinstance(msg, pb.UnsubscribeBluetoothLEAdvertisementsRequest):
         PROXY.unsubscribe(conn)
+        return True
+    if isinstance(msg, pb.BluetoothScannerSetModeRequest):
+        PROXY.set_mode(conn, msg.mode)
+        return True
+    if isinstance(msg, pb.BluetoothSetConnectionParamsRequest):
+        # The kernel owns the connection parameters. Refuse the request.
+        conn.send_messages([pb.BluetoothSetConnectionParamsResponse(address=msg.address, error=ERR_GENERIC)])
         return True
     gatt = PROXY.gatt
     if isinstance(msg, pb.SubscribeBluetoothConnectionsFreeRequest):

@@ -105,6 +105,23 @@ rm -f "$T/run/hw.conf"; : > "$T/bt.log"
 printf '#!/bin/sh\n[ "$2" = BT_PROXY ] && echo "${T_PROXY:-off}"\n' > "$T/pbin/tsx-config"
 out=$(run_start tsx-bt); rc=$?
 [ $rc = 0 ] && echo "$out" | grep -q "BT_PROXY is off" && [ ! -s "$T/bt.log" ] && ok "BT_PROXY off: the chip stays untouched" || bad "proxy off (rc $rc): $out"
+printf '#!/bin/sh\necho "tsx-bt $*" >> "%s/bt.log"\nprintf "state=up\\nhci=hci1\\n" > "%s/run/bt.state"\n' "$T" "$T" > "$T/sbin/tsx-bt"
+: > "$T/bt.log"
+out=$(run_start tsx-bt T_PROXY=on); rc=$?
+[ $rc = 0 ] && echo "$out" | grep -q '^START /usr/bin/python3 /usr/local/lib/tsx/btscan.py --hci hci1$' && grep -qx 'tsx-bt up' "$T/bt.log" \
+	&& ok "BT_PROXY on: tsx-bt up runs first, then the daemon starts on the hci device that it reports" || bad "proxy on (rc $rc): $out"
+grep -q '^supervisor=supervise-daemon' "$I/tsx-bt" && grep -q '^respawn_delay=' "$I/tsx-bt" && grep -q '^respawn_max=0' "$I/tsx-bt" \
+	&& ok "tsx-btscan runs under supervise-daemon with respawn, no limit" || bad "tsx-bt: no supervise-daemon respawn"
+: > "$T/bt.log"; run_fn stop_post tsx-bt >/dev/null
+grep -qx 'tsx-bt down' "$T/bt.log" && ok "stop: the chip goes down after the daemon" || bad "stop_post: $(cat "$T/bt.log")"
+
+: > "$T/bt.log"
+printf '#!/bin/sh\n[ "$2" = BT_PROXY ] && echo ""\n' > "$T/pbin/tsx-config"
+out=$(run_start tsx-bt); rc=$?
+[ $rc = 0 ] && echo "$out" | grep -q "BT_PROXY is off" && [ ! -s "$T/bt.log" ] && ok "empty BT_PROXY: the board default (off on the xx60) keeps the chip untouched" || bad "empty proxy (rc $rc): $out"
+: > "$T/bt.log"; printf '#!/bin/sh\necho "tsx-bt $*" >> "%s/bt.log"\nprintf "state=up\\nhci=hci0\\n" > "%s/run/bt.state"\n' "$T" "$T" > "$T/sbin/tsx-bt"
+out=$(run_start tsx-bt TSX_BT_PROXY_DEFAULT=on); rc=$?
+[ $rc = 0 ] && grep -qx 'tsx-bt up' "$T/bt.log" && echo "$out" | grep -q '^START' && ok "empty BT_PROXY with the board default on: tsx-bt starts" || bad "empty proxy, default on (rc $rc): $out"
 
 echo "== tsx-config =="
 for c in tsx-hw tsx-emmc-state tsx-config; do printf '#!/bin/sh\necho "%s $*" >> "%s/cfg.log"\nexit ${T_FAIL_%s:-0}\n' "$c" "$T" "$(echo $c | tr a-z- A-Z_)" > "$T/sbin/$c"; chmod +x "$T/sbin/$c"; done

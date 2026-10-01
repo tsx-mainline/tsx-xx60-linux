@@ -99,11 +99,11 @@ KERNEL_FLAVOR=lts
 # Unset or 0 = the splash. See docs/boot.md "Boot splash".
 #BOOT_VERBOSE=
 
-# The Bluetooth proxy for Home Assistant (docs/ha.md "Bluetooth proxy"): on
-# or off. When it is on, the panel starts its Bluetooth chip and passes the
-# BLE advertisements that it hears to Home Assistant over the ESPHome API.
+# The Bluetooth proxy for Home Assistant (docs/ha.md "Bluetooth proxy"): on,
+# off, or empty. When it is on, the panel starts its Bluetooth chip and passes
+# the BLE advertisements that it hears to Home Assistant over the ESPHome API.
+# Empty (default) = the default of the panel type: off on the xx60.
 # A panel without a Bluetooth module (government=1) keeps it off, also with on.
-# Default: off.
 #BT_PROXY=off
 # Active connections of the Bluetooth proxy: on or off. With BT_PROXY=on and
 # BT_ACTIVE=on, Home Assistant can also connect to BLE devices through the

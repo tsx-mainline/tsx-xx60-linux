@@ -64,8 +64,10 @@
 #   how the panel hangs, see tsx-orientation. Apply keeps
 #   /etc/tsx/orientation on the root file system for the initramfs, the
 #   splash, the kiosk and tsx-buttons, and turns the running kiosk at once.
-# BT_PROXY (on|off, default off): the passive Bluetooth proxy for Home
-#   Assistant (docs/ha.md "Bluetooth proxy"). Apply writes /run/tsx/bt.conf
+# BT_PROXY (on|off|empty, default empty = the board default, off on the
+#   xx60): the Bluetooth proxy for Home
+#   Assistant (docs/ha.md "Bluetooth proxy"). The board default comes from
+#   TSX_BT_PROXY_DEFAULT (a board file sets it). Apply writes /run/tsx/bt.conf
 #   (world-readable, no secret) for tsx-bt and both ESPHome front ends, and
 #   starts or stops the tsx-bt service when the value changes.
 # BT_ACTIVE (on|off, default off): with BT_PROXY=on, also active connections:
@@ -217,7 +219,8 @@ val_ok() {
 	BLANK_TIMEOUT) printf '%s' "$v" | grep -Eq '^[0-9]{1,5}$' && [ "$v" -le 86400 ];;
 	BOOT_VERBOSE) case "$v" in 0|1) return 0;; esac; return 1;;
 	ORIENTATION) case "$v" in landscape|portrait|landscape-flipped|portrait-flipped) return 0;; esac; return 1;;
-	BT_PROXY|BT_ACTIVE) case "$v" in on|off) return 0;; esac; return 1;;
+	BT_PROXY) case "$v" in on|off|"") return 0;; esac; return 1;;
+	BT_ACTIVE) case "$v" in on|off) return 0;; esac; return 1;;
 	AUTO_BRIGHTNESS) case "$v" in on|off|"") return 0;; esac; return 1;;
 	# lux = sensor lux x ALS_SCALE; empty = 1.0
 	ALS_SCALE) [ -z "$v" ] && return 0; printf '%s' "$v" | grep -Eq '^[0-9]{1,4}(\.[0-9]{1,3})?$' && awk -v x="$v" 'BEGIN{exit !(x >= 0.01 && x <= 1000)}';;
@@ -504,7 +507,8 @@ apply() {
 	# and the Bluetooth proxy of both ESPHome front ends
 	# (rootfs/voice/shim/tsx_panel/bluetooth.py) read it. The voice satellite
 	# runs as kiosk and cannot read $TSX_CONF.
-	btp=$(cfg_get BT_PROXY) || btp=off
+	btp=$(cfg_get BT_PROXY) || btp=
+	[ -n "$btp" ] || btp=${TSX_BT_PROXY_DEFAULT:-off}
 	bta=$(cfg_get BT_ACTIVE) || bta=off
 	# No Bluetooth module: bt.conf says off, so tsx-bt and both ESPHome
 	# front ends never offer the proxy.

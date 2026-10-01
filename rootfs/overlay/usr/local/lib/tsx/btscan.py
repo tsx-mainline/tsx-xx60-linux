@@ -19,6 +19,19 @@ One message is one advertising report:
   1 byte   advertising event type (0 ADV_IND ... 4 SCAN_RSP)
   N bytes  advertising data (0..31 bytes)
 
+A client can also send two bytes: "m" and the scan mode (0 passive, 1
+active). The daemon scans actively only if a client asks for it and bt.conf
+says ACTIVE="on". Otherwise the scan stays passive: nothing goes over the
+air. The daemon sends each client a three-byte state message when the state
+or the mode changes:
+
+  1 byte   "S"
+  1 byte   scanner state (ESPHome: 2 running, 3 failed, 1 starting, 5 stopped)
+  1 byte   scan mode now in use (0 passive, 1 active)
+
+A record is at least 9 bytes long, so a front end tells the two apart by the
+length.
+
 The scan runs only while at least one client is connected. The ESPHome front
 end connects when Home Assistant subscribes to advertisements and
 disconnects when it unsubscribes, so the radio idles without Home Assistant.
@@ -54,7 +67,8 @@ and gets events (the ESPHome message that each one becomes in brackets):
       at the start and on each change (BluetoothConnectionsFreeResponse)
   {"ev": "conn", "addr": A, "connected": B, "mtu": M, "error": E}
       (BluetoothDeviceConnectionResponse). E is an HCI reason
-      (0x08 timeout, 0x13 remote, 0x16 local, 0x3E failed) or 0.
+      (0x08 timeout, 0x13 remote, 0x16 local, 0x3E failed), 0x80 (all
+      connection slots are in use), or 0.
   {"ev": "services", "addr": A, "services": [{"uuid": U, "handle": H,
       "end": H2, "chars": [{"uuid": U, "handle": H, "props": P,
       "descs": [{"uuid": U, "handle": H}]}]}]}   one service each
@@ -79,11 +93,21 @@ so the daemon starts the passive scan again after those events.
   Test hooks: TSX_BTSCAN_FAKE_HCI=<path of a SOCK_SEQPACKET Unix socket>
   replaces the HCI socket. The test acts as the controller on that socket.
   TSX_BTSCAN_FAKE_L2CAP (btgatt.py) replaces the L2CAP sockets.
-  TSX_BT_CONF replaces /run/tsx/bt.conf.
+  TSX_BT_CONF replaces /run/tsx/bt.conf. TSX_BT_MAC_FILE replaces
+  /run/tsx/bt.mac.
+
+  btscan.py --hci hci0 --up    bring the device up (HCIDEVUP) and exit.
+  TSX_BTSCAN_FAKE_UP_ERRNO=<number> makes it fail with that errno (a test hook).
+
+When bt.mac is missing or empty, the daemon reads the address of the
+controller (Read BD_ADDR) and writes it there. A board that loads its own
+address (the xx60: tsx-bt) has bt.mac already. If the controller reports
+another address than bt.mac, the daemon logs a warning.
 """
 
 import argparse
 import errno
+import fcntl
 import grp
 import json
 import logging
@@ -104,9 +128,15 @@ EVT_LE_META = 0x3E
 LE_ADV_REPORT = 0x02
 LE_CONN_COMPLETE = (0x01, 0x0A)
 
+OP_READ_BD_ADDR = 0x1009
 OP_LE_SET_SCAN_PARAMS = 0x200B
 OP_LE_SET_SCAN_ENABLE = 0x200C
 OP_WRITE_LE_HOST_SUPPORTED = 0x0C6D
+
+HCIDEVUP = 0x400448C9    # _IOW('H', 201, int)
+# ESPHome BluetoothScannerState
+STATE_STARTING, STATE_RUNNING, STATE_FAILED, STATE_STOPPED = 1, 2, 3, 5
+MODE_PASSIVE, MODE_ACTIVE = 0, 1
 
 SCAN_INTERVAL = 0x00A0  # 100 ms (0.625 ms units)
 SCAN_WINDOW = 0x00A0    # the same: listen all the time
@@ -166,6 +196,25 @@ def pack_record(addr, addr_type, rssi, evt_type, data):
     return bytes(addr) + struct.pack("BbB", addr_type, rssi, evt_type) + bytes(data)
 
 
+def hci_up(dev):
+    """HCIDEVUP on hci<dev>. Return None on success (or if the device is
+    up already), else an error text. With TSX_BTSCAN_FAKE_HCI the call does
+    nothing and TSX_BTSCAN_FAKE_UP_ERRNO gives the error to return."""
+    if os.environ.get("TSX_BTSCAN_FAKE_HCI") or os.environ.get("TSX_BTSCAN_FAKE_UP_ERRNO"):
+        code = int(os.environ.get("TSX_BTSCAN_FAKE_UP_ERRNO", "0") or 0)
+        return None if code in (0, errno.EALREADY) else os.strerror(code)
+    sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_RAW, socket.BTPROTO_HCI)
+    try:
+        fcntl.ioctl(sock.fileno(), HCIDEVUP, dev)
+    except OSError as err:
+        if err.errno == errno.EALREADY:
+            return None
+        return os.strerror(err.errno) + (" (blocked by rfkill?)" if err.errno == errno.ERFKILL else "")
+    finally:
+        sock.close()
+    return None
+
+
 def conf_value(path, key):
     try:
         with open(path, "r", encoding="utf-8") as fobj:
@@ -188,8 +237,14 @@ class Scanner:
         self.links = None
         self.max_conn = max_conn
         self.conf_path = os.environ.get("TSX_BT_CONF", "/run/tsx/bt.conf")
+        self.mac_path = os.environ.get("TSX_BT_MAC_FILE", "/run/tsx/bt.mac")
         self.paused = False
         self.le_enabled = False
+        self.client_modes = {}   # adv client -> the scan mode it asked for
+        self.scan_mode = MODE_PASSIVE   # the mode of the scan that runs
+        self.scan_failed = False
+        self.sent_state = {}     # adv client -> the last state message sent
+        self.cc_params = {}      # opcode -> return parameters of the last Command Complete
         self.link_event_at = -100.0  # a link came up or went down (retry the scan sooner)
         self.hci = None
         self.server = None
@@ -213,6 +268,9 @@ class Scanner:
             sock.connect(fake)
         else:
             dev = int(self.hci_name.replace("hci", "") or 0)
+            err = hci_up(dev)
+            if err:
+                raise OSError(errno.EIO, f"HCIDEVUP on {self.hci_name}: {err}")
             sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_RAW, socket.BTPROTO_HCI)
             sock.setsockopt(socket.SOL_HCI, socket.HCI_FILTER, hci_filter())
             sock.bind((dev,))
@@ -221,6 +279,42 @@ class Scanner:
         self.hci_error_logged = False
         self.le_enabled = False
         _LOGGER.info("HCI socket open on %s", "the fake controller" if fake else self.hci_name)
+        self.publish_address()
+
+    def publish_address(self):
+        """Read the address of the controller. Write it to bt.mac if the file
+        is missing or empty. Warn if it differs from the file."""
+        try:
+            st = self.send_cmd(OP_READ_BD_ADDR)
+        except OSError as err:
+            self.hci_fail("HCI command", err)
+            return
+        data = self.cc_params.pop(OP_READ_BD_ADDR, b"")
+        if st != 0 or len(data) < 7:
+            _LOGGER.warning("Read BD_ADDR: %s", "no answer" if st is None else f"status 0x{st:02x}")
+            return
+        mac = ":".join(f"{b:02X}" for b in reversed(data[1:7]))
+        if mac == "00:00:00:00:00:00":
+            _LOGGER.warning("the controller reports the address %s: not used", mac)
+            return
+        try:
+            with open(self.mac_path, "r", encoding="utf-8") as fobj:
+                have = fobj.read().strip().upper()
+        except OSError:
+            have = ""
+        if have:
+            if have != mac:
+                _LOGGER.warning("the controller reports address %s, not %s of %s", mac, have, self.mac_path)
+            return
+        try:
+            tmp = self.mac_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fobj:
+                fobj.write(mac + "\n")
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, self.mac_path)
+            _LOGGER.info("Bluetooth address %s from the controller, written to %s", mac, self.mac_path)
+        except OSError as err:
+            _LOGGER.warning("cannot write %s: %s", self.mac_path, err)
 
     def close_hci(self):
         if self.hci is not None:
@@ -255,8 +349,36 @@ class Scanner:
                 raise OSError(errno.EIO, "the HCI socket closed")
         return self.pending.pop(opcode)
 
+    def wanted_mode(self):
+        """Active only if a client asked for it and BT_ACTIVE is on."""
+        if MODE_ACTIVE in self.client_modes.values() and conf_value(self.conf_path, "ACTIVE") == "on":
+            return MODE_ACTIVE
+        return MODE_PASSIVE
+
+    def scan_state(self):
+        if self.scanning or self.paused:
+            return STATE_RUNNING
+        if self.scan_failed:
+            return STATE_FAILED
+        return STATE_STARTING if self.clients else STATE_STOPPED
+
+    def send_state(self, conn=None, force=False):
+        """Tell the clients the scanner state and mode (when it changed)."""
+        msg = bytes((ord("S"), self.scan_state(), self.wanted_mode()))
+        for client in ([conn] if conn is not None else list(self.clients)):
+            if not force and self.sent_state.get(client) == msg:
+                continue
+            self.sent_state[client] = msg
+            try:
+                client.send(msg)
+            except BlockingIOError:
+                self.sent_state.pop(client, None)  # try again at the next change
+            except OSError:
+                self.drop(client)
+
     def set_scan(self, enable):
-        """Start or stop the passive scan. Return True on success."""
+        """Start or stop the scan (passive, or active by wanted_mode()).
+        Return True on success."""
         if self.hci is None:
             return False
         try:
@@ -264,7 +386,8 @@ class Scanner:
                 # Stop a scan that may still run (from us or from the kernel):
                 # the controller refuses new parameters while it scans.
                 self.send_cmd(OP_LE_SET_SCAN_ENABLE, bytes((0, 0)))
-                params = struct.pack("<BHHBB", 0, SCAN_INTERVAL, SCAN_WINDOW, 0, 0)
+                mode = self.wanted_mode()
+                params = struct.pack("<BHHBB", mode, SCAN_INTERVAL, SCAN_WINDOW, 0, 0)
                 st = self.send_cmd(OP_LE_SET_SCAN_PARAMS, params)
                 if st != 0:
                     _LOGGER.warning("LE Set Scan Parameters: %s", "no answer" if st is None else f"status 0x{st:02x}")
@@ -274,13 +397,15 @@ class Scanner:
                     _LOGGER.warning("LE Set Scan Enable: %s", "no answer" if st is None else f"status 0x{st:02x}")
                     return False
                 self.scanning = True
+                self.scan_failed = False
+                self.scan_mode = mode
                 self.last_report = time.monotonic()
-                _LOGGER.info("passive scan on (interval %d ms, window %d ms)",
+                _LOGGER.info("%s scan on (interval %d ms, window %d ms)", "active" if mode else "passive",
                              SCAN_INTERVAL * 625 // 1000, SCAN_WINDOW * 625 // 1000)
             else:
                 self.send_cmd(OP_LE_SET_SCAN_ENABLE, bytes((0, 0)))
                 self.scanning = False
-                _LOGGER.info("passive scan off (%s)", "a link comes up" if self.paused else "no clients")
+                _LOGGER.info("scan off (%s)", "a link comes up" if self.paused else "no clients")
             return True
         except OSError as err:
             self.hci_fail("HCI command", err)
@@ -304,6 +429,7 @@ class Scanner:
             opcode = struct.unpack_from("<H", params, 1)[0]
             if opcode in self.pending:
                 self.pending[opcode] = params[3]
+                self.cc_params[opcode] = bytes(params[3:])
         elif evt == EVT_CMD_STATUS and len(params) >= 4:
             opcode = struct.unpack_from("<H", params, 2)[0]
             if opcode in self.pending and params[0] != 0:
@@ -396,8 +522,11 @@ class Scanner:
         conn.setblocking(False)
         self.clients.append(conn)
         _LOGGER.info("client connected (%d)", len(self.clients))
+        self.send_state(conn, force=True)
 
     def drop(self, conn):
+        self.client_modes.pop(conn, None)
+        self.sent_state.pop(conn, None)
         if conn in self.clients:
             self.clients.remove(conn)
             try:
@@ -533,14 +662,26 @@ class Scanner:
             if self.hci is not None and not self.paused:
                 if want and not self.scanning and now >= self.scan_retry_at:
                     if not self.set_scan(True):
+                        self.scan_failed = True
                         self.scan_retry_at = now + (1.0 if now - self.link_event_at < 10 else 5.0)
                 elif not want and self.scanning:
                     self.set_scan(False)
+                elif want and self.scanning and self.scan_mode != self.wanted_mode():
+                    _LOGGER.info("scan mode change: %s", "active" if self.wanted_mode() else "passive")
+                    if not self.set_scan(True):
+                        self.scan_failed = True
+                        self.scan_retry_at = now + (1.0 if now - self.link_event_at < 10 else 5.0)
                 elif want and self.scanning and now - self.last_report > WATCHDOG:
                     _LOGGER.warning("no advertising report for %d s: sending the scan commands again", int(WATCHDOG))
                     self.scanning = False
                     if not self.set_scan(True):
+                        self.scan_failed = True
                         self.scan_retry_at = now + (1.0 if now - self.link_event_at < 10 else 5.0)
+            if self.hci is None and self.clients:
+                self.scan_failed = True
+            if not self.clients:
+                self.scan_failed = False
+            self.send_state()
             self.stats(now)
             rlist = [self.server] + self.clients + ([self.hci] if self.hci is not None else [])
             wlist = []
@@ -577,6 +718,9 @@ class Scanner:
                         data = b""
                     if not data:
                         self.drop(sock)
+                    elif data[:1] == b"m" and len(data) >= 2:
+                        self.client_modes[sock] = MODE_ACTIVE if data[1] == MODE_ACTIVE else MODE_PASSIVE
+                        _LOGGER.info("client asks for the %s scan", "active" if data[1] == MODE_ACTIVE else "passive")
         if self.links is not None:
             for conn in list(self.gatt_clients):
                 self.gatt_drop(conn)
@@ -609,7 +753,14 @@ def main(argv=None):
     ap.add_argument("--gatt-socket", help="the socket for active connections "
                     "(default: bt-gatt.sock next to --socket, '' = none)")
     ap.add_argument("--max-connections", type=int, default=3)
+    ap.add_argument("--up", action="store_true", help="bring the device up (HCIDEVUP) and exit")
     args = ap.parse_args(argv)
+    if args.up:
+        err = hci_up(int(args.hci.replace("hci", "") or 0))
+        if err:
+            print(f"HCIDEVUP on {args.hci}: {err}", file=sys.stderr)
+            return 1
+        return 0
     logging.basicConfig(level=logging.INFO, format="%(asctime)s tsx-btscan: %(message)s", stream=sys.stdout)
 
     stopping = []

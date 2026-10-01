@@ -67,6 +67,7 @@ ERR_NOT_SUPPORTED = 0x06
 ERR_UNLIKELY = 0x0E
 ERR_NOT_CONNECTED = -1      # ESPHome: "Not connected"
 ERR_TIMEOUT = 0x85          # ESPHome: "Error"
+ERR_NO_RESOURCES = 0x80     # ESPHome: no free connection slot
 CONN_FAIL = 0x3E            # HCI: connection failed to be established
 CONN_TIMEOUT = 0x08         # HCI: connection timeout
 CONN_LOCAL = 0x16           # HCI: connection terminated by local host
@@ -390,7 +391,7 @@ class Links:
             return
         if len(self.links) >= self.limit:
             _LOGGER.warning("%s: no free connection slot (%d in use)", addr_text(addr), len(self.links))
-            self.emit(client, {"ev": "conn", "addr": addr, "connected": False, "mtu": 0, "error": 0})
+            self.emit(client, {"ev": "conn", "addr": addr, "connected": False, "mtu": 0, "error": ERR_NO_RESOURCES})
             return
         self.links[addr] = Link(addr, atype, client)
         self.slots_changed()

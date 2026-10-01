@@ -28,7 +28,7 @@ import statistics
 import sys
 import time
 
-from aioesphomeapi import APIClient, BluetoothProxyFeature
+from aioesphomeapi import APIClient, BluetoothProxyFeature, BluetoothScannerMode
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
 from bleak_esphome.backend.client import ESPHomeClient, ESPHomeClientData
@@ -44,7 +44,7 @@ U_DENIED = "0000fff5-0000-1000-8000-00805f9b34fb"
 CCCD = "00002902-0000-1000-8000-00805f9b34fb"
 WANT_FLAGS = (BluetoothProxyFeature.PASSIVE_SCAN | BluetoothProxyFeature.RAW_ADVERTISEMENTS
               | BluetoothProxyFeature.ACTIVE_CONNECTIONS | BluetoothProxyFeature.REMOTE_CACHING
-              | BluetoothProxyFeature.CACHE_CLEARING)
+              | BluetoothProxyFeature.CACHE_CLEARING | BluetoothProxyFeature.FEATURE_STATE_AND_MODE)
 
 
 class Failed(Exception):
@@ -84,13 +84,25 @@ async def run(args):
     info = await cli.device_info()
     flags = info.bluetooth_proxy_feature_flags_compat(cli.api_version)
     check(flags == WANT_FLAGS, f"device info: Bluetooth proxy flags {int(flags)} = passive, raw advertisements, "
-          "active connections, remote caching, cache clearing")
+          "active connections, remote caching, cache clearing, scanner state and mode")
     source = info.bluetooth_mac_address or info.mac_address
     bdev = ESPHomeBluetoothDevice(info.name, source, available=True)
     cli.subscribe_bluetooth_connections_free(bdev.async_update_ble_connection_limits)
     adverts = Adverts()
+    states = []
+    cli.subscribe_bluetooth_scanner_state(states.append)
     if args.adv:
         cli.subscribe_bluetooth_le_raw_advertisements(adverts)
+        # BT_ACTIVE is on: the active mode request is honored, and back
+        for want in (BluetoothScannerMode.ACTIVE, BluetoothScannerMode.PASSIVE):
+            n = len(states)
+            cli.bluetooth_scanner_set_mode(want)
+            for _ in range(30):
+                await asyncio.sleep(0.1)
+                if len(states) > n and states[-1].mode == want:
+                    break
+            check(states and states[-1].mode == want and states[-1].configured_mode == want,
+                  f"scanner mode {want.name.lower()} after the request (state {states[-1].state.name.lower()})")
     for _ in range(50):
         if bdev.ble_connections_limit:
             break

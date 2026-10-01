@@ -39,6 +39,8 @@ for k in BT_PROXY BT_ACTIVE; do
 	for v in on off; do run validate $k "$v" && ok "$k=$v valid" || bad "$k=$v rejected"; done
 	run validate $k yes && bad "$k=yes accepted" || ok "$k=yes rejected"
 done
+run validate BT_PROXY "" && ok "an empty BT_PROXY is valid (the board default)" || bad "empty BT_PROXY rejected"
+run validate BT_ACTIVE "" && bad "an empty BT_ACTIVE accepted" || ok "an empty BT_ACTIVE is rejected"
 run validate BT_MAC "" && ok "an empty BT_MAC is valid (derived from eth0)" || bad "empty BT_MAC rejected"
 run validate BT_MAC 02:aa:BB:cc:dd:0e && ok "a unicast BT_MAC is valid" || bad "unicast BT_MAC rejected"
 for v in 03:aa:bb:cc:dd:ee 00:00:00:00:00:00 02:aa:bb:cc:dd 02-aa-bb-cc-dd-ee "02:aa:bb:cc:dd:ee;x"; do

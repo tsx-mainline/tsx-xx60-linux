@@ -6,16 +6,22 @@ device info, then subscribe to raw advertisements.
 
   esphome-bt-check.py PORT on|off [--key BASE64] [--mac 02:AA:BB:CC:DD:EE]
 
-on:  flags = PASSIVE_SCAN | RAW_ADVERTISEMENTS, bluetooth_mac_address = --mac,
-     and the three advertisements of bt-fake-hci.py arrive (address as the
-     48-bit integer, RSSI, address type 0/1, the data bytes).
+on:  flags = PASSIVE_SCAN | RAW_ADVERTISEMENTS | STATE_AND_MODE,
+     bluetooth_mac_address = --mac, and the three advertisements of
+     bt-fake-hci.py arrive (address as the 48-bit integer, RSSI, address type
+     0/1, the data bytes). The scanner state is RUNNING. A connection
+     parameter request gets an error.
 off: no flags, and a subscription brings no advertisements.
 """
 import argparse
 import asyncio
 import sys
 
-from aioesphomeapi import APIClient, BluetoothProxyFeature
+from aioesphomeapi import APIClient, BluetoothProxyFeature, BluetoothScannerMode, BluetoothScannerState
+from aioesphomeapi.api_pb2 import (  # pylint: disable=no-name-in-module
+    BluetoothSetConnectionParamsRequest,
+    BluetoothSetConnectionParamsResponse,
+)
 
 WANT = {
     "C0:FF:EE:00:00:01": (-60, 1, "0201060aff4c001005031c000001"),
@@ -35,11 +41,12 @@ async def main(args) -> int:
         info = await client.device_info()
         flags = info.bluetooth_proxy_feature_flags_compat(client.api_version)
         if args.mode == "on":
-            want = BluetoothProxyFeature.PASSIVE_SCAN | BluetoothProxyFeature.RAW_ADVERTISEMENTS
+            want = (BluetoothProxyFeature.PASSIVE_SCAN | BluetoothProxyFeature.RAW_ADVERTISEMENTS
+                    | BluetoothProxyFeature.FEATURE_STATE_AND_MODE)
             assert flags == want, flags
             assert not flags & BluetoothProxyFeature.ACTIVE_CONNECTIONS, flags
             assert info.bluetooth_mac_address == args.mac, info.bluetooth_mac_address
-            print(f"OK: device info: Bluetooth proxy flags {int(flags)} (passive, raw advertisements), "
+            print(f"OK: device info: Bluetooth proxy flags {int(flags)} (passive, raw advertisements, scanner state and mode), "
                   f"address {info.bluetooth_mac_address}")
         else:
             assert flags == 0, flags
@@ -53,6 +60,8 @@ async def main(args) -> int:
             for adv in msg.advertisements:
                 seen[addr_str(adv.address)] = (adv.rssi, adv.address_type, adv.data.hex())
 
+        states = []
+        client.subscribe_bluetooth_scanner_state(states.append)
         unsub = client.subscribe_bluetooth_le_raw_advertisements(on_adv)
         for _ in range(40):
             await asyncio.sleep(0.1)
@@ -63,6 +72,20 @@ async def main(args) -> int:
             assert max(batches) <= 16, batches
             print(f"OK: raw advertisements arrived ({sum(batches)} in {len(batches)} messages), "
                   "address, RSSI, address type and data exact")
+            assert states and states[-1].state == BluetoothScannerState.RUNNING, states
+            assert states[-1].mode == BluetoothScannerMode.PASSIVE, states
+            print("OK: the scanner state is RUNNING, mode passive")
+            got = []
+            req = BluetoothSetConnectionParamsRequest(address=0xC0FFEE000001, min_interval=6, max_interval=12,
+                                                      latency=0, timeout=500)
+            client._get_connection().send_message_callback_response(
+                req, got.append, (BluetoothSetConnectionParamsResponse,))
+            for _ in range(30):
+                await asyncio.sleep(0.1)
+                if got:
+                    break
+            assert got and got[0].address == 0xC0FFEE000001 and got[0].error != 0, got
+            print(f"OK: a connection parameter request gets a negative answer (error {got[0].error})")
         else:
             assert not seen, seen
             print("OK: no advertisements while BT_PROXY is off")

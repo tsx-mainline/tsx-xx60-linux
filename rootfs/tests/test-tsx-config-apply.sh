@@ -231,6 +231,14 @@ grep -qx 'ACTIVE="on"' "$FX/run/tsx/bt.conf" && ok "BT_ACTIVE=on reaches bt.conf
 	|| bad "BT_ACTIVE=on: $(restarts)/$(vrestarts)/$(btl restart) restarts (was $r0/$v0/$s0)"
 set_ BT_PROXY off >/dev/null; applyp
 [ "$(btl stop)" -ge 1 ] && ok "BT_PROXY=off stops tsx-bt" || bad "BT_PROXY=off did not stop tsx-bt"
+set_ BT_PROXY "" >/dev/null; applyp
+grep -qx 'PROXY="off"' "$FX/run/tsx/bt.conf" && ok "an empty BT_PROXY is the board default: off on the xx60" || bad "empty BT_PROXY: $(cat "$FX/run/tsx/bt.conf")"
+s1=$(btl restart); TSX_BT_PROXY_DEFAULT=on applyp
+grep -qx 'PROXY="on"' "$FX/run/tsx/bt.conf" && [ "$(btl restart)" = $((s1 + 1)) ] \
+	&& ok "an empty BT_PROXY follows the default of the board file (TSX_BT_PROXY_DEFAULT=on): bt.conf on, tsx-bt restarts" \
+	|| bad "empty BT_PROXY, board default on: $(cat "$FX/run/tsx/bt.conf"), $(btl restart) restarts (was $s1)"
+set_ BT_PROXY off >/dev/null; TSX_BT_PROXY_DEFAULT=on applyp
+grep -qx 'PROXY="off"' "$FX/run/tsx/bt.conf" && ok "BT_PROXY=off wins over a board default of on" || bad "BT_PROXY=off, board default on: $(cat "$FX/run/tsx/bt.conf")"
 echo "== AUTO_BRIGHTNESS and ALS_SCALE: /run/tsx/als.panel for tsx-als =="
 rm -f "$FX/run/tsx/als.panel"; applyp
 [ ! -e "$FX/run/tsx/als.panel" ] && ok "als.panel: not written while neither key is set" || bad "als.panel written by default: $(cat "$FX/run/tsx/als.panel")"

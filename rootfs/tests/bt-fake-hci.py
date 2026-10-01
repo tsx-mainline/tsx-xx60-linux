@@ -2,14 +2,15 @@
 """A fake Bluetooth controller for the host tests of tsx-btscan
 (rootfs/overlay/usr/local/lib/tsx/btscan.py, TSX_BTSCAN_FAKE_HCI).
 
-  bt-fake-hci.py SOCKET LOG
+  bt-fake-hci.py SOCKET LOG [BD_ADDR]
 
 It listens on SOCKET (SOCK_SEQPACKET) and serves one tsx-btscan at a time.
 Each HCI command gets a Command Complete with status 0, except "LE Set Scan
 Enable (disable)" while no scan runs: that gets status 0x0C (Command
 Disallowed), as a real controller answers. While the scan is on, the fake
 sends the ADVERTS below every 0.2 s: one LE Advertising Report event with
-two reports, then one with a single report. HCI Disconnect (0x0406) gets a
+two reports, then one with a single report. Read BD_ADDR (0x1009) gets
+BD_ADDR (default 02:AA:BB:CC:DD:01). HCI Disconnect (0x0406) gets a
 Command Status and a Disconnection Complete (reason 0x16) for the handle.
 LOG gets one line per command: "cmd OPCODE PARAMS-HEX". The advertisement
 data is made up.
@@ -42,6 +43,7 @@ def report(entries):
 
 def main():
     path, logpath = sys.argv[1], sys.argv[2]
+    bd_addr = addr_bytes(sys.argv[3] if len(sys.argv) > 3 else "02:AA:BB:CC:DD:01")
     try:
         os.unlink(path)
     except FileNotFoundError:
@@ -90,8 +92,9 @@ def main():
                     status = 0x0C
                 else:
                     scanning = params[0] == 1
+            extra = bd_addr if opcode == 0x1009 else b""
             try:
-                conn.send(bytes((0x04, 0x0E, 4, 1)) + struct.pack("<H", opcode) + bytes((status,)))
+                conn.send(bytes((0x04, 0x0E, 4 + len(extra), 1)) + struct.pack("<H", opcode) + bytes((status,)) + extra)
             except OSError:
                 conn.close()
                 conn = None

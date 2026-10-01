@@ -7,12 +7,17 @@
 #    lost packet, a refused key, a silent chip.
 #  - tsx-bt (the bring-up script) with a fake sysfs and fake tools: the
 #    order of the steps, the Bluetooth address and its PSR line, the state
-#    file, and a soft failure with a reason for each broken step. On a
-#    panel without a Bluetooth module (hw.conf BT=no, government=1): state
-#    absent, exit 0, and no rfkill, UART or tool call.
+#    file, and a soft failure with a reason for each broken step. Also: no
+#    address source, no Bluetooth in the kernel, a board with no chip file
+#    and a kernel driver that registers hci0 late (the wait and its limit).
+#    On a panel without a Bluetooth module (hw.conf BT=no, government=1):
+#    state absent, exit 0, and no rfkill, UART or tool call.
 #  - btscan.py (the passive scanner) against a fake controller
 #    (bt-fake-hci.py): passive scan parameters, the scan only while a client
 #    is connected, and the record format.
+#  - btscan.py: HCIDEVUP (--up), the controller address (Read BD_ADDR to
+#    bt.mac), the scan mode and the state messages. bluetooth.py: the
+#    advertisement queue cap, the feature flags and the mode of a connection.
 #  - btscan.py + btgatt.py (the active connections) against fake peers
 #    (bt-gatt-peer.py): links, GATT, the slot count, timeouts, drops
 #    (bt-gatt-check.py), the pause of the passive scan around a connect,
@@ -124,6 +129,15 @@ if open("$W/psload-mode").read().strip() == "fail":
 print("csr_psload: done: 5 PS keys loaded from 2 file(s)")
 EOF
 echo ok > "$W/psload-mode"
+# fake btscan.py: "--up" is the HCIDEVUP step of tsx-bt
+cat > "$W/lib/btscan.py" <<EOF
+import sys
+with open("$LOG", "a") as f:
+    f.write("hcidevup %s\n" % " ".join(sys.argv[1:]))
+if open("$W/up-mode").read().strip() == "down":
+    print("HCIDEVUP on hci0: Operation not possible due to RF-kill (blocked by rfkill?)", file=sys.stderr)
+    sys.exit(1)
+EOF
 cat > "$B/hciattach" <<EOF
 #!/bin/sh
 echo "hciattach \$*" >> "$LOG"
@@ -144,8 +158,9 @@ mkdir -p "$W/proc/1"; printf 'init\0' > "$W/proc/1/cmdline"
 printf '#!/bin/sh\nexit 0\n' > "$B/logger"
 chmod +x "$B"/*
 cp "$W/base.psr" "$W/vendor.psr"
-btsh() { env PATH="$B:$PATH" TSX_RUN_DIR="$R" TSX_SYSFS="$S" TSX_BT_TTY="$W/ttyAML1" TSX_BT_PSR="$W/vendor.psr" \
-	TSX_BT_LIB="$W/lib" TSX_BT_SETTLE=0 TSX_PROC="$W/proc" busybox sh "$BT" "$@"; }
+btsh() { env PATH="$B:$PATH" TSX_RUN_DIR="$R" TSX_SYSFS="$S" TSX_BT_TTY="$W/ttyAML1" TSX_BT_PSR="${PSRF:-$W/vendor.psr}" \
+	TSX_BT_LIB="$W/lib" TSX_BT_CHIP="$LIB/bt-chip-csr8811.sh" TSX_BT_MODDIR="$W/nomod" \
+	TSX_BT_WAIT=1 TSX_BT_SETTLE=0 TSX_PROC="$W/proc" busybox sh "$BT" "$@"; }
 st() { sed -n "s/^$1=//p" "$R/bt.state"; }
 
 [ "$(btsh mac)" = 00:10:7F:AB:CD:EF ] && ok "the address is the eth0 MAC, upper case (the vendor value)" || bad "mac: $(btsh mac)"
@@ -160,15 +175,11 @@ btsh up > "$W/up.log" 2>&1; rc=$?
 [ "$(cat "$W/loaded-bdaddr.psr")" = "&0001 = 00ab cdef 007f 0010" ] && ok "the PSKEY_BDADDR line loads last: $(cat "$W/loaded-bdaddr.psr")" || bad "bdaddr psr: $(cat "$W/loaded-bdaddr.psr")"
 [ "$(cat "$S/class/rfkill/rfkill1/soft")" = 0 ] && [ "$(cat "$S/class/rfkill/rfkill0/soft")" = 0 ] && ok "the bt-dev rfkill ends unblocked, the wlan rfkill is not touched" || bad "rfkill state"
 order=$(sed 's/ .*//' "$LOG" | tr '\n' ' ')
-[ "$order" = "psload hciattach hciconfig hciconfig " ] && ok "order: reset, psload, hciattach, hciconfig up" || bad "order: $order"
+[ "$order" = "psload hciattach hcidevup " ] && ok "order: reset, psload, hciattach, HCIDEVUP" || bad "order: $order"
+grep -q '^hcidevup --hci hci0 --up$' "$LOG" && ok "HCIDEVUP runs as btscan.py --hci hci0 --up" || bad "hcidevup call: $(grep hcidevup "$LOG")"
 grep -q "^psload rfkill=0 --device $W/ttyAML1 --baud 115200 $W/vendor.psr $R/bt-bdaddr.psr" "$LOG" && ok "psload: unblocked chip, 115200, the vendor PSR first" || bad "psload call: $(grep psload "$LOG")"
 grep -q "^hciattach -s 115200 $W/ttyAML1 bcsp 115200" "$LOG" && ok "hciattach -s 115200 TTY bcsp 115200 (the vendor command)" || bad "hciattach call"
 
-echo 02:11:11:11:11:11 > "$W/bd"; rm -rf "$S/class/bluetooth/hci0"
-btsh up > "$W/up2.log" 2>&1
-grep -q 'reports BD address 02:11:11:11:11:11, not 00:10:7F:AB:CD:EF' "$W/up2.log" && [ "$(st state)" = up ] \
-	&& ok "a different BD address from the chip is a warning, not a failure" || bad "address mismatch: $(cat "$W/up2.log")"
-echo 00:10:7F:AB:CD:EF > "$W/bd"
 
 failcase() {  # failcase TITLE EXPECTED-REASON-PART
 	rm -rf "$S/class/bluetooth/hci0"
@@ -182,9 +193,55 @@ failcase "PSR upload fails on a government=0 panel" "this panel has government=0
 rm -f "$R/hw.conf"; echo ok > "$W/psload-mode"
 echo fail > "$W/attach-mode"; failcase "hciattach fails" "hciattach: BCSP initialization timed out"
 echo nodev > "$W/attach-mode"; failcase "no hci device" "no new hci device"; echo ok > "$W/attach-mode"
-echo down > "$W/up-mode"; failcase "hci0 stays down" "does not come up"; echo up > "$W/up-mode"
+echo down > "$W/up-mode"; failcase "HCIDEVUP fails" "hci0 does not come up: HCIDEVUP on hci0"; echo up > "$W/up-mode"
 mv "$W/ttyAML1" "$W/ttyAML1.x"; failcase "no UART node" "does not exist"; mv "$W/ttyAML1.x" "$W/ttyAML1"
-mv "$S/class/net/eth0" "$W/eth0.x"; failcase "no MAC at all" "no Bluetooth address"; mv "$W/eth0.x" "$S/class/net/eth0"
+echo 'MAC="zz"' > "$R/bt.conf"; failcase "BT_MAC is not an address" "BT_MAC is not a valid address"; rm -f "$R/bt.conf"
+
+# no address source: no BT_MAC and no network MAC. The controller keeps its
+# own address: no PSKEY_BDADDR line, no bt.mac (tsx-btscan writes it then)
+mv "$S/class/net/eth0" "$W/eth0.x"; rm -rf "$S/class/bluetooth/hci0" "$R/bt.mac"; : > "$LOG"
+btsh up > "$W/nomac.log" 2>&1; rc=$?
+[ $rc = 0 ] && [ "$(st state)" = up ] && [ -z "$(st mac)" ] && [ ! -e "$R/bt.mac" ] \
+	&& grep -q 'the controller keeps its own address' "$W/nomac.log" && ! grep -q 'bt-bdaddr.psr' "$LOG" \
+	&& ok "no address source: the bring-up goes on, no address is loaded, no bt.mac (the daemon reads it from the controller)" \
+	|| { bad "no address source: exit $rc, $(cat "$R/bt.state")"; cat "$W/nomac.log"; }
+[ "$(btsh mac)" = "none: the controller keeps its own address" ] && ok "tsx-bt mac: says that the controller keeps its address" || bad "mac without a source: $(btsh mac)"
+mv "$W/eth0.x" "$S/class/net/eth0"
+
+# the start rules: no Bluetooth in the kernel
+mv "$S/class/bluetooth" "$W/btclass.x"; rm -f "$R/bt.state"; : > "$LOG"
+btsh up > "$W/nokernel.log" 2>&1; rc=$?
+[ $rc = 0 ] && [ "$(st state)" = absent ] && [ "$(st reason)" = "the kernel has no Bluetooth" ] && [ ! -s "$LOG" ] \
+	&& ok "the kernel has no Bluetooth: state=absent, exit 0, no chip step" || { bad "no kernel Bluetooth: exit $rc, $(cat "$R/bt.state"), $(cat "$LOG")"; cat "$W/nokernel.log"; }
+mkdir -p "$W/nomod/kernel/net/bluetooth"; : > "$W/nomod/kernel/net/bluetooth/bluetooth.ko.gz"
+btsh up > "$W/modkernel.log" 2>&1
+[ "$(st state)" = up ] && ok "Bluetooth as a module on the disk counts as Bluetooth in the kernel" || bad "module on disk: $(cat "$R/bt.state")"
+rm -rf "$W/nomod"; mkdir -p "$S/class/bluetooth"; rm -rf "$W/btclass.x" "$S/class/bluetooth/hci0"
+
+# a board with no chip file: the kernel driver registers hci0 late
+nochip() { env PATH="$B:$PATH" TSX_RUN_DIR="$R" TSX_SYSFS="$S" TSX_BT_LIB="$W/lib" TSX_BT_CHIP=none TSX_PROC="$W/proc" \
+	TSX_BT_MODDIR="$W/nomod" "$@" busybox sh "$BT" up; }
+: > "$LOG"; rm -f "$R/bt.state"
+( sleep 1; mkdir -p "$S/class/bluetooth/hci0" ) &
+t0=$(date +%s)
+nochip TSX_BT_WAIT=10 > "$W/late.log" 2>&1; rc=$?
+[ $rc = 0 ] && [ "$(st state)" = up ] && [ "$(st hci)" = hci0 ] && [ $(($(date +%s) - t0)) -ge 1 ] \
+	&& ok "no chip file: tsx-bt waits for hci0, which the kernel driver registers after 1 s" || { bad "late hci0: exit $rc, $(cat "$R/bt.state")"; cat "$W/late.log"; }
+[ "$(sed 's/ .*//' "$LOG" | tr '\n' ' ')" = "hcidevup " ] && ok "no chip file: no rfkill pulse, no PSR, no hciattach, only HCIDEVUP" || bad "no chip file calls: $(cat "$LOG")"
+rm -rf "$S/class/bluetooth/hci0"; rm -f "$R/bt.state"
+t0=$(date +%s)
+nochip TSX_BT_WAIT=1 > "$W/never.log" 2>&1; rc=$?
+[ $rc = 1 ] && [ "$(st state)" = failed ] && st reason | grep -q 'hci0 did not show up in 1 s' && [ $(($(date +%s) - t0)) -lt 5 ] \
+	&& ok "no chip file, no hci0: the wait ends at the limit (1 s), state=failed with the reason" || { bad "hci0 never shows up: exit $rc, $(cat "$R/bt.state")"; cat "$W/never.log"; }
+mkdir -p "$S/class/bluetooth/hci1"; rm -f "$R/bt.state"
+nochip TSX_BT_HCI=hci1 > "$W/hci1.log" 2>&1
+[ "$(st hci)" = hci1 ] && grep -q '^hcidevup --hci hci1 --up$' "$LOG" && ok "TSX_BT_HCI names the device that tsx-bt waits for and brings up" || bad "TSX_BT_HCI: $(cat "$R/bt.state")"
+rm -rf "$S/class/bluetooth/hci1"; mkdir -p "$S/class/bluetooth/hci0"
+echo 'MAC="02:11:22:33:44:55"' > "$R/bt.conf"; nochip > "$W/nochipmac.log" 2>&1
+grep -q 'BT_MAC does not apply on this board' "$W/nochipmac.log" && [ ! -e "$R/bt.mac" ] && ok "no chip file: BT_MAC cannot apply, a warning, no bt.mac" || bad "BT_MAC without a chip file: $(cat "$W/nochipmac.log")"
+rm -f "$R/bt.conf" "$R/bt.state"; rm -rf "$S/class/bluetooth/hci0"
+env PATH="$B:$PATH" TSX_RUN_DIR="$R" TSX_SYSFS="$S" TSX_BT_LIB="$W/lib" TSX_BT_CHIP=none TSX_PROC="$W/proc" busybox sh "$BT" down > "$W/nochipdown.log" 2>&1
+[ "$(st state)" = down ] && ok "no chip file: down only records the state" || bad "no chip file down: $(cat "$R/bt.state")"
 
 echo "== tsx-bt: a panel without a Bluetooth module (hw.conf BT=no) =="
 rm -rf "$S/class/bluetooth/hci0" "$R/bt.state" "$R/bt-bdaddr.psr"; : > "$LOG"
@@ -213,8 +270,7 @@ btsh up > "$W/up3.log" 2>&1
 [ "$(st state)" = up ] && [ "$(st psr)" = bdaddr-only ] && grep -q 'no vendor PSR file' "$W/up3.log" \
 	&& ok "no vendor PSR: only the address loads, the bring-up goes on" || bad "no vendor PSR: $(cat "$R/bt.state")"
 printf 'bad\n' > "$W/vendor.psr.bad"; cp "$W/vendor.psr.bad" "$W/bad"
-env PATH="$B:$PATH" TSX_RUN_DIR="$R" TSX_SYSFS="$S" TSX_BT_TTY="$W/ttyAML1" TSX_BT_PSR="$W/bad" TSX_BT_LIB="$W/lib" TSX_BT_SETTLE=0 TSX_PROC="$W/proc" \
-	busybox sh "$BT" up > "$W/up4.log" 2>&1
+PSRF="$W/bad" btsh up > "$W/up4.log" 2>&1
 [ "$(st psr)" = bdaddr-only ] && grep -q 'does not parse' "$W/up4.log" && ok "a PSR that does not parse is left out, with a warning" || bad "bad PSR: $(cat "$W/up4.log")"
 : > "$LOG"
 # a running hciattach on this tty (a real process with a fake /proc entry),
@@ -252,6 +308,9 @@ seen = {}
 end = time.time() + 5
 while len(seen) < 3 and time.time() < end:
     m = s.recv(128)
+    if len(m) < 9:
+        assert m[:1] == b"S", m   # a scanner state message
+        continue
     addr = ":".join("%02X" % b for b in reversed(m[:6]))
     atype, rssi, etype = struct.unpack_from("BbB", m, 6)
     seen[addr] = (atype, rssi, etype, m[9:].hex())
@@ -264,12 +323,134 @@ EOF
 sleep 1.5
 python3 - "$W/hci.log" <<'EOF' && ok "passive scan: disable, parameters (type passive, 100 ms/100 ms, public, no filter), enable without duplicate filter. Disable after the last client left" || { bad "HCI commands"; cat "$W/hci.log"; }
 import sys
-cmds = [l.split()[1:] for l in open(sys.argv[1]) if l.startswith("cmd ")]
+cmds = [l.split()[1:] for l in open(sys.argv[1]) if l.startswith("cmd ") and not l.startswith("cmd 1009")]
 assert cmds[:3] == [["200c", "0000"], ["200b", "00a000a0000000"], ["200c", "0100"]], cmds
 assert cmds[-1] == ["200c", "0000"], cmds
 EOF
 kill "$SCAN" 2>/dev/null; wait "$SCAN" 2>/dev/null
 [ ! -e "$W/adv.sock" ] && grep -q 'stopped' "$W/btscan.log" && ok "SIGTERM: clean stop, socket removed" || bad "stop: $(tail -3 "$W/btscan.log")"
+
+echo "== btscan.py: HCIDEVUP, controller address, scan mode and state =="
+BS="python3 $LIB/btscan.py"
+TSX_BTSCAN_FAKE_HCI=x $BS --hci hci0 --up && ok "--up: HCIDEVUP done (the fake controller), exit 0" || bad "--up with the fake controller"
+TSX_BTSCAN_FAKE_UP_ERRNO=114 $BS --hci hci0 --up && ok "--up: EALREADY (already up) is not an error" || bad "--up with EALREADY"
+TSX_BTSCAN_FAKE_UP_ERRNO=16 $BS --hci hci0 --up > "$W/up-err.log" 2>&1; rc=$?
+[ $rc = 1 ] && grep -q 'HCIDEVUP on hci0: ' "$W/up-err.log" && ok "--up: another error gives exit 1 and the reason" || bad "--up with EBUSY: exit $rc, $(cat "$W/up-err.log")"
+M=$W/mode; mkdir -p "$M"
+python3 "$HERE/bt-fake-hci.py" "$M/hci.sock" "$M/hci.log" 02:AA:BB:CC:DD:01 > "$M/fakehci.out" 2>&1 &
+PIDS="$PIDS $!"
+for _ in $(seq 1 50); do [ -S "$M/hci.sock" ] && break; sleep 0.1; done
+printf 'PROXY="on"\nACTIVE="off"\n' > "$M/bt.conf"
+rm -f "$M/bt.mac"
+TSX_BT_CONF="$M/bt.conf" TSX_BT_MAC_FILE="$M/bt.mac" TSX_BTSCAN_FAKE_HCI="$M/hci.sock" python3 "$LIB/btscan.py" \
+	--socket "$M/adv.sock" --gatt-socket "" --group "" > "$M/btscan.log" 2>&1 &
+SCAN=$!; PIDS="$PIDS $SCAN"
+for _ in $(seq 1 50); do [ -S "$M/adv.sock" ] && [ -s "$M/bt.mac" ] && break; sleep 0.1; done
+[ "$(cat "$M/bt.mac" 2>/dev/null)" = 02:AA:BB:CC:DD:01 ] && [ "$(stat -c '%a' "$M/bt.mac")" = 644 ] \
+	&& ok "no bt.mac: the daemon reads BD_ADDR from the controller and writes it to bt.mac (mode 644)" || bad "bt.mac from the controller: $(cat "$M/bt.mac" 2>/dev/null), $(tail -3 "$M/btscan.log")"
+python3 - "$M/adv.sock" "$M/bt.conf" "$M/hci.log" <<'PYEOF' && ok "scan mode and state: state message first, passive with BT_ACTIVE off, active after BT_ACTIVE=on, passive again on request" || bad "scan mode: see above"
+import re, socket, sys, time
+sock, conf, hcilog = sys.argv[1:4]
+def conn():
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET); s.connect(sock); s.settimeout(0.3); return s
+def states(s, secs):
+    """The 'S' messages that arrive in secs seconds: (state, mode)."""
+    out = []; end = time.time() + secs
+    while time.time() < end:
+        try:
+            m = s.recv(128)
+        except socket.timeout:
+            continue
+        if len(m) == 3 and m[:1] == b"S":
+            out.append((m[1], m[2]))
+    return out
+def scan_types():
+    return [l.split()[2][:2] for l in open(hcilog) if l.startswith("cmd 200b")]
+s = conn()
+st = states(s, 1.0)
+assert st and st[0][0] in (1, 2) and st[-1] == (2, 0), st   # starting or running, then running, passive
+s.send(b"m\x01")           # the front end asks for the active scan
+st = states(s, 1.0)
+assert not st or st[-1] == (2, 0), st       # BT_ACTIVE is off: no change, still passive
+assert set(scan_types()) == {"00"}, scan_types()
+open(conf, "w").write('PROXY="on"\nACTIVE="on"\n')
+st = states(s, 1.5)
+assert st and st[-1] == (2, 1), st    # BT_ACTIVE on: the scan restarts as active
+assert scan_types()[-1] == "01", scan_types()
+s.send(b"m\x00")
+st = states(s, 1.5)
+assert st and st[-1] == (2, 0), st
+assert scan_types()[-1] == "00", scan_types()
+s.close()
+# a second client gets the state at once
+s2 = conn(); st = states(s2, 0.6); assert st and st[0][1] == 0, st
+s2.close()
+PYEOF
+grep -q 'active scan on' "$M/btscan.log" && ok "the log names the scan mode" || bad "no 'active scan on' in the log"
+kill "$SCAN" 2>/dev/null; wait "$SCAN" 2>/dev/null
+echo 02:99:99:99:99:99 > "$M/bt.mac"
+TSX_BT_CONF="$M/bt.conf" TSX_BT_MAC_FILE="$M/bt.mac" TSX_BTSCAN_FAKE_HCI="$M/hci.sock" python3 "$LIB/btscan.py" \
+	--socket "$M/adv.sock" --gatt-socket "" --group "" > "$M/btscan2.log" 2>&1 &
+SCAN=$!; PIDS="$PIDS $SCAN"
+for _ in $(seq 1 50); do grep -q 'HCI socket open' "$M/btscan2.log" && break; sleep 0.1; done
+sleep 0.3
+[ "$(cat "$M/bt.mac")" = 02:99:99:99:99:99 ] && grep -q 'reports address 02:AA:BB:CC:DD:01, not 02:99:99:99:99:99' "$M/btscan2.log" \
+	&& ok "a bt.mac that tsx-bt wrote stays. A different controller address is a warning" || bad "bt.mac kept: $(cat "$M/bt.mac"), $(cat "$M/btscan2.log")"
+kill "$SCAN" 2>/dev/null; wait "$SCAN" 2>/dev/null
+python3 "$HERE/bt-fake-hci.py" "$M/hci0.sock" "$M/hci0.log" 00:00:00:00:00:00 > "$M/fakehci0.out" 2>&1 &
+PIDS="$PIDS $!"
+for _ in $(seq 1 50); do [ -S "$M/hci0.sock" ] && break; sleep 0.1; done
+rm -f "$M/bt.mac"
+TSX_BT_CONF="$M/bt.conf" TSX_BT_MAC_FILE="$M/bt.mac" TSX_BTSCAN_FAKE_HCI="$M/hci0.sock" python3 "$LIB/btscan.py" \
+	--socket "$M/adv.sock" --gatt-socket "" --group "" > "$M/btscan3.log" 2>&1 &
+SCAN=$!; PIDS="$PIDS $SCAN"
+for _ in $(seq 1 50); do grep -q 'HCI socket open' "$M/btscan3.log" && break; sleep 0.1; done
+sleep 0.3
+[ ! -e "$M/bt.mac" ] && grep -q 'not used' "$M/btscan3.log" && ok "an all-zero controller address is not written to bt.mac" || bad "zero address: $(cat "$M/btscan3.log")"
+kill "$SCAN" 2>/dev/null; wait "$SCAN" 2>/dev/null
+
+echo "== bluetooth.py (the ESPHome side): queue cap, flags, state =="
+python3 - "$HERE/../voice/shim" "$W" <<'PYEOF' && ok "bluetooth.py: advertisement queue cap, feature flags, bt.state absent turns the proxy off, mode of each connection" || bad "bluetooth.py unit checks"
+import os, sys
+sys.path.insert(0, sys.argv[1])
+w = sys.argv[2]
+from tsx_panel import bluetooth as bt
+# the queue holds at most QUEUE_MAX and drops the oldest
+q = bt.AdvQueue()
+for i in range(bt.QUEUE_MAX + 100):
+    q.push((i, 0, -50, b""))
+assert len(q) == bt.QUEUE_MAX and q.dropped == 100 and q.items[0][0] == 100, (len(q), q.dropped)
+# a flush sends at most BATCHES_PER_TICK batches of BATCH_MAX
+b = q.pop_batches()
+assert len(b) == bt.BATCHES_PER_TICK and all(len(x) == bt.BATCH_MAX for x in b), [len(x) for x in b]
+assert len(q) == bt.QUEUE_MAX - bt.BATCHES_PER_TICK * bt.BATCH_MAX
+assert [x[0] for x in b[0]] == list(range(100, 100 + bt.BATCH_MAX))    # oldest first, in order
+rest = q.pop_batches(limit=99)
+assert sum(len(x) for x in rest) == bt.QUEUE_MAX - bt.BATCHES_PER_TICK * bt.BATCH_MAX and len(q) == 0
+# feature flags: passive 97 (with state and mode), active 119
+run = os.path.join(w, "shimrun"); os.makedirs(run, exist_ok=True)
+open(os.path.join(run, "bt.conf"), "w").write('PROXY="on"\nACTIVE="off"\n')
+p = bt.BtProxy(run)
+assert p.device_info_fields()["bluetooth_proxy_feature_flags"] == 97, p.device_info_fields()
+open(os.path.join(run, "bt.conf"), "w").write('PROXY="on"\nACTIVE="on"\n')
+assert p.device_info_fields()["bluetooth_proxy_feature_flags"] == 119
+# tsx-bt says the kernel has no Bluetooth: the proxy is off
+open(os.path.join(run, "bt.state"), "w").write("state=absent\nreason=the kernel has no Bluetooth\n")
+assert not p.enabled() and p.device_info_fields() == {}
+open(os.path.join(run, "bt.state"), "w").write("state=up\n")
+assert p.enabled()
+# the mode of a connection counts only while it is subscribed
+class C:
+    def __init__(self): self.sent = []
+    def send_messages(self, m): self.sent.extend(m)
+c = C()
+p.set_mode(c, bt.MODE_ACTIVE)
+assert p._wanted_mode() == bt.MODE_PASSIVE      # not subscribed yet
+p._subscribers.append(c)
+assert p._wanted_mode() == bt.MODE_ACTIVE
+p.unsubscribe(c)
+assert p._wanted_mode() == bt.MODE_PASSIVE
+PYEOF
 
 echo "== btscan.py + btgatt.py: active connections against fake peers =="
 G=$W/gatt; mkdir -p "$G"
@@ -314,7 +495,7 @@ g.close(); adv.close()
 PYEOF
 python3 - "$G/hci.log" <<'PYEOF' && ok "HCI order: LE host support once, the scan pauses for the connect and starts again after it" || bad "HCI order: $(grep '^cmd' "$G/hci.log" | tail -12 | tr '\n' ' ')"
 import sys
-cmds = [" ".join(l.split()[1:]) for l in open(sys.argv[1]) if l.startswith("cmd ")]
+cmds = [" ".join(l.split()[1:]) for l in open(sys.argv[1]) if l.startswith("cmd ") and not l.startswith("cmd 1009")]
 # LE Host Supported once for the HCI socket (before the first link)
 assert cmds.count("0c6d 0100") == 1 and cmds[0] == "0c6d 0100", cmds
 # the check above: scan on, off for the connect (pause), then disable,

@@ -158,7 +158,8 @@ def main():
        "long write at MTU 23: Prepare Write + Execute Write, the peer has all 100 bytes")
     c.send(op="connect", addr=A3, atype=0)
     full = c.ev("conn", A3, timeout=2)
-    ok(full is not None and not full["connected"], f"a third link with 2 slots: refused at once: {full}")
+    ok(full is not None and not full["connected"] and full["error"] == 0x80,
+       f"a third link with 2 slots: refused at once with error 0x80 (no resources): {full}")
 
     # ---- disconnect on request, a drop by the peer
     t0 = time.monotonic()

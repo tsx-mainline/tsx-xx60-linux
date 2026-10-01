@@ -287,6 +287,8 @@ wait_listening "$T/server-act.log" "$T/voice-act.log"
 	--silent C0:FF:EE:00:00:EE --cycles 5 --adv || { rc=1; tail -20 "$T/btscan.log"; }
 "$T/venv/bin/python3" "$HERE/esphome-btactive-check.py" 127.0.0.1 "$VACT_PORT" --key "$KEY" --addr C0:FF:EE:00:00:02 \
 	--cycles 2 || { rc=1; tail -20 "$T/btscan.log"; }
+grep -q '^cmd 200b 01a000a0' "$T/hci.log" && echo "OK: the active scan mode of Home Assistant reached the controller (scan type 1)" \
+	|| { echo "FAIL: no active scan parameters in hci.log"; rc=1; }
 grep -q 'tsx_lva: Bluetooth proxy on, active connections' "$T/voice-act.log" && echo "OK: the voice satellite logs the active proxy" \
 	|| { echo "FAIL: no active proxy line in voice-act.log"; rc=1; }
 grep -q 'Unknown message type' "$T/voice-act.log" && { echo "FAIL: Bluetooth messages reached satellite.py (voice-act.log)"; rc=1; } \
