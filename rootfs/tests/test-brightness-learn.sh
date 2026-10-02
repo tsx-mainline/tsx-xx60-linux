@@ -22,11 +22,12 @@ printf 'BACKLIGHT_MAX=23\nBACKLIGHT_MIN=1\n' > $T/kiosk.conf
 printf 'lux 150\nraw 150\nreport 150\nlevel 15\nauto on\n' > $R/als.state
 echo "on 15" > $T/idled.state
 printf 'level 9\nbase 15\noffset -6\noverride 0\nmax 23\nmin 1\n' > $R/brightness.state
-echo -6 > $R/brightness-offset
+mkdir -p $T/bl/dev; echo 9 > $T/bl/dev/brightness
 export TSX_RUN_DIR=$R TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$T/kiosk.conf TSX_PANEL_BOARD_CONF=$T/none \
-	TSX_IDLED_STATE=$T/idled.state TSX_LEARN_FILE=$T/data/learn.json TSX_LEARN_TICK=0.1 TSX_LEARN_HOLD_S=0.5 TSX_LEARN_RELEASE_S=0.3
+	TSX_IDLED_STATE=$T/idled.state TSX_LEARN_FILE=$T/data/learn.json TSX_LEARN_TICK=0.1 TSX_LEARN_HOLD_S=0.5 TSX_LEARN_RELEASE_S=0.3 TSX_LEARN_GRACE_S=0.3 TSX_BACKLIGHT_DIR=$T/bl
 python3 "$MOD" als-daemon > $T/daemon.log 2>&1 &
 PID=$!
+sleep 0.6; echo -6 > $R/brightness-offset   # a manual change after the start
 for i in $(seq 1 60); do [ -s $R/als-curve ] && break; sleep 0.1; done
 [ -s $R/als-curve ] && ok "als-curve written after a held offset" || bad "no als-curve"
 curve=$(cat $R/als-curve 2>/dev/null)
@@ -41,6 +42,14 @@ touch $R/brightness-learn.reset
 for i in $(seq 1 30); do [ ! -e $R/als-curve ] && break; sleep 0.1; done
 [ ! -e $R/als-curve ] && [ ! -e $T/data/learn.json ] && ok "reset: als-curve and the file are gone" || bad "reset left files"
 kill $PID 2>/dev/null; wait $PID 2>/dev/null
+# an offset that was there before the start never learns
+rm -f $R/als-curve $T/data/learn.json; echo -6 > $R/brightness-offset
+python3 "$MOD" als-daemon > $T/daemon3.log 2>&1 &
+PID=$!
+sleep 2
+[ ! -e $R/als-curve ] && [ ! -e $T/data/learn.json ] && [ -e $R/brightness-offset ] && ok "an offset from before the start is not learned" || bad "learned a stale offset"
+kill $PID 2>/dev/null; wait $PID 2>/dev/null
+rm -f $R/brightness-offset
 # a new start loads a saved file
 python3 - "$MOD" "$T/data/learn.json" <<'PY'
 import importlib.util, sys

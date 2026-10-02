@@ -28,7 +28,12 @@ Rules:
   points in their time order.
 
 The Learner class watches the files of tsx-idled in /run/tsx. It turns a
-slider offset that stays unchanged for HOLD_S seconds into a user point.
+slider offset that stays unchanged for HOLD_S seconds into a user point. Only
+a real manual change counts. The offset file must be written after the daemon
+started plus GRACE_S (so an offset that was there before a restart never
+counts), the level in brightness.state and the backlight must stay the same
+during the hold (so a ramp or a restart of tsx-idled never counts), and the
+screen must be lit.
 """
 
 import json
@@ -41,6 +46,7 @@ MERGE_DIST = 0.12     # share of the x range: a new point replaces points this c
 SPREAD = 3.0          # base points within SPREAD * MERGE_DIST move by a part of the change
 MAX_POINTS = 12       # user points kept
 HOLD_S = 8.0          # seconds that a slider offset must stay unchanged
+GRACE_S = 20.0        # no learning in the first seconds after the daemon starts
 SAVE_VERSION = 1
 
 
@@ -224,10 +230,27 @@ class Learner:
     """Turns held slider changes into user points of a Curve and keeps them
     in a file. poll() runs from the loop of a daemon that owns the curve."""
 
-    def __init__(self, curve, path, run_dir, hold_s=HOLD_S):
+    def __init__(self, curve, path, run_dir, hold_s=HOLD_S, grace_s=None, backlight_dir=None):
         self.curve, self.path, self.run, self.hold_s = curve, path, run_dir, hold_s
-        self.pending = None          # (offset, first seen)
+        if grace_s is None:
+            grace_s = float(os.environ.get("TSX_LEARN_GRACE_S", GRACE_S))
+        self.grace_until = time.time() + grace_s    # wall clock, as the file times are
+        self.bl_dir = backlight_dir or os.environ.get("TSX_BACKLIGHT_DIR", "/sys/class/backlight")
+        self.pending = None          # (offset, first seen, level)
         self.release_offset = False
+        self.info = ""
+
+    def backlight_level(self):
+        """The level now on the backlight device, or None when unknown."""
+        try:
+            names = sorted(os.listdir(self.bl_dir))
+        except OSError:
+            return None
+        for name in names:
+            val = read_int(os.path.join(self.bl_dir, name, "brightness"))
+            if val is not None:
+                return val
+        return None
 
     def load(self):
         text = read_text(self.path)
@@ -265,14 +288,31 @@ class Learner:
         if not learning or not off or os.path.exists(os.path.join(self.run, "brightness")):
             self.pending = None
             return False
-        if self.pending is None or self.pending[0] != off:
-            self.pending = (off, now)
+        try:
+            written = os.stat(offset_path).st_mtime
+        except OSError:
+            self.pending = None
+            return False
+        if written < self.grace_until:
+            self.pending = None      # there before the daemon started, or too early
+            return False
+        st = state_fields(os.path.join(self.run, "brightness.state"))
+        level = st.get("level", 0)
+        on_glass = self.backlight_level()
+        steady = on_glass is None or on_glass == level
+        if not steady or st.get("offset") != off:
+            # a ramp, a restart of tsx-idled, or tsx-idled has not used the
+            # offset yet: the hold starts when all agree
+            self.pending = None
+            return False
+        if self.pending is None or self.pending[0] != off or self.pending[2] != level:
+            self.pending = (off, now, level)
             return False
         if now - self.pending[1] < self.hold_s:
             return False
-        st = state_fields(os.path.join(self.run, "brightness.state"))
-        if st.get("offset") != off or st.get("override", 0) != 0 or st.get("level", 0) <= 0:
-            return False             # tsx-idled has not used the offset yet
+        if st.get("override", 0) != 0 or level <= 0:
+            return False
+        self.info = "offset %d, level %d, base %d" % (off, level, st.get("base", 0))
         self.curve.add_user_point(x, st["level"])
         self.save()
         self.pending = None

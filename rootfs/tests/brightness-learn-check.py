@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 spec = importlib.util.spec_from_file_location("tsx_brightness", sys.argv[1])
 tb = importlib.util.module_from_spec(spec)
@@ -141,7 +142,8 @@ def state(level, base, offset, override=0):
 
 
 c = wide()
-L = tb.Learner(c, path, run, hold_s=8.0)
+L = tb.Learner(c, path, run, hold_s=8.0, grace_s=0, backlight_dir=os.path.join(tmp, "no-backlight"))
+time.sleep(0.05)
 x = tb.lux_to_x(80)
 put("brightness-offset", "-500\n")
 state(1200, 1700, -500)
@@ -165,7 +167,7 @@ L.pending = None
 L.poll(600.0, tb.lux_to_x(300), True)
 check("tsx-idled has not used the offset yet: no point", not L.poll(610.0, tb.lux_to_x(300), True) and len(c.user) == 1)
 state(1450, 1700, -250)
-check("the state agrees: a point", L.poll(611.0, tb.lux_to_x(300), True) and len(c.user) == 2)
+check("the state agrees: the hold starts, then a point", not L.poll(611.0, tb.lux_to_x(300), True) and not L.poll(618.0, tb.lux_to_x(300), True) and L.poll(619.5, tb.lux_to_x(300), True) and len(c.user) == 2)
 L.release()
 put("brightness-offset", "-100\n")
 put("brightness", "900\n")
@@ -174,12 +176,76 @@ L.poll(700.0, x, True)
 check("a fixed level (override) does not learn", not L.poll(720.0, x, True) and len(c.user) == 2)
 os.unlink(os.path.join(run, "brightness"))
 c_new = wide()
-L2 = tb.Learner(c_new, path, run)
+L2 = tb.Learner(c_new, path, run, grace_s=0)
 check("a new Learner loads the points", L2.load() == 2 and round(c_new.level_for_lux(80)) == 1200)
 put("brightness-learn.reset", "")
 check("reset flag: the points go", L2.reset_requested() and not c_new.user and not os.path.exists(path)
       and not os.path.exists(os.path.join(run, "brightness-learn.reset")))
 check("no flag: no reset", not L2.reset_requested())
+
+print("== no learning without a real manual change")
+bl = os.path.join(tmp, "bl", "dev"); os.makedirs(bl)
+
+
+def glass(v):
+    with open(os.path.join(bl, "brightness"), "w") as fobj:
+        fobj.write("%d\n" % v)
+
+
+def fresh(grace=20.0, hold=8.0):
+    for n in ("brightness-offset", "brightness"):
+        try:
+            os.unlink(os.path.join(run, n))
+        except OSError:
+            pass
+    return tb.Learner(wide(), path, run, hold_s=hold, grace_s=grace, backlight_dir=os.path.join(tmp, "bl"))
+
+
+# the restart sequence: an offset file is already there (written before the
+# daemon started, state and backlight in flux), the daemon starts, then the
+# other services restart one after the other
+put("brightness-offset", "-594\n")
+old = time.time() - 3600
+os.utime(os.path.join(run, "brightness-offset"), (old, old))
+L = fresh()
+x = tb.lux_to_x(15.8)
+res = []
+for t, lvl, g in ((0, 1196, 1196), (1, 1196, 1196), (3, 602, 1196), (5, 602, 700), (9, 602, 602), (20, 602, 602), (40, 602, 602), (80, 602, 602)):
+    state(lvl, 1196, -594 if lvl == 602 else 0)
+    glass(g)
+    res.append(L.poll(1000.0 + t, x, True))
+check("a stale offset (there before the start) never learns", not any(res) and not L.curve.user and not os.path.exists(path))
+# the offset was written after the start, but within the grace time
+L = fresh()
+put("brightness-offset", "-594\n")
+state(602, 1196, -594); glass(602)
+check("an offset inside the grace time never learns", not L.poll(1000.0, x, True) and not L.poll(1010.0, x, True) and not L.poll(1030.0, x, True) and not L.curve.user)
+# a ramp: the backlight is not yet at the level of the state
+L = fresh(grace=0, hold=8.0)
+time.sleep(0.05)
+put("brightness-offset", "-594\n")
+state(602, 1196, -594); glass(900)
+check("a backlight that has not reached the level (a ramp) does not learn", not any(L.poll(2000.0 + t, x, True) for t in (0, 5, 9, 12, 20)) and not L.curve.user)
+glass(602)
+check("when the backlight is there, the hold starts and then it learns", not L.poll(2030.0, x, True) and not L.poll(2037.0, x, True) and L.poll(2038.5, x, True) and len(L.curve.user) == 1)
+# a level that changes during the hold restarts the hold
+L = fresh(grace=0, hold=8.0)
+time.sleep(0.05)
+put("brightness-offset", "-594\n")
+glass(602); state(602, 1196, -594)
+L.poll(3000.0, x, True)
+state(650, 1196, -594); glass(650)
+check("a level change during the hold restarts it", not L.poll(3009.0, x, True) and not L.poll(3016.0, x, True) and L.poll(3017.5, x, True))
+# no offset file at all: base and level may differ (a restart of tsx-idled)
+L = fresh(grace=0)
+state(602, 1196, 0); glass(602)
+check("level differs from base but there is no offset file: nothing", not any(L.poll(4000.0 + t, x, True) for t in range(0, 100, 5)))
+# the state says offset 0 while the file says -594 (tsx-idled does not use it yet)
+L = fresh(grace=0)
+time.sleep(0.05)
+put("brightness-offset", "-594\n")
+state(1196, 1196, 0); glass(1196)
+check("tsx-idled has not used the file: nothing", not any(L.poll(5000.0 + t, x, True) for t in range(0, 100, 5)))
 
 print("== results: %d failure(s)" % fails)
 sys.exit(1 if fails else 0)
