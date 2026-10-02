@@ -81,23 +81,26 @@ echo "TSX-LEDBAR [v0.1.1]" > "$T/led/firmware"
 eq "fw tsx" "$($B fw | tr '\n' '|')" "firmware TSX-LEDBAR [v0.1.1]|effects yes|"
 $B set 10 20 30; rm -f "$CON"
 fx() { rm -f "$CON"; $B fx "$@"; }
+$B set 10 20 30
 fx fade 100 0 0 1000
 eq "fx fade: line" "$(cat "$CON")" "FX FADE 100 0 0 1000"
 eq "fx fade: record" "$(st fx)" "fade 100 0 0 1000"
-eq "fx fade: want" "$(st want)" "100 0 0"
+eq "fx fade: want unchanged" "$(st want)" "10 20 30"
 eq "fx fade: no joins" "$(cat "$T/led/multi_intensity")" "10 20 30"
+eq "fx fade: last unchanged" "$(st last)" "10 20 30"
 fx blink 0 50 0 300 700
 eq "fx blink: line" "$(cat "$CON")" "FX BLINK 0 50 0 300 700"
 eq "fx blink: record" "$(st fx)" "blink 0 50 0 300 700"
 fx breathe 0 0 80 4000
 eq "fx breathe: line" "$(cat "$CON")" "FX BREATHE 0 0 80 4000"
-eq "fx breathe: want" "$(st want)" "0 0 80"
+eq "fx breathe: want unchanged" "$(st want)" "10 20 30"
 fx rainbow 10000
 eq "fx rainbow: line" "$(cat "$CON")" "FX RAINBOW 10000"
-eq "fx rainbow: want" "$(st want)" "100 100 100"
+eq "fx rainbow: want unchanged" "$(st want)" "10 20 30"
 fx rainbow 10000 40
 eq "fx rainbow level: line" "$(cat "$CON")" "FX RAINBOW 10000 40"
-eq "fx rainbow level: want" "$(st want)" "40 40 40"
+eq "fx rainbow level: want unchanged" "$(st want)" "10 20 30"
+eq "fx rainbow level: get" "$($B get | sed -n 's/^want //p;s/^fx /fx /p' | tr '\n' '|')" "10 20 30|fx rainbow 10000 40|"
 fx smooth 500
 eq "fx smooth: line" "$(cat "$CON")" "FX SMOOTH 500"
 eq "fx smooth: record kept" "$(st fx)" "rainbow 10000 40"
@@ -108,13 +111,28 @@ eq "fx query: line" "$(cat "$CON")" "FX"
 eq "fx dry run" "$($B -n fx breathe 1 2 3 4000)" "console FX BREATHE 1 2 3 4000"
 # apply starts the recorded effect again after the color
 rm -f "$CON"; $B apply
-eq "apply: joins" "$(cat "$T/led/multi_intensity")" "40 40 40"
+eq "apply: joins" "$(cat "$T/led/multi_intensity")" "10 20 30"
 eq "apply: effect again" "$(cat "$CON")" "FX RAINBOW 10000 40"
 # fx off: the joins of the wanted color, then FX OFF
 fx breathe 0 0 80 4000; fx off
-eq "fx off: joins" "$(cat "$T/led/multi_intensity")" "0 0 80"
+eq "fx off: joins" "$(cat "$T/led/multi_intensity")" "10 20 30"
+eq "fx off: want" "$(st want)" "10 20 30"
+eq "fx off: get" "$($B get | sed -n 's/^want //p;s/^fx /fx /p' | tr '\n' '|')" "10 20 30|fx none|"
 eq "fx off: line" "$(cat "$CON")" "FX OFF"
 eq "fx off: record" "$(st fx)" "none"
+# every effect: fx off shows the color from before it
+for e in "fade 100 0 0 1000" "blink 0 50 0 300 700" "breathe 0 0 80 4000" "rainbow 10000 50"; do
+	$B set 33 22 11; fx $e; fx off
+	eq "fx $e, fx off: joins" "$(cat "$T/led/multi_intensity")" "33 22 11"
+	eq "fx $e, fx off: want" "$(st want)" "33 22 11"
+done
+# no effect color in the wanted color: on after fx off
+$B set 33 22 11; fx breathe 0 0 80 4000; fx off; $B off; $B on
+eq "on after an effect: last color" "$(cat "$T/led/multi_intensity")" "33 22 11"
+# smooth and cap change no color
+$B set 10 20 30; fx smooth 100; fx cap 100
+eq "smooth and cap: want" "$(st want)" "10 20 30"
+$B set 10 20 30
 # a new color ends the effect: the joins, then FX OFF
 fx blink 50 0 0 500 500; rm -f "$CON"; $B set 5 6 7
 eq "set ends fx: joins" "$(cat "$T/led/multi_intensity")" "5 6 7"
@@ -125,6 +143,17 @@ rm -f "$CON"; $B set 8 8 8
 fx breathe 0 0 80 4000; rm -f "$CON"; $B off
 eq "off ends fx" "$(cat "$CON"; st fx)" "FX OFF
 none"
+# apply starts the recorded effect again, the wanted color stays
+$B set 10 20 30; fx breathe 0 0 80 4000; rm -f "$CON"; $B apply
+eq "apply: joins, then the effect" "$(cat "$T/led/multi_intensity"; cat "$CON"; st want)" "10 20 30
+FX BREATHE 0 0 80 4000
+10 20 30"
+# boot ends an effect and becomes the wanted color
+printf 'BOOT_COLOR="0 0 20"\nBLANK=keep\n' > "$T/ledbar.conf"
+fx rainbow 10000; rm -f "$CON"; $B boot
+eq "boot ends fx" "$(cat "$CON"; st fx; st want)" "FX OFF
+none
+0 0 20"
 # BLANK=off: the effect waits while the screen is blank
 printf 'BLANK=off\n' > "$T/ledbar.conf"
 fx breathe 0 0 80 4000; echo blank > "$T/idled"; rm -f "$CON"; $B apply
@@ -134,7 +163,7 @@ breathe 0 0 80 4000"
 rm -f "$CON"; $B fx blink 1 2 3 100 100
 [ ! -e "$CON" ] && eq "blank: new effect recorded, not sent" "$(st fx)" "blink 1 2 3 100 100" || { echo "FAIL blank: console $(cat "$CON")"; fail=1; }
 echo "on 17" > "$T/idled"; rm -f "$CON"; $B apply
-eq "wake: effect again" "$(cat "$T/led/multi_intensity"; cat "$CON")" "1 2 3
+eq "wake: wanted color, then the effect" "$(cat "$T/led/multi_intensity"; cat "$CON")" "0 0 20
 FX BLINK 1 2 3 100 100"
 printf 'BLANK=keep\n' > "$T/ledbar.conf"
 # the bar refuses: exit 1, the record stays as it was

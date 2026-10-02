@@ -33,7 +33,9 @@
  * command sends them as console lines (FX FADE, BLINK, BREATHE, RAINBOW,
  * SMOOTH, CAP, OFF). The console is interface 0, so the kernel driver stays
  * bound to interface 1. The stock firmware has no effects, and "fx" refuses
- * to run. The state file records the running effect ("fx ..."). A host join
+ * to run. The state file records the running effect ("fx ..."). An effect
+ * does not change the wanted color. The effect color lives in the record only,
+ * and "fx off" shows the wanted color from before the effect. A host join
  * ends an effect on the bar, so a new wanted color (set, on, off, boot) ends
  * the effect and clears the record. "apply" starts the recorded effect
  * again, for example after a restart of the bar.
@@ -572,13 +574,9 @@ static int cmd_fx(char **av, int n)
 	}
 	/* smooth and cap are settings, no effect */
 	if (!strcmp(d->name, "smooth") || !strcmp(d->name, "cap")) return fx_send(rec, 0);
-	/* The effect color becomes the wanted color. Rainbow: white at its level. */
+	/* The effect color stays with the effect. The wanted color is the color from before it. */
 	struct state st; read_state(&st);
-	if (d->color) memcpy(st.want, v, sizeof st.want);
-	else st.want[0] = st.want[1] = st.want[2] = n == 3 ? v[1] : 100;
-	if (st.want[0] || st.want[1] || st.want[2]) memcpy(st.last, st.want, sizeof st.last);
 	snprintf(st.fx, sizeof st.fx, "%s", rec);
-	output_for(st.want, st.out);
 	e = fx_paused() ? 0 : fx_send(rec, 0);
 	if (!dry_run && !e) write_state(&st, backend_name());
 	return e;
@@ -591,7 +589,7 @@ static void __attribute__((noreturn)) usage(void)
 	      "  on | off           last non-black color (else BOOT_COLOR) | black\n"
 	      "  boot               BOOT_COLOR of /etc/tsx/ledbar.conf\n"
 	      "  apply              re-send the wanted color for the current screen state\n"
-	      "  get                print wanted/last/output color\n"
+	      "  get                print wanted/last/output color and the running effect\n"
 	      "  analog JOIN VALUE  one analog join packet (3/4/5 = red/green/blue level)\n"
 	      "  digital JOIN on|off  one digital join packet (0/1/2 = red/green/blue)\n"
 	      "  raw HEX...         any Cresnet packet, e.g. raw 00 05 14 00 03 00 64\n"
@@ -607,7 +605,7 @@ static void __attribute__((noreturn)) usage(void)
 	      "  fx rainbow MS [LEVEL]  hue cycle (period MS, LEVEL 0..100, default 100)\n"
 	      "  fx smooth MS       ramp each new color over MS (0..60000, 0 = at once)\n"
 	      "  fx cap PERCENT     power cap of the three colors (10..150)\n"
-	      "  fx off             end the effect, show the wanted color\n"
+	      "  fx off             end the effect, show the wanted color from before it\n"
 	      "                     A new color (set, on, off, boot) ends an effect, apply starts it again\n"
 	      "  -n = print the packets instead of sending; --usb = use libusb even with the kernel driver\n",
 	      stderr);
