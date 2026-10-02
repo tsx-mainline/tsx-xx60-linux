@@ -125,6 +125,71 @@ text = tb.curve_text(c)
 check("curve_text is whole numbers", all(p.split(":")[0].isdigit() and p.split(":")[1].isdigit() for p in text.split()), text)
 check("curve_text is ascending in lux", [int(p.split(":")[0]) for p in text.split()] == sorted(int(p.split(":")[0]) for p in text.split()))
 
+
+print("== light response (LightResponse)")
+import random
+
+
+def run_response(profile, period=0.5, seed=1, noise=0.0, **kw):
+    """profile(t) gives lux. Returns (held x by time list, the object)."""
+    rnd = random.Random(seed)
+    r = tb.LightResponse(**kw)
+    out = []
+    t = 0.0
+    while t <= 60.0:
+        lux = profile(t) * (1.0 + noise * rnd.uniform(-1, 1))
+        r.feed(t, tb.lux_to_x(lux))
+        out.append((t, r.held))
+        t += period
+    return out, r
+
+
+def react_time(out, t0, target, tol=0.05):
+    """Seconds after t0 until the held x is within tol of the target x."""
+    for t, h in out:
+        if t >= t0 and abs(h - target) <= tol:
+            return t - t0
+    return None
+
+
+for name, lo, hi, limit in (("brighter", 20, 400, 2.0), ("darker", 400, 20, 6.0), ("small brighter", 100, 200, 2.0), ("small darker", 200, 100, 6.0)):
+    out, _r = run_response(lambda t, lo=lo, hi=hi: lo if t < 20 else hi)
+    rt = react_time(out, 20.0, tb.lux_to_x(hi))
+    check("a step %s: the held light follows in %s s (limit %.1f)" % (name, rt, limit), rt is not None and rt <= limit)
+out_up, _r = run_response(lambda t: 20 if t < 20 else 400)
+out_dn, _r = run_response(lambda t: 400 if t < 20 else 20)
+check("brightening is faster than darkening", react_time(out_up, 20.0, tb.lux_to_x(400)) < react_time(out_dn, 20.0, tb.lux_to_x(20)))
+out, _r = run_response(lambda t: 20 if t < 20 else 400)
+early = [h for t, h in out if 20.0 <= t < 21.0]
+check("no move before the first samples are in", all(abs(h - tb.lux_to_x(20)) < 1e-9 for h in early) or react_time(out, 20.0, tb.lux_to_x(400)) >= 1.0)
+out, _r = run_response(lambda t: 400 if not 20 <= t < 22 else 20)
+check("a 2 s shadow does not move the light", max(abs(h - tb.lux_to_x(400)) for _t, h in out) < 1e-9)
+out, _r = run_response(lambda t: 20 if not 20 <= t < 21 else 3000)
+check("a 1 s flash does not move the light", max(abs(h - tb.lux_to_x(20)) for _t, h in out) < 1e-9)
+for lux in (0.5, 5, 50, 500, 5000):
+    moves = 0
+    prev = None
+    for seed in (1, 2, 3):
+        out, _r = run_response(lambda t, lux=lux: lux, seed=seed, noise=0.08)
+        for _t, h in out:
+            if prev is not None and h != prev:
+                moves += 1
+            prev = h
+    check("8 percent noise at %s lux: the held light moves at most 4 times in 3 minutes (%d)" % (lux, moves), moves <= 4)
+out, _r = run_response(lambda t: 100 if t < 20 else 100 * 2.0 ** ((t - 20) / 10.0), noise=0.03)
+flips = sum(1 for (_a, h0), (_b, h1), (_c, h2) in zip(out, out[1:], out[2:]) if (h1 - h0) * (h2 - h1) < 0)
+check("a slow rise with noise never turns back (%d reversals)" % flips, flips == 0)
+r = tb.LightResponse(2.0, 5.0)
+for i in range(10):
+    r.feed(i * 0.5, tb.lux_to_x(100))
+check("pending() is false at rest", not r.pending())
+r.feed(5.0, tb.lux_to_x(400))
+check("pending() is true while a change waits for the debounce", r.pending())
+r2 = tb.LightResponse(0.0, 0.0)
+r2.feed(0.0, 1.0)
+r2.feed(0.5, 2.0)
+check("a debounce of 0 follows at once", abs(r2.held - 2.0) < 1e-9)
+
 print("== Learner")
 tmp = tempfile.mkdtemp()
 run = os.path.join(tmp, "run")
@@ -246,6 +311,37 @@ time.sleep(0.05)
 put("brightness-offset", "-594\n")
 state(1196, 1196, 0); glass(1196)
 check("tsx-idled has not used the file: nothing", not any(L.poll(5000.0 + t, x, True) for t in range(0, 100, 5)))
+
+print("== a change of the light never makes or removes a point")
+L = fresh(grace=0, hold=8.0)
+time.sleep(0.05)
+put("brightness-offset", "-594\n")
+state(602, 1196, -594); glass(602)
+x0 = tb.lux_to_x(40)
+L.poll(6000.0, x0, True)
+before = len(L.curve.user)
+res = [L.poll(6000.0 + t, x0 if t < 4 else tb.lux_to_x(400), True) for t in (1, 2, 3, 4, 5, 6, 7, 8, 8.5, 9)]
+check("the light jumps 1 decade in the middle of the hold: no point", not any(res) and len(L.curve.user) == before)
+check("the hold restarted at the change: not yet learned at 6 s, learned when the light stayed steady for the hold",
+      not L.poll(6010.0, tb.lux_to_x(400), True) and L.poll(6013.0, tb.lux_to_x(400), True) and len(L.curve.user) == 1)
+L = fresh(grace=0, hold=8.0)
+time.sleep(0.05)
+put("brightness-offset", "-594\n")
+state(602, 1196, -594); glass(602)
+res = []
+for i in range(0, 20):
+    t = 7000.0 + i
+    live = tb.lux_to_x(3000) if i == 6 else tb.lux_to_x(40)
+    res.append(L.poll(t, x0, True, live))
+check("a flash in the live light inside the hold: no point", not any(res[:14]) and len(L.curve.user) <= 1 and not res[8])
+L = fresh(grace=0, hold=8.0)
+L.curve.add_user_point(tb.lux_to_x(40), 800, 1)
+L.curve.add_user_point(tb.lux_to_x(300), 1500, 2)
+pts = [list(u) for u in L.curve.user]
+put("brightness-offset", "0\n")
+for i in range(0, 40):
+    L.poll(8000.0 + i, tb.lux_to_x(40 + 20 * (i % 7)), True)
+check("light changes with no manual change never remove a point", [list(u) for u in L.curve.user] == pts)
 
 print("== results: %d failure(s)" % fails)
 sys.exit(1 if fails else 0)

@@ -18,7 +18,7 @@ ok()  { echo "ok   $*"; }
 bad() { echo "FAIL $*"; fail=1; }
 lux() { echo "$1" > "$T/iio/iio:device0/in_illuminance_input"; }
 run() {  # run LOOPS [extra conf lines]
-	printf 'ALS_SMOOTH=1\nALS_HOLD=0\nALS_RAMP_MS=10\nALS_START_WAIT=0\n%s\n' "${2:-}" > "$T/als.conf"
+	printf 'AUTO_BRIGHTEN_S=0\nAUTO_DARKEN_S=0\nALS_RAMP_MS=10\nALS_START_WAIT=0\n%s\n' "${2:-}" > "$T/als.conf"
 	PATH=$T/bin:$PATH TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_RUN_DIR=$T/run \
 	TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_LOOPS=$1 TSX_ALS_NOW=1000 \
 		sh "$ALS" >> "$T/log" 2>&1
@@ -40,16 +40,75 @@ rm -f "$T/run/"*; run 4 "ALS_START_WAIT=3"
 [ "$(cat "$T/run/als-level" 2>/dev/null)" = 3 ] && ok "start: still 0 lx after ALS_START_WAIT: dark room level 3" || bad "start wait over: level $(cat "$T/run/als-level" 2>/dev/null)"
 rm -f "$T/run/"*; echo 13 > "$T/bl/mp3309c/brightness"; lux 135.000000; run 1 "ALS_START_WAIT=3"
 [ "$(cat "$T/run/als-level")" = 13 ] && ok "start: a real reading is used at once" || bad "start 135 lx: level $(cat "$T/run/als-level")"
-# 3. hysteresis: 300 lx -> 17. 340 lx (+13 %) stays 17. 450 lx (+50 %) moves
-# (hysteresis state lives inside one daemon run: feed values while it runs)
-rm -f "$T/run/"*; echo 17 > "$T/bl/mp3309c/brightness"
-printf 'ALS_SMOOTH=1\nALS_HOLD=0\nALS_RAMP_MS=0\n' > "$T/als.conf"
-( i=0; for v in 300.0 340.0 340.0 450.0 450.0; do lux $v; sleep 0.3; done ) &
-PATH=$T/bin:$PATH TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_RUN_DIR=$T/run \
-	TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_NOW=1000 \
-	sh -c 'trap "exit 0" TERM; exec sh "$0"' "$ALS" >> "$T/log" 2>&1 &
-P=$!; sleep 0.5; l1=$(cat "$T/run/als-level"); sleep 0.35; l2=$(cat "$T/run/als-level"); sleep 0.7; l3=$(cat "$T/run/als-level"); kill $P; wait $P 2>/dev/null || true; wait
-[ "$l1" = 17 ] && [ "$l2" = 17 ] && [ "$l3" = 18 ] && ok "hysteresis 300->340 keeps 17, 450 -> 18" || bad "hysteresis levels $l1 $l2 $l3, want 17 17 18"
+# 3. hysteresis: 300 lx -> 17. 340 lx (+13 %) stays 17. 450 lx (+50 %) moves.
+# The values come from a sequence file: the stub of usleep (the sleep between
+# two readings) writes the next one. It also logs the level after each loop.
+# With the times at 0 the held light is the reading itself.
+SEQ=$T/seq SEQN=$T/seqn LV=$T/lv
+cat > "$T/bin2-usleep" <<'STUB'
+#!/bin/sh
+n=$(cat "$SEQN" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "$SEQN"
+cat "$RUNDIR/als-level" >> "$LV" 2>/dev/null || echo none >> "$LV"
+v=$(sed -n "$((n + 1))p" "$SEQ"); [ -z "$v" ] || echo "$v" > "$IIODEV"
+STUB
+mkdir -p "$T/bin2"; cp "$T/bin2-usleep" "$T/bin2/usleep"; chmod +x "$T/bin2/usleep"
+# seqrun LOOPS [extra conf]: the readings are in $SEQ, one per loop
+seqrun() {
+	rm -f "$T/run/"* "$SEQN" "$LV"; head -n 1 "$SEQ" > "$T/iio/iio:device0/in_illuminance_input"
+	printf 'ALS_RAMP_MS=0\nALS_START_WAIT=0\n%s\n' "${2:-}" > "$T/als.conf"
+	echo 17 > "$T/bl/mp3309c/brightness"
+	SEQ=$SEQ SEQN=$SEQN LV=$LV RUNDIR=$T/run IIODEV=$T/iio/iio:device0/in_illuminance_input PATH=$T/bin2:$T/bin:$PATH \
+		TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_RUN_DIR=$T/run TSX_PANEL_BOARD_CONF=${TSX_PANEL_BOARD_CONF:-$T/none} \
+		TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_LOOPS=$1 TSX_ALS_NOW=1000 sh "$ALS" >> "$T/log" 2>&1
+}
+printf '300.0\n340.0\n340.0\n450.0\n450.0\n' > "$SEQ"
+ZERO='AUTO_BRIGHTEN_S=0
+AUTO_DARKEN_S=0'
+seqrun 5 "$ZERO"
+l=$(tr '\n' ' ' < "$LV")
+[ "$l" = "17 17 17 18 18 " ] && ok "hysteresis 300->340 keeps 17, 450 -> 18" || bad "hysteresis levels $l, want 17 17 17 18 18"
+# 3a. response to a step of the light (0.8 s per loop on the fake clock). The
+# default times: brighter after 1.5 s, darker after 5 s.
+steps() { # steps N1 LUX1 N2 LUX2: LUX1 for N1 loops, then LUX2 for N2 loops
+	awk -v n1="$1" -v a="$2" -v n2="$3" -v b="$4" 'BEGIN{for(i=0;i<n1;i++)printf "%s\n", a; for(i=0;i<n2;i++)printf "%s\n", b}'
+}
+# reaction N: loops after loop N until the level is the final level, in ms
+reaction() {
+	awk -v n="$1" '{l[NR]=$1} END{f=l[NR]; for(i=n+1;i<=NR;i++) if (l[i]==f) {printf "%d", (i-n-1)*800; exit}}' "$LV"
+}
+changes() { awk 'NR>1 && $1!=p {c++} {p=$1} END{print c+0}' "$LV"; }
+steps 40 20.0 30 400.0 > "$SEQ"; seqrun 70
+ms=$(reaction 40); jumps=$(changes); fin=$(tail -n 1 "$LV")
+[ -n "$ms" ] && [ "$ms" -le 2000 ] && ok "brighter (20 -> 400 lx): level $fin after $ms ms" || bad "brighter reaction '$ms' ms"
+[ "$jumps" -le 1 ] && ok "brighter: one change of the level, no stepping ($jumps)" || bad "brighter: $jumps changes"
+steps 40 400.0 30 20.0 > "$SEQ"; seqrun 70
+ms_dn=$(reaction 40); jumps=$(changes); fin=$(tail -n 1 "$LV")
+[ -n "$ms_dn" ] && [ "$ms_dn" -le 6000 ] && [ "$ms_dn" -ge 3000 ] && ok "darker (400 -> 20 lx): level $fin after $ms_dn ms" || bad "darker reaction '$ms_dn' ms"
+[ "$jumps" -le 1 ] && ok "darker: one change of the level ($jumps)" || bad "darker: $jumps changes"
+[ "$ms" -lt "$ms_dn" ] && ok "brighter is faster than darker ($ms ms, $ms_dn ms)" || bad "brighter $ms ms, darker $ms_dn ms"
+steps 40 100.0 30 130.0 > "$SEQ"; seqrun 70
+ms=$(reaction 40); [ -n "$ms" ] && [ "$ms" -le 2000 ] && ok "a small step up (100 -> 130 lx, 2 steps): $ms ms" || bad "small step reaction '$ms'"
+# noise: 8 percent around 3 levels of light, 300 loops (4 minutes): at most one change
+for base in 8 50 300 1500; do
+	awk -v b=$base 'BEGIN{srand(7); for(i=0;i<300;i++) printf "%.1f\n", b*(1+0.16*(rand()-0.5))}' > "$SEQ"; seqrun 300
+	c=$(changes); [ "$c" -le 1 ] && ok "noise of 8 percent at $base lx: $c changes of the level in 4 minutes" || bad "noise at $base lx: $c changes"
+done
+# a flash and a shadow shorter than the times change nothing
+{ steps 40 20.0 1 3000.0; steps 40 20.0 0 0; } > "$SEQ"; seqrun 80
+[ "$(sort -u "$LV" | wc -l)" = 1 ] && ok "a flash of 1 reading (0.8 s) changes nothing" || bad "the flash moved the level: $(sort -u "$LV" | tr '\n' ' ')"
+{ steps 40 300.0 3 5.0; steps 40 300.0 0 0; } > "$SEQ"; seqrun 83
+[ "$(sort -u "$LV" | wc -l)" = 1 ] && ok "a shadow of 3 readings (2.4 s) changes nothing" || bad "the shadow moved the level: $(sort -u "$LV" | tr '\n' ' ')"
+# one step on the 24 step scale: a light that swings by 13 percent around a step does not toggle
+awk 'BEGIN{for(i=0;i<300;i++) printf "%.1f\n", (int(i/3)%2) ? 108 : 87}' > "$SEQ"; seqrun 300
+c=$(changes); [ "$c" -le 1 ] && ok "a swing of 25 percent around a step: $c change(s), no toggling" || bad "toggling: $c changes"
+# the board file (no rebuild): AUTO_BRIGHTEN_S=4, and ALS_PERIOD_S below the sensor time is raised
+printf 'AUTO_BRIGHTEN_S=4\nALS_PERIOD_S=0.2\n' > "$T/board-timing.conf"
+: > "$T/log"; steps 40 20.0 30 400.0 > "$SEQ"; TSX_PANEL_BOARD_CONF=$T/board-timing.conf seqrun 70
+ms=$(reaction 40); [ -n "$ms" ] && [ "$ms" -ge 3000 ] && ok "the board file sets AUTO_BRIGHTEN_S=4: reaction $ms ms" || bad "board value not used: $ms ms"
+grep -q 'reading every 800 ms' "$T/log" && ok "ALS_PERIOD_S=0.2 is raised to the sensor time (800 ms)" || bad "period floor: $(grep response "$T/log" | tail -n 1)"
+printf 'AUTO_DARKEN_S=abc\n' > "$T/board-bad.conf"; : > "$T/log"
+steps 5 20.0 5 20.0 > "$SEQ"; TSX_PANEL_BOARD_CONF=$T/board-bad.conf seqrun 10
+grep -q 'darker after 5.0 s' "$T/log" && ok "a bad value falls back to the default" || bad "bad value: $(grep response "$T/log" | tail -n 1)"
 # 3b. a learned curve (als-curve of tsx_brightness.py) replaces ALS_CURVE. A bad file is ignored.
 rm -f "$T/run/"*; echo "0:3 100:9 3000:23" > "$T/run/als-curve"; lux 100.000000; run 1
 [ "$(cat "$T/run/als-level")" = 9 ] && ok "learned curve: 100 lx -> 9 (the default curve gives 13)" || bad "learned curve: $(cat "$T/run/als-level")"
@@ -101,7 +160,7 @@ rm -f "$T/run/"*; echo 17 > "$T/bl/mp3309c/brightness"; lux 20.0; run 1 "ALS_BL_
 # 8. night cap
 rm -f "$T/run/"*; lux 3000.0
 printf 'NIGHT_START=0\nNIGHT_END=0\nBACKLIGHT_MAX=23\n' > "$T/k0"; printf 'NIGHT_START=%s\nNIGHT_END=%s\n' "$(date +%H | sed 's/^0//')" $(( ($(date +%H | sed 's/^0//') + 1) % 24 )) > "$T/k1"
-printf 'ALS_SMOOTH=1\nALS_NIGHT_CAP=8\n' > "$T/als.conf"
+printf 'AUTO_BRIGHTEN_S=0\nAUTO_DARKEN_S=0\nALS_NIGHT_CAP=8\n' > "$T/als.conf"
 TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$T/k1 TSX_RUN_DIR=$T/run TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_LOOPS=1 PATH=$T/bin:$PATH sh "$ALS" >>"$T/log" 2>&1
 [ "$(cat "$T/run/als-level")" = 8 ] && ok "night cap 8" || bad "night cap level $(cat "$T/run/als-level")"
 # 9. status / lux CLI
@@ -143,7 +202,7 @@ TSX_TEST_CMDS=$T/cmds.log TSX_CONFIG_BIN=$T/bin/tsx-config TSX_RUN_DIR=$T/run sh
 	&& ok "auto on/off: tsx-config set AUTO_BRIGHTNESS + apply" || bad "auto cmds: $(cat "$T/cmds.log")"
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/tsx-config"; rm -f "$PAN" "$T/run/"*
 # 9d. a change of AUTO_BRIGHTNESS in als.panel while the daemon runs (setup page) acts like "auto off"
-printf 'ALS_SMOOTH=1\nALS_HOLD=0\nALS_RAMP_MS=0\nALS_INTERVAL=0\n' > "$T/als.conf"; lux 300.0; echo "on 17" > "$T/idled"
+printf 'AUTO_BRIGHTEN_S=0\nAUTO_DARKEN_S=0\nALS_RAMP_MS=0\n' > "$T/als.conf"; lux 300.0; echo "on 17" > "$T/idled"
 printf 'ALS_AUTO="1"\n' > "$PAN"; rm -f "$T/run/"*
 ( i=0; while [ $i -lt 40 ]; do [ -e "$T/run/als.state" ] && break; sleep 0.05; i=$((i+1)); done; printf 'ALS_AUTO="0"\n' > "$PAN" ) &
 PATH=$T/bin:$PATH TSX_ALS_CONF=$T/als.conf TSX_ALS_PANEL=$PAN TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_RUN_DIR=$T/run \

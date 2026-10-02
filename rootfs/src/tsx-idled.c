@@ -165,7 +165,7 @@ static long long now_ms(void)
 static void cfg_defaults(struct cfg *c)
 {
 	c->blank_timeout = 300; c->day = -1; c->night = -1; c->bl_max = -1; c->bl_min = -1; c->power_key = 1;
-	c->ramp_slider_ms = 400; c->ramp_auto_ms = 2000;
+	c->ramp_slider_ms = 400; c->ramp_auto_ms = 1000;
 	c->night_start = 22; c->night_end = 7; c->swallow = 1; c->swallow_ms = 700;
 	strcpy(c->backlight, "auto");
 	c->osk_gesture = 3; c->osk_tap_ms = 500;

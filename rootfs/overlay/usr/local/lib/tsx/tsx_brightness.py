@@ -41,12 +41,18 @@ import math
 import os
 import sys
 import time
+from collections import deque
 
 MERGE_DIST = 0.12     # share of the x range: a new point replaces points this close
 SPREAD = 3.0          # base points within SPREAD * MERGE_DIST move by a part of the change
 MAX_POINTS = 12       # user points kept
 HOLD_S = 8.0          # seconds that a slider offset must stay unchanged
 GRACE_S = 20.0        # no learning in the first seconds after the daemon starts
+STEADY_BAND = 0.15    # the learner needs the light inside this x range during the hold
+BRIGHTEN_S = 1.5      # the light must stay brighter this long before the level follows
+DARKEN_S = 5.0        # the light must stay darker this long before the level follows
+BRIGHTEN_BAND = 0.06  # x change (6 percent of a decade) that counts as brighter
+DARKEN_BAND = 0.10    # x change that counts as darker. It is wider, so the level does not hunt
 SAVE_VERSION = 1
 
 
@@ -63,6 +69,86 @@ def log_ramp(lo, hi, full_lux, steps=4):
     x. Returns (lux, level) pairs with `steps` + 1 points."""
     top = lux_to_x(full_lux)
     return [(x_to_lux(top * i / steps), lo + (hi - lo) * i / steps) for i in range(steps + 1)]
+
+
+class LightResponse:
+    """The reaction of the panel to a change of the light, in x (log lux).
+
+    It follows the idea of the Android automatic brightness controller:
+    separate times and bands for brighter and darker light (the config values
+    config_autoBrightnessBrighteningLightDebounce and
+    ...DarkeningLightDebounce, and the ambient light horizon, in
+    frameworks/base, Apache-2.0). This file reimplements the idea and copies
+    no code.
+
+    The held value `held` is what the rest of the daemon uses as the light.
+    It moves up only when every sample of the last `brighten_s` seconds is
+    more than `up_band` above it. It then takes the lowest of those samples.
+    It moves down only when every sample of the last `darken_s` seconds is
+    more than `down_band` below it. It then takes the highest of those
+    samples. A short flash or a short shadow never gets through, and noise
+    smaller than the band never moves the value."""
+
+    def __init__(self, brighten_s=BRIGHTEN_S, darken_s=DARKEN_S,
+                 up_band=BRIGHTEN_BAND, down_band=DARKEN_BAND):
+        self.brighten_s, self.darken_s = max(0.0, brighten_s), max(0.0, darken_s)
+        self.up_band, self.down_band = up_band, down_band
+        self.held = None
+        self.live = None              # the newest sample
+        self.samples = deque()        # (time, x), oldest first
+
+    def feed(self, now, x):
+        """Add one sample. Returns the held value."""
+        self.live = x
+        self.samples.append((now, x))
+        keep = max(self.brighten_s, self.darken_s) + 1e-6
+        while len(self.samples) > 1 and self.samples[0][0] <= now - keep:
+            self.samples.popleft()
+        if self.held is None:
+            self.held = x
+            return self.held
+        up = [v for t, v in self.samples if t > now - self.brighten_s - 1e-6] or [x]
+        down = [v for t, v in self.samples if t > now - self.darken_s - 1e-6] or [x]
+        if min(up) > self.held + self.up_band:
+            self.held = min(up)
+        elif max(down) < self.held - self.down_band:
+            self.held = max(down)
+        return self.held
+
+    def pending(self):
+        """True while the newest sample is outside the band of the held value:
+        a change is under way and has not passed the debounce time yet."""
+        if self.held is None or self.live is None:
+            return False
+        return self.live > self.held + self.up_band or self.live < self.held - self.down_band
+
+    def reset(self, held=None):
+        self.held = held
+        self.live = None
+        self.samples.clear()
+
+
+class Steady:
+    """True while the samples of the last `window_s` seconds stay inside a
+    range of `band` in x."""
+
+    def __init__(self, window_s, band=STEADY_BAND):
+        self.window_s, self.band = window_s, band
+        self.samples = deque()
+
+    def feed(self, now, x):
+        self.samples.append((now, x))
+        while len(self.samples) > 1 and self.samples[0][0] < now - self.window_s:
+            self.samples.popleft()
+
+    def ok(self):
+        if not self.samples:
+            return True
+        vals = [v for _t, v in self.samples]
+        return max(vals) - min(vals) <= self.band
+
+    def clear(self):
+        self.samples.clear()
 
 
 class Curve:
@@ -230,8 +316,10 @@ class Learner:
     """Turns held slider changes into user points of a Curve and keeps them
     in a file. poll() runs from the loop of a daemon that owns the curve."""
 
-    def __init__(self, curve, path, run_dir, hold_s=HOLD_S, grace_s=None, backlight_dir=None):
+    def __init__(self, curve, path, run_dir, hold_s=HOLD_S, grace_s=None, backlight_dir=None,
+                 steady_band=STEADY_BAND):
         self.curve, self.path, self.run, self.hold_s = curve, path, run_dir, hold_s
+        self.steady = Steady(hold_s, steady_band)
         if grace_s is None:
             grace_s = float(os.environ.get("TSX_LEARN_GRACE_S", GRACE_S))
         self.grace_until = time.time() + grace_s    # wall clock, as the file times are
@@ -279,10 +367,16 @@ class Learner:
         print("tsx-brightness: learned points removed", file=sys.stderr, flush=True)
         return True
 
-    def poll(self, now, x, learning):
-        """now: a monotonic time in seconds. x: the smoothed x of the light.
+    def poll(self, now, x, learning, x_live=None):
+        """now: a monotonic time in seconds. x: the held x of the light.
+        x_live: the newest x of the light, before the debounce (default: x).
         learning: false while auto brightness is off or the screen is blank.
-        Returns True when the curve changed."""
+        The light must stay inside STEADY_BAND during the hold, so a change
+        of the light never makes a point. Returns True when the curve
+        changed."""
+        self.steady.feed(now, x)
+        if x_live is not None:
+            self.steady.feed(now, x_live)
         offset_path = os.path.join(self.run, "brightness-offset")
         off = read_int(offset_path)
         if not learning or not off or os.path.exists(os.path.join(self.run, "brightness")):
@@ -307,6 +401,10 @@ class Learner:
             return False
         if self.pending is None or self.pending[0] != off or self.pending[2] != level:
             self.pending = (off, now, level)
+            return False
+        if not self.steady.ok():
+            self.pending = (off, now, level)     # the light moved: the hold starts again
+            self.steady.samples.clear()
             return False
         if now - self.pending[1] < self.hold_s:
             return False
@@ -335,7 +433,10 @@ class Learner:
 #   python3 tsx_brightness.py als-daemon
 # It reads the curve ALS_CURVE of als.conf, learns user points, and writes the
 # whole curve to /run/tsx/als-curve ("lux:level" pairs, whole numbers). tsx-als
-# uses that file in place of ALS_CURVE while it exists.
+# uses that file in place of ALS_CURVE while it exists. tsx-als applies the
+# response model of LightResponse in shell: "lux" of als.state is the held
+# value and "raw" is the newest reading. The learner uses "raw" to see that
+# the light moved during the hold.
 
 def shell_value(path, key):
     """The value of KEY="value" in a shell-style file, or None."""
@@ -365,7 +466,7 @@ def als_daemon():
     kiosk_conf = env("TSX_KIOSK_CONF", "/etc/kiosk.conf")
     board_conf = env("TSX_PANEL_BOARD_CONF", "/etc/tsx/panel-board.conf")
     idled = env("TSX_IDLED_STATE", "/run/tsx-idled.state")
-    tick = float(env("TSX_LEARN_TICK", "1.0"))
+    tick = float(env("TSX_LEARN_TICK", "0.5"))
     release_s = float(env("TSX_LEARN_RELEASE_S", "3.0"))
 
     def kiosk(key, default):
@@ -417,7 +518,8 @@ def als_daemon():
             publish()
         if learn_on and auto and "lux" in st:
             screen_on = (read_text(idled) or "").split()[:1] == ["on"]
-            if learner.poll(now, lux_to_x(st["lux"]), screen_on):
+            live = lux_to_x(st["raw"]) if "raw" in st else None
+            if learner.poll(now, lux_to_x(st["lux"]), screen_on, live):
                 publish()
                 release_at = now + release_s
         if release_at is not None and now >= release_at:

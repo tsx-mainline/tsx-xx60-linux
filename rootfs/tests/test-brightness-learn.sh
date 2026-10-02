@@ -50,6 +50,22 @@ sleep 2
 [ ! -e $R/als-curve ] && [ ! -e $T/data/learn.json ] && [ -e $R/brightness-offset ] && ok "an offset from before the start is not learned" || bad "learned a stale offset"
 kill $PID 2>/dev/null; wait $PID 2>/dev/null
 rm -f $R/brightness-offset
+# a light that keeps changing during the hold never makes a point
+rm -f $R/als-curve $T/data/learn.json $R/brightness-offset
+python3 "$MOD" als-daemon > $T/daemon4.log 2>&1 &
+PID=$!
+sleep 0.6; echo -6 > $R/brightness-offset
+for i in $(seq 1 12); do
+	if [ $((i % 2)) = 0 ]; then raw=1500; else raw=150; fi
+	printf 'lux 150\nraw %s\nreport 150\nlevel 15\nauto on\n' $raw > $R/als.state.tmp; mv $R/als.state.tmp $R/als.state
+	sleep 0.2
+done
+[ ! -e $R/als-curve ] && [ ! -e $T/data/learn.json ] && [ -e $R/brightness-offset ] && ok "a light that changes during the hold makes no point" || bad "learned in a changing light"
+printf 'lux 150\nraw 150\nreport 150\nlevel 15\nauto on\n' > $R/als.state
+for i in $(seq 1 40); do [ -s $R/als-curve ] && break; sleep 0.1; done
+[ -s $R/als-curve ] && ok "the light is steady again: the held offset is learned" || bad "no point after the light settled"
+kill $PID 2>/dev/null; wait $PID 2>/dev/null
+rm -f $R/als-curve $T/data/learn.json $R/brightness-offset
 # a new start loads a saved file
 python3 - "$MOD" "$T/data/learn.json" <<'PY'
 import importlib.util, sys

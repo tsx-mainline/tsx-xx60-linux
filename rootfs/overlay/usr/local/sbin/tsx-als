@@ -12,18 +12,30 @@
 #   tsx-als lux             one reading in lux (no smoothing)
 #
 # It reads the MAX44009 through IIO (in_illuminance_input, lux), multiplies
-# it by ALS_SCALE and smooths the value. The front window passes only part of
+# it by ALS_SCALE and holds the value (see "Response" below). The front window passes only part of
 # the light, and ALS_SCALE corrects that (lux = sensor lux x ALS_SCALE). An
 # empty ALS_SCALE means 1.0. It maps the value to a backlight step with ALS_CURVE
-# (/etc/tsx/als.conf) and applies hysteresis. The step goes to
+# (/etc/tsx/als.conf). The step goes to
 # /run/tsx/als-level. tsx-idled uses that file in place of the day/night
 # level while the file is fresh (< 30 s). An absolute manual level still wins
 # (/run/tsx/brightness: "brightness N" key action, HA Backlight). The script
 # adds the local manual setting to the step (/run/tsx/brightness-offset:
 # key-strip slide, quick-settings overlay, "brightness +N/-N").
 # While the screen is lit, tsx-als also ramps the backlight itself one step at
-# a time, so the change is smooth and immediate. While the screen is blank,
-# it never touches the backlight.
+# a time (ALS_RAMP_MS), so the change is smooth and immediate. While the
+# screen is blank, it never touches the backlight.
+#
+# Response: the same model as tsx-sensord (LightResponse in tsx_brightness.py,
+# the idea of the brightening and darkening debounce of the Android automatic
+# brightness controller). The held light moves up only when every reading of
+# the last AUTO_BRIGHTEN_S seconds is more than AUTO_BRIGHTEN_BAND above it
+# (then it takes the lowest of them). It moves down only when every reading of
+# the last AUTO_DARKEN_S seconds is more than AUTO_DARKEN_BAND below it (then
+# it takes the highest). The bands are in log10(1 + lux). A short flash or
+# shadow changes nothing. A change of one step in the opposite direction of
+# the last change needs a double band. The values are in als.conf, and
+# kiosk.conf and panel-board.conf win over it. The MAX44009 makes a new value
+# every 0.8 s, so ALS_PERIOD_S is never below ALS_MIN_PERIOD_S (0.8).
 #
 # panel.conf: AUTO_BRIGHTNESS and ALS_SCALE reach this script through
 # /run/tsx/als.panel (written by "tsx-config apply", the lines ALS_AUTO and
@@ -54,15 +66,18 @@ IDLED=${TSX_IDLED_STATE:-/run/tsx-idled.state}
 PANEL=${TSX_ALS_PANEL:-$R/als.panel}
 CONFIG=${TSX_CONFIG_BIN:-tsx-config}
 
-ALS_AUTO=1 ALS_CURVE="0:3 5:5 20:8 80:12 300:17 1000:21 3000:23" ALS_INTERVAL=1
-ALS_SMOOTH=5 ALS_HYST_PCT=25 ALS_HYST_ABS=2 ALS_HOLD=10 ALS_RAMP_MS=150
+ALS_AUTO=1 ALS_CURVE="0:3 5:5 20:8 80:12 300:17 1000:21 3000:23"
+AUTO_BRIGHTEN_S=1.5 AUTO_DARKEN_S=5 AUTO_BRIGHTEN_BAND=0.06 AUTO_DARKEN_BAND=0.10
+ALS_PERIOD_S=0.8 ALS_MIN_PERIOD_S=0.8 ALS_REVERSE_S=30 ALS_RAMP_MS=60
 ALS_NIGHT_CAP=0 ALS_BL_COMP=0 ALS_REPORT_PCT=10 ALS_REPORT_MAX=300 ALS_DEVICE=auto
-ALS_START_WAIT=12 ALS_SCALE=
+ALS_START_WAIT=15 ALS_SCALE=
 [ -r "$CONF" ] && . "$CONF"
 BACKLIGHT_MAX=23 BACKLIGHT_MIN=1 NIGHT_START=22 NIGHT_END=7
 [ -r "$KCONF" ] && eval "$(grep -E '^(BACKLIGHT_MAX|BACKLIGHT_MIN|NIGHT_START|NIGHT_END)=[0-9]+$' "$KCONF")"
 BOARD=${TSX_PANEL_BOARD_CONF:-/etc/tsx/panel-board.conf}
 [ -r "$BOARD" ] && eval "$(grep -E '^(BACKLIGHT_MAX|BACKLIGHT_MIN)=[0-9]+$' "$BOARD")"
+# Response values: als.conf, then kiosk.conf, then the board file
+TIMING_RE='^(AUTO_BRIGHTEN_S|AUTO_DARKEN_S|AUTO_BRIGHTEN_BAND|AUTO_DARKEN_BAND|ALS_PERIOD_S)=[0-9]+(\.[0-9]+)?$'
 LEARN_MOD=${TSX_LEARN_MOD:-/usr/local/lib/tsx/tsx_brightness.py}
 
 log() { echo "$(date '+%F %T') tsx-als: $*"; }
@@ -92,6 +107,33 @@ load_scale() {
 		scale_bad="$src:$s"
 	fi
 	SCALE_MILLI=1000
+}
+
+# The response values as integers: BR_CS and DK_CS (centiseconds), UP_PCT and
+# DN_PCT (the bands as a percent of 1 + lux), PER_MS (milliseconds between
+# readings, never below ALS_MIN_PERIOD_S). A bad value gives the default.
+BR_CS=150 DK_CS=500 UP_PCT=15 DN_PCT=26 PER_MS=800
+load_timing() {
+	for f in "$KCONF" "$BOARD"; do
+		[ -r "$f" ] && eval "$(grep -E "$TIMING_RE" "$f")"
+	done
+	num='^[0-9]+(\.[0-9]+)?$'
+	for v in AUTO_BRIGHTEN_S AUTO_DARKEN_S AUTO_BRIGHTEN_BAND AUTO_DARKEN_BAND ALS_PERIOD_S ALS_MIN_PERIOD_S; do
+		eval "x=\$$v"
+		printf '%s' "$x" | grep -Eq "$num" || { log "bad value '$x' in $v. Using the default"; case $v in
+			AUTO_BRIGHTEN_S) AUTO_BRIGHTEN_S=1.5;; AUTO_DARKEN_S) AUTO_DARKEN_S=5;; AUTO_BRIGHTEN_BAND) AUTO_BRIGHTEN_BAND=0.06;;
+			AUTO_DARKEN_BAND) AUTO_DARKEN_BAND=0.10;; ALS_PERIOD_S) ALS_PERIOD_S=0.8;; ALS_MIN_PERIOD_S) ALS_MIN_PERIOD_S=0.8;; esac; }
+	done
+	eval "$(awk -v bs="$AUTO_BRIGHTEN_S" -v ds="$AUTO_DARKEN_S" -v bb="$AUTO_BRIGHTEN_BAND" -v db="$AUTO_DARKEN_BAND" -v p="$ALS_PERIOD_S" -v m="$ALS_MIN_PERIOD_S" \
+		'BEGIN{ if (p < m) p = m; printf "BR_CS=%d DK_CS=%d UP_PCT=%d DN_PCT=%d PER_MS=%d", bs*100+0.5, ds*100+0.5, (10^bb-1)*100+0.5, (10^db-1)*100+0.5, p*1000+0.5 }')"
+}
+
+timing_key=
+timing_log() {
+	k="$BR_CS $DK_CS $UP_PCT $DN_PCT $PER_MS"
+	[ "$k" != "$timing_key" ] || return 0
+	timing_key=$k
+	log "response: brighter after $(( BR_CS / 100 )).$(( BR_CS % 100 / 10 )) s (band $UP_PCT %), darker after $(( DK_CS / 100 )).$(( DK_CS % 100 / 10 )) s (band $DN_PCT %), reading every $PER_MS ms"
 }
 
 # Apply a deci-lux value of the sensor: lux x scale
@@ -207,11 +249,11 @@ esac
 
 # ---- daemon ------------------------------------------------------------------
 mkdir -p "$R"
-[ "$ALS_SMOOTH" -ge 1 ] 2>/dev/null || ALS_SMOOTH=1
-load_panel; load_scale
+load_panel; load_scale; load_timing; timing_log
 seen_auto=$PANEL_AUTO
-dev= acc= cur=0 last_dl=-1 last_change=0 rep=-1 rep_t=0 n=0 warned=
-now=${TSX_ALS_NOW:-}
+dev= dl= hist= cur=0 last_dl=-1 last_change=0 last_dir=0 rep=-1 rep_t=0 n=0 warned=
+now_cs=0
+[ -z "${TSX_ALS_NOW:-}" ] || now_cs=$(( TSX_ALS_NOW * 100 ))
 LEARN_PID=
 if [ -z "${TSX_ALS_LOOPS:-}" ] && command -v python3 >/dev/null 2>&1 && [ -r "$LEARN_MOD" ]; then
 	python3 "$LEARN_MOD" als-daemon &
@@ -222,14 +264,16 @@ trap 'rm -f "$R/als-level"; [ -n "$LEARN_PID" ] && kill "$LEARN_PID" 2>/dev/null
 while :; do
 	if [ -n "${TSX_ALS_LOOPS:-}" ] && [ "$n" -ge "$TSX_ALS_LOOPS" ]; then break; fi
 	n=$((n + 1))
-	if [ -n "${TSX_ALS_NOW:-}" ]; then now=$((now + ALS_INTERVAL)); else now=$(date +%s); fi
+	if [ -n "${TSX_ALS_NOW:-}" ]; then now_cs=$(( now_cs + PER_MS / 10 ))
+	else read -r up _ < /proc/uptime; f=${up#*.}; now_cs=$(( ${up%.*} * 100 + ${f#0} )); fi
+	now=$(( now_cs / 100 ))
 	[ -n "$dev" ] && [ -r "$dev/in_illuminance_input" ] || dev=$(find_dev)
 	if [ -z "$dev" ]; then
 		[ -n "$warned" ] || { log "no max44009 IIO device yet (CONFIG_MAX44009, DT node light-sensor@4a). Waiting"; warned=1; }
 		rm -f "$R/als-level"; sleep 10; continue
 	fi
 	if [ $(( n % 5 )) -eq 1 ] && [ "$n" -gt 1 ]; then
-		load_panel; load_scale
+		load_panel; load_scale; load_timing; timing_log
 		# AUTO_BRIGHTNESS changed in panel.conf (the setup page): act as "auto on|off"
 		if [ "$PANEL_AUTO" != "$seen_auto" ]; then
 			seen_auto=$PANEL_AUTO
@@ -238,7 +282,7 @@ while :; do
 			if [ -n "$w" ] && [ "$cur_a" != "$w" ]; then log "panel.conf: AUTO_BRIGHTNESS $w"; do_auto "$w"; fi
 		fi
 	fi
-	raw=$(read_dlux "$dev") || { sleep "$ALS_INTERVAL"; continue; }
+	raw=$(read_dlux "$dev") || { usleep $(( PER_MS * 1000 )); continue; }
 	# Right after a cold boot, the MAX44009 can read 0 lx for several seconds
 	# before its first conversion. If the script took that value at face
 	# value, it dimmed the boot splash to the darkest step and back up 10-20 s
@@ -246,7 +290,7 @@ while :; do
 	# readings). There is no als-level yet, so tsx-idled keeps the level on
 	# the glass (boot hold).
 	if [ "$raw" -le 0 ] && [ "$cur" -eq 0 ] && [ "$n" -le "$ALS_START_WAIT" ]; then
-		[ -n "${TSX_ALS_LOOPS:-}" ] || sleep "$ALS_INTERVAL"
+		usleep $(( PER_MS * 1000 ))
 		continue
 	fi
 	[ -n "$warned" ] && { log "sensor $dev: $((raw / 10)) lx"; warned=; }
@@ -257,26 +301,49 @@ while :; do
 	amb=$(( raw - ALS_BL_COMP * bl )); [ "$amb" -ge 0 ] || amb=0
 	amb=$(scale_dlux "$amb")
 
-	# Smooth the value
-	if [ -z "$acc" ]; then acc=$(( amb * ALS_SMOOTH )); else acc=$(( acc - acc / ALS_SMOOTH + amb )); fi
-	dl=$(( acc / ALS_SMOOTH ))
+	# Hold the value: keep the readings of the longer time, and look at the
+	# lowest of the brighten time and the highest of the darken time
+	hist="$hist $now_cs:$amb"
+	bcut=$(( now_cs - BR_CS - 1 )); dcut=$(( now_cs - DK_CS - 1 ))
+	pcut=$bcut; [ "$dcut" -ge "$pcut" ] || pcut=$dcut
+	keep= bmin= dmax=
+	for e in $hist; do
+		t=${e%%:*}; v=${e#*:}
+		[ "$t" -gt "$pcut" ] || continue
+		keep="$keep $e"
+		if [ "$t" -gt "$bcut" ] && { [ -z "$bmin" ] || [ "$v" -lt "$bmin" ]; }; then bmin=$v; fi
+		if [ "$t" -gt "$dcut" ] && { [ -z "$dmax" ] || [ "$v" -gt "$dmax" ]; }; then dmax=$v; fi
+	done
+	hist=$keep
+	if [ -z "$dl" ]; then dl=$amb
+	elif [ -n "$bmin" ] && [ "$bmin" -gt $(( dl + (dl + 10) * UP_PCT / 100 )) ]; then dl=$bmin
+	elif [ -n "$dmax" ] && [ "$dmax" -lt $(( dl - (dl + 10) * DN_PCT / 100 )) ]; then dl=$dmax
+	fi
 
-	# Pick the level with hysteresis
+	# Pick the level. A new learned curve or the first level: no checks
 	load_curve
 	want=$(curve_level "$dl")
 	if [ "$ALS_NIGHT_CAP" -gt 0 ] && is_night && [ "$want" -gt "$ALS_NIGHT_CAP" ]; then want=$ALS_NIGHT_CAP; fi
 	[ "$want" -le "$BACKLIGHT_MAX" ] || want=$BACKLIGHT_MAX
 	[ "$want" -ge "$BACKLIGHT_MIN" ] || want=$BACKLIGHT_MIN
 	if [ "$cur" -eq 0 ] || [ -n "$curve_changed" ]; then
-		# the first level, or a new learned curve: no hysteresis
 		curve_changed=
-		cur=$want; last_dl=$dl; last_change=$now
+		cur=$want; last_dl=$dl; last_change=$now_cs; last_dir=0
 	elif [ "$want" -ne "$cur" ]; then
-		d=$(( dl - last_dl )); [ "$d" -ge 0 ] || d=$(( -d ))
-		thr=$(( last_dl * ALS_HYST_PCT / 100 )); [ "$thr" -ge $(( ALS_HYST_ABS * 10 )) ] || thr=$(( ALS_HYST_ABS * 10 ))
-		if [ "$d" -gt "$thr" ] && [ $(( now - last_change )) -ge "$ALS_HOLD" ]; then
+		go=1
+		if [ "$want" -eq $(( cur + 1 )) ] || [ "$want" -eq $(( cur - 1 )) ]; then
+			# One step on a 24 step scale: the light must have moved a band from
+			# the light of the last change, two bands to go back within ALS_REVERSE_S
+			if [ "$want" -gt "$cur" ]; then dir=1; pct=$UP_PCT; else dir=-1; pct=$DN_PCT; fi
+			thr=$(( (last_dl + 10) * pct / 100 ))
+			if [ "$dir" -ne "$last_dir" ] && [ "$last_dir" -ne 0 ] && [ $(( now_cs - last_change )) -lt $(( ALS_REVERSE_S * 100 )) ]; then thr=$(( thr * 2 )); fi
+			d=$(( dl - last_dl )); [ "$d" -ge 0 ] || d=$(( -d ))
+			[ "$d" -gt "$thr" ] || go=
+		fi
+		if [ -n "$go" ]; then
 			log "$((dl / 10)) lx: step $cur -> $want"
-			cur=$want; last_dl=$dl; last_change=$now
+			if [ "$want" -gt "$cur" ]; then last_dir=1; else last_dir=-1; fi
+			cur=$want; last_dl=$dl; last_change=$now_cs
 		fi
 	fi
 
@@ -319,5 +386,5 @@ while :; do
 	printf 'lux %s\nraw %s\nreport %s\nlevel %s\nauto %s\n' "$lx" "$(( (raw + 5) / 10 ))" "$rep" "$cur" "$a" > "$R/als.state.tmp" \
 		&& mv -f "$R/als.state.tmp" "$R/als.state"
 
-	[ -n "${TSX_ALS_LOOPS:-}" ] || sleep "$ALS_INTERVAL"
+	usleep $(( PER_MS * 1000 ))
 done
