@@ -104,6 +104,13 @@ echo "$OUT" | grep -q "(--psr-source none): none" && ok "none: no PSR file" || b
 "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --dry-run --psr-source cloud >"$W/o7.txt" 2>&1 && bad "--psr-source cloud accepted" || ok "--psr-source cloud refused"
 grep -q "psr-source must be auto, panel, puf, or none" "$W/o7.txt" && ok "error names the valid values" || bad "no useful error: $(cat "$W/o7.txt")"
 
+echo "== 7b. stock LED bar firmware image (step 3c)"
+OUT=$("$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --config "$W/login.conf" --dry-run 2>&1)
+echo "$OUT" | grep -q "3c: stock LED bar firmware image: tsx-rescue-install ledstock /tmp/b (read-only: statussign_\*.upg" && ok "dry-run prints step 3c" || bad "no step 3c line"
+echo "$OUT" | grep -q "copies it to /data/tsx/vendor/" && ok "step 3c names the target on the panel" || bad "step 3c target missing"
+echo "$OUT" | grep -q "A missing file is not an error" && ok "step 3c says a missing file is not an error" || bad "step 3c missing-file note"
+grep -q 'lib/tsx-ledstock.sh' "$DRIVER" && ok "the install bundle carries tsx-ledstock.sh" || bad "bundle lacks tsx-ledstock.sh"
+
 echo "== 8. --help exits 0 with no payload at all"
 "$DRIVER" --help >/dev/null 2>&1 && ok "--help exits 0"
 

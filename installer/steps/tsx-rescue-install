@@ -11,6 +11,7 @@
 #   tsx-rescue-install check BUNDLE_DIR [--keep-data]
 #   tsx-rescue-install tfa   BUNDLE_DIR
 #   tsx-rescue-install psr   BUNDLE_DIR
+#   tsx-rescue-install ledstock BUNDLE_DIR
 #   tsx-rescue-install run   BUNDLE_DIR [--yes] [--keep-data]
 #
 # tfa (read-only, before run): look for the TFA9890 DSP files on the panel
@@ -28,6 +29,13 @@
 # download there instead (rootfs/vendor-fetch.sh --psr). On a panel with
 # government=1 (no Bluetooth module, docs/hardware.md "Panel variants"), it
 # looks for no file and puts only psr/SOURCE (source=not-needed) there.
+#
+# ledstock (read-only, before run): look for the stock firmware image of the
+# USB LED bar (statussign_*.upg) in stock Android's system partition, in the
+# same eMMC region (installer/lib/tsx-ledstock.sh). A valid file goes to
+# BUNDLE_DIR/ledstock/. "run" copies it to /data/tsx/vendor/ on tsxdata. It
+# stays on the panel and never goes into the root image. A reinstall that keeps
+# tsxdata keeps the copy. A missing file is not an error.
 #
 # --keep-data (a mainline -> mainline reinstall, docs/install.md "Reinstalling
 # or updating a mainline panel"): if the card is already folded and p4 is a
@@ -54,6 +62,7 @@
 #   tsx-usb-recovery       installer/emmc/tsx-usb-recovery (copied verbatim, runs standalone)
 #   tsx-tfa.sh             installer/lib/tsx-tfa.sh (the tfa command)
 #   tsx-psr.sh             (optional) installer/lib/tsx-psr.sh (the psr command)
+#   tsx-ledstock.sh        (optional) installer/lib/tsx-ledstock.sh (the ledstock command)
 #   tfa/<variant>/stereo.cnt   (optional) TFA9890 DSP tuning files. The host
 #                          puts them there, from the panel (tfa-panel/, above)
 #                          or pushed from rootfs/vendor-fetch.sh. tfa/SOURCE
@@ -62,6 +71,9 @@
 #                          (the psr command, above) or pushed from
 #                          rootfs/vendor-fetch.sh --psr. psr/SOURCE says where
 #                          it came from. It is deployed with it.
+#   ledstock/statussign_*.upg  (optional) the stock LED bar firmware image, from
+#                          the panel (the ledstock command, above).
+#                          ledstock/SOURCE says where it came from.
 #   kiosk-url.txt          (optional) one line: the KIOSK_URL to set
 #   panel.conf             (optional) installer/panel.conf.example, built by
 #                          the prompts of tsx-install-mainline or by
@@ -82,7 +94,7 @@ die() { say "ERROR: $*"; set_state "failed: $*"; exit 1; }
 CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,/^set -eu$/p' "$0" | sed '$d'; exit 2; }
 YES=0 KEEP_DATA=0
 while [ $# -gt 0 ]; do case "$1" in --yes) YES=1;; --keep-data) KEEP_DATA=1;; *) die "unknown option $1";; esac; shift; done
-case "$CMD" in check|run|tfa|psr) ;; *) sed -n '2,/^set -eu$/p' "$0" | sed '$d'; exit 2;; esac
+case "$CMD" in check|run|tfa|psr|ledstock) ;; *) sed -n '2,/^set -eu$/p' "$0" | sed '$d'; exit 2;; esac
 [ -f "$B/manifest" ] && grep -q '^format=tsx-rescue-install-1$' "$B/manifest" || die "$B is not a v2 install bundle (no manifest)"
 . "$B/tsx-rescue.sh"
 . /usr/share/tsx/tsx-lib.sh   # tsx_find_disk, TSX_MBR_P4_TYPE_OFFSET, TSX_ENV_OFFSET/SIZE (already on the rescue image)
@@ -164,6 +176,17 @@ if [ "$CMD" = psr ]; then
 		say "looking for the Bluetooth PSR file on this panel (read-only: $EROOT)"
 		tsx_psr_collect "$B/psr" "$EROOT" "$B/psr"
 	fi
+	set_state "checked OK"
+	exit 0
+fi
+
+# ---- ledstock: the stock LED bar firmware image from the panel (read-only) --
+if [ "$CMD" = ledstock ]; then
+	[ -f "$B/tsx-ledstock.sh" ] || die "$B/tsx-ledstock.sh missing (bundle too old for the ledstock command)"
+	. "$B/tsx-ledstock.sh"
+	set_state "looking for the stock LED bar firmware"
+	say "looking for the stock LED bar firmware image on this panel (read-only: $EROOT)"
+	tsx_ledstock_collect "$B/ledstock" "$EROOT" "$B/ledstock"
 	set_state "checked OK"
 	exit 0
 fi
@@ -345,6 +368,19 @@ if [ "$KEEP" = 0 ]; then
 	MKUUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null) || die "cannot generate a UUID for tsxdata"
 	say "mkfs.ext4 -L tsxdata -U $MKUUID $CP4"
 	tsx_mkfs_tsxdata "$CP4" "$MKUUID" || die "mkfs of $CP4 (tsxdata) failed"
+fi
+# The stock LED bar firmware image (the ledstock command above) goes to
+# /data/tsx/vendor/. Never fatal.
+if [ -f "$B/tsx-ledstock.sh" ]; then
+	. "$B/tsx-ledstock.sh"
+	LMNT=$RUN/newdata-led; mkdir -p "$LMNT"
+	if mount -t ext4 "$CP4" "$LMNT" 2>/dev/null; then
+		mkdir -p "$LMNT/tsx"
+		tsx_ledstock_deploy "$B/ledstock" "$LMNT" | while IFS= read -r l; do say "$l"; done
+		sync; umount "$LMNT"
+	else
+		say "  WARNING: ledstock: cannot mount $CP4 (tsxdata): the stock LED bar image is not copied (non-fatal)"
+	fi
 fi
 if [ -f "$B/panel.conf" ] || [ "$KEEP" = 1 ]; then
 	DMNT=$RUN/newdata; mkdir -p "$DMNT"

@@ -255,6 +255,7 @@ if [ "$DRYRUN" = 1 ]; then
 	puf) log "[dry-run] 3b: Bluetooth PSR file (--psr-source puf): rootfs/vendor-fetch.sh --psr here (the .puf download), push its file to the rescue. The panel is not searched";;
 	none) log "[dry-run] 3b: Bluetooth PSR file (--psr-source none): none. Bluetooth loads only its address";;
 	esac
+	log "[dry-run] 3c: stock LED bar firmware image: tsx-rescue-install ledstock /tmp/b (read-only: statussign_*.upg from stock Android's system partition on eMMC p8. The install copies it to /data/tsx/vendor/ on tsxdata. It stays on the panel. A reinstall that keeps /data keeps it. A missing file is not an error)"
 	if [ -n "$CONFIG" ]; then log "[dry-run] panel configuration: --config $CONFIG (prompts would be skipped)"
 	elif [ "$YES" = 1 ] && [ "$KIND" = mainline ] && [ "$KEEP_DATA" = 1 ]; then log "[dry-run] panel configuration: --yes with no --config on a reinstall: the panel's own /data/tsx/panel.conf would be kept in place on the kept tsxdata (only KERNEL_FLAVOR updated)"
 	elif [ "$YES" = 1 ] && [ "$KIND" = mainline ]; then log "[dry-run] panel configuration: --yes with no --config on a reinstall: the panel's own /data/tsx/panel.conf would be kept (copied onto the new tsxdata, if it has one)"
@@ -467,7 +468,7 @@ BASEURL2="http://$WSIP:$PORT2"
 cp "$FLAVOR_DIR/manifest" "$FLAVOR_DIR/boot.img" "$STAGE2/"
 mkdir -p "$STAGE2/stream"; ln -s "$(cd "$FLAVOR_DIR" && pwd)/root.img" "$STAGE2/stream/root.img"
 printf '%s\n' "$BASEURL2/stream/root.img" > "$STAGE2/root-url.txt"
-cp "$HERE/lib/tsx-rescue.sh" "$HERE/lib/tsx-tfa.sh" "$HERE/lib/tsx-psr.sh" "$HERE/emmc/tsx-usb-recovery" "$HERE/steps/tsx-rescue-install" "$STAGE2/"
+cp "$HERE/lib/tsx-rescue.sh" "$HERE/lib/tsx-tfa.sh" "$HERE/lib/tsx-psr.sh" "$HERE/lib/tsx-ledstock.sh" "$HERE/emmc/tsx-usb-recovery" "$HERE/steps/tsx-rescue-install" "$STAGE2/"
 (cd "$STAGE2" && find . -path ./stream -prune -o -type f ! -name 'SHA256SUMS*' -print | sort | xargs sha256sum > SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS)
 nohup python3 -m http.server "$PORT2" --bind 0.0.0.0 --directory "$STAGE2" >/dev/null 2>&1 &
 echo $! > "$STAGE2/.http.pid"
@@ -582,6 +583,22 @@ if [ "$TFA_USED" = none ]; then
 	log "  TFA9890: no DSP files will be installed: the speakers work, without the vendor EQ/volume presets (later: installer/steps/tsx-deploy-tfa.sh $PANEL)"
 else
 	log "  TFA9890 source used: $TFA_USED"
+fi
+
+# ------------------------------------ step 3c: stock LED bar firmware -------
+# The rescue copies statussign_*.upg from stock Android's system partition
+# (read-only, installer/lib/tsx-ledstock.sh). The install then puts it in
+# /data/tsx/vendor/ on the panel. The file never reaches this host. A missing
+# file never stops the install.
+log "== step 3c: stock LED bar firmware image: looking in the stock system of the panel (read-only, the file stays on the panel)"
+if run_stream_at "$RSSH" "sh /tmp/b/tsx-rescue-install ledstock /tmp/b 2>&1"; then
+	LED_RES=$(printf '%s\n' "$RS_OUT" | sed -n 's/^LEDSTOCK-RESULT //p' | tail -n 1)
+	case "$LED_RES" in
+	*ok=1*) log "  stock LED bar image: found ($LED_RES). The install copies it to /data/tsx/vendor/ on the panel";;
+	*) log "  stock LED bar image: not found. The install keeps a copy that /data already has";;
+	esac
+else
+	log "  WARNING: tsx-rescue-install ledstock failed (see above). The install continues without the stock LED bar image"
 fi
 
 # --------------------------------------------------------- step 4: install --
