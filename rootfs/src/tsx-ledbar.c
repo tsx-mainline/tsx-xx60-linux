@@ -28,8 +28,19 @@
  * it while the screen is blank. "apply" applies the color again. With off
  * or dim the tsx-ledbar service runs it when the screen blanks or wakes.
  *
+ * Effects: the open bar firmware "TSX-LEDBAR" (USB string 4, the "firmware"
+ * attribute of the kernel driver) runs effects on the bar itself. The "fx"
+ * command sends them as console lines (FX FADE, BLINK, BREATHE, RAINBOW,
+ * SMOOTH, CAP, OFF). The console is interface 0, so the kernel driver stays
+ * bound to interface 1. The stock firmware has no effects, and "fx" refuses
+ * to run. The state file records the running effect ("fx ..."). A host join
+ * ends an effect on the bar, so a new wanted color (set, on, off, boot) ends
+ * the effect and clears the record. "apply" starts the recorded effect
+ * again, for example after a restart of the bar.
+ *
  * Env overrides for tests: TSX_LEDBAR_SYSFS (LED dir), TSX_RUN_DIR,
- * TSX_IDLED_STATE, TSX_LEDBAR_CONF.
+ * TSX_IDLED_STATE, TSX_LEDBAR_CONF. A test build (-DNO_LIBUSB) writes
+ * console lines to the file TSX_LEDBAR_CONSOLE and answers as the firmware.
  */
 #define _GNU_SOURCE
 #include <ctype.h>
@@ -54,6 +65,8 @@
 #define MAXPKT 257
 #define JOIN_ANALOG_RED 3
 #define JOIN_DIGITAL_RED 0
+#define FX_FIRMWARE "TSX-LEDBAR"	/* firmware name prefix of our bar firmware */
+#define FXLEN 96
 
 static const char *sysled = "/sys/class/leds/tsx:rgb:bar";
 static const char *rundir = "/run/tsx";
@@ -163,7 +176,7 @@ static void load_conf(void)
 }
 
 /* ---- state --------------------------------------------------------------- */
-struct state { int want[3], last[3], out[3]; };
+struct state { int want[3], last[3], out[3]; char fx[FXLEN]; };
 
 static void state_path(char *p, size_t n) { snprintf(p, n, "%s/ledbar.state", rundir); }
 
@@ -178,6 +191,12 @@ static int read_state(struct state *st)
 		int *d = !strncmp(line, "want ", 5) ? st->want : !strncmp(line, "last ", 5) ? st->last :
 			 !strncmp(line, "out ", 4) ? st->out : NULL;
 		if (d) sscanf(strchr(line, ' '), "%d %d %d", &d[0], &d[1], &d[2]);
+		if (!strncmp(line, "fx ", 3) && strncmp(line + 3, "none", 4)) {
+			size_t l = strcspn(line + 3, "\n");
+			if (l >= sizeof st->fx) l = sizeof st->fx - 1;
+			memcpy(st->fx, line + 3, l);
+			st->fx[l] = 0;
+		}
 	}
 	fclose(f);
 	return 0;
@@ -198,17 +217,24 @@ static void write_state(const struct state *st, const char *backend)
 	mkdir(rundir, 0755);
 	state_path(p, sizeof p); snprintf(tmp, sizeof tmp, "%s.tmp", p);
 	if (!(f = fopen(tmp, "w"))) return;
-	fprintf(f, "want %d %d %d\nlast %d %d %d\nout %d %d %d\nscreen %s\nbackend %s\n",
+	fprintf(f, "want %d %d %d\nlast %d %d %d\nout %d %d %d\nscreen %s\nbackend %s\nfx %s\n",
 		st->want[0], st->want[1], st->want[2], st->last[0], st->last[1], st->last[2],
-		st->out[0], st->out[1], st->out[2], screen_blank() ? "blank" : "awake", backend);
+		st->out[0], st->out[1], st->out[2], screen_blank() ? "blank" : "awake", backend,
+		st->fx[0] ? st->fx : "none");
 	fclose(f);
 	rename(tmp, p);
+}
+
+/* The screen is blank and the BLANK rule scales the color: an effect waits for the wake. */
+static int fx_paused(void)
+{
+	return screen_blank() && strcmp(C.blank, "keep");
 }
 
 static void output_for(const int *want, int *out)
 {
 	int pct = 100;
-	if (screen_blank()) pct = !strcmp(C.blank, "keep") ? 100 : !strcmp(C.blank, "dim") ? C.blank_dim : 0;
+	if (fx_paused()) pct = !strcmp(C.blank, "dim") ? C.blank_dim : 0;
 	for (int i = 0; i < 3; i++) out[i] = (want[i] * pct + 50) / 100;
 }
 
@@ -261,11 +287,20 @@ static libusb_context *uctx;
 static libusb_device_handle *uh;
 static unsigned char ep_out, ep_in;
 static int out_int, in_int;
-static int usb_iface = IO_IFACE;	/* the interface that usb_open() claims */
+static int usb_iface = IO_IFACE;	/* the interface that usb_open() claimed */
 
-static int usb_open(void)
+static void usb_close(void)
 {
-	if (uh) return 0;
+	if (uh) { libusb_release_interface(uh, usb_iface); libusb_close(uh); uh = NULL; }
+	if (uctx) { libusb_exit(uctx); uctx = NULL; }
+	ep_out = ep_in = 0;
+}
+
+static int usb_open(int iface)
+{
+	if (uh && usb_iface == iface) return 0;
+	usb_close();
+	usb_iface = iface;
 	if (libusb_init(&uctx)) return -EIO;
 	uh = libusb_open_device_with_vid_pid(uctx, VID, PID);
 	if (!uh) return -ENODEV;
@@ -291,12 +326,6 @@ static int usb_open(void)
 	return 0;
 }
 
-static void usb_close(void)
-{
-	if (uh) { libusb_release_interface(uh, usb_iface); libusb_close(uh); uh = NULL; }
-	if (uctx) { libusb_exit(uctx); uctx = NULL; }
-}
-
 static int usb_xfer(unsigned char ep, int is_int, unsigned char *buf, int n, int *got, int ms)
 {
 	return is_int ? libusb_interrupt_transfer(uh, ep, buf, n, got, ms)
@@ -305,7 +334,7 @@ static int usb_xfer(unsigned char ep, int is_int, unsigned char *buf, int n, int
 
 static int usb_send(const unsigned char *p, int n)
 {
-	int r = usb_open(), got = 0;
+	int r = usb_open(IO_IFACE), got = 0;
 	if (r) return r;
 	unsigned char b[MAXPKT]; memcpy(b, p, n);
 	r = usb_xfer(ep_out, out_int, b, n, &got, 1000);
@@ -322,7 +351,7 @@ static int usb_send(const unsigned char *p, int n)
 
 static int usb_read_loop(int ms)
 {
-	int r = usb_open();
+	int r = usb_open(IO_IFACE);
 	if (r) return r;
 	if (!ep_in) die("no IN endpoint");
 	unsigned char in[512]; int got, left = ms;
@@ -340,13 +369,15 @@ static int usb_read_loop(int ms)
 /*
  * One line on the console (interface 0): drop old output, send LINE CR LF,
  * then print the answer until it is quiet for 300 ms or MS have passed.
- * The STM32 can drop off the bus during the answer ("reboot"). That ends the
- * answer and is no error.
+ * With ANS, the answer goes there (N bytes at most) instead, and the first
+ * full line ends it. The STM32 can drop off the bus during the answer
+ * ("reboot"). That ends the answer and is no error.
  */
-static int usb_console(const char *line, int ms)
+static int usb_console(const char *line, int ms, char *ans, size_t ans_n)
 {
-	usb_iface = CONSOLE_IFACE;
-	int r = usb_open(), got;
+	int r = usb_open(CONSOLE_IFACE), got;
+	size_t alen = 0;
+	if (ans) ans[0] = 0;
 	if (r) return r;
 	if (!ep_in) die("console: no IN endpoint");
 	unsigned char in[512], out[MAXPKT];
@@ -361,18 +392,51 @@ static int usb_console(const char *line, int ms)
 		r = usb_xfer(ep_in, in_int, in, sizeof in, &got, 100);
 		if (r && r != LIBUSB_ERROR_TIMEOUT) break;
 		if (!r && got > 0) {
-			for (int i = 0; i < got; i++) if (in[i] != '\r') putchar(in[i]);
+			for (int i = 0; i < got; i++) {
+				if (in[i] == '\r') continue;
+				if (!ans) putchar(in[i]);
+				else if (alen + 1 < ans_n) { ans[alen++] = in[i]; ans[alen] = 0; }
+			}
 			any = 1; quiet = 0;
+			if (ans && alen && ans[alen - 1] == '\n') break;
 		} else if (any && (quiet += 100) >= 300) break;
 	}
-	putchar('\n');
+	if (!ans) putchar('\n');
 	return 0;
+}
+
+/* String 4 of the bar: the firmware name. */
+static int usb_firmware(char *buf, size_t n)
+{
+	libusb_context *c; libusb_device_handle *h; int r = -ENODEV;
+	if (libusb_init(&c)) return -EIO;
+	if ((h = libusb_open_device_with_vid_pid(c, VID, PID))) {
+		if (libusb_get_string_descriptor_ascii(h, 4, (unsigned char *)buf, (int)n) > 0) r = 0;
+		libusb_close(h);
+	}
+	libusb_exit(c);
+	return r;
 }
 #else
 static int usb_send(const unsigned char *p, int n) { (void)p; (void)n; return -ENOSYS; }
 static int usb_read_loop(int ms) { (void)ms; return -ENOSYS; }
-static int usb_console(const char *line, int ms) { (void)line; (void)ms; return -ENOSYS; }
 static void usb_close(void) {}
+static int usb_firmware(char *buf, size_t n) { (void)buf; (void)n; return -ENODEV; }
+/*
+ * Test build: append the line to $TSX_LEDBAR_CONSOLE and answer as the bar
+ * firmware ("fx test", or the text of $TSX_LEDBAR_ANSWER).
+ */
+static int usb_console(const char *line, int ms, char *ans, size_t ans_n)
+{
+	const char *p = getenv("TSX_LEDBAR_CONSOLE"), *a = getenv("TSX_LEDBAR_ANSWER"); FILE *f;
+	(void)ms;
+	if (!p || !(f = fopen(p, "a"))) return -ENOSYS;
+	fprintf(f, "%s\n", line);
+	fclose(f);
+	if (ans) snprintf(ans, ans_n, "%s\n", a ? a : "fx test");
+	else puts(a ? a : "fx test");
+	return 0;
+}
 #endif
 
 static const char *backend_name(void)
@@ -401,18 +465,122 @@ static int send_rgb(const int *rgb)
 	return 0;
 }
 
-/* Set the wanted color (NULL keeps the old one), compute the output, send it and record it. */
-static int apply(const int *want)
+/* ---- effects (bar firmware TSX-LEDBAR) ------------------------------------ */
+/* The firmware name: the "firmware" attribute of the kernel driver, else USB string 4. */
+static int bar_firmware(char *buf, size_t n)
+{
+	buf[0] = 0;
+	if (!force_usb && !sys_read("firmware", buf, n) && buf[0]) return 0;
+	return dry_run ? -ENODEV : usb_firmware(buf, n);
+}
+
+static int fx_capable(void)
+{
+	char fw[128];
+	return !bar_firmware(fw, sizeof fw) && !strncmp(fw, FX_FIRMWARE, strlen(FX_FIRMWARE));
+}
+
+/*
+ * Send the effect REC ("breathe 100 0 0 4000") as the console line
+ * "FX BREATHE 100 0 0 4000". The firmware answers "fx NAME". Any other
+ * answer is a refusal. QUIET drops the error message.
+ */
+static int fx_send(const char *rec, int quiet)
+{
+	char line[FXLEN + 8], ans[128] = "";
+	int n = snprintf(line, sizeof line, "FX %s", rec), e;
+	for (int i = 3; i < n; i++) line[i] = toupper((unsigned char)line[i]);
+	if (dry_run) { printf("console %s\n", line); return 0; }
+	e = usb_console(line, 1500, ans, sizeof ans);
+	usb_close();
+	if (!e && strncmp(ans, "fx ", 3)) {
+		ans[strcspn(ans, "\n")] = 0;
+		if (!quiet) fprintf(stderr, "tsx-ledbar: the LED bar refused '%s': '%s'\n", line, ans);
+		e = -EPROTO;
+	}
+	return e;
+}
+
+/*
+ * Set the wanted color (NULL keeps the old one), compute the output, send it
+ * and record it. A new color or STOP_FX ends the recorded effect. Without
+ * them, the recorded effect starts again after the color, or it waits while
+ * the screen is blank. The joins end an effect. But after a fade, the bar
+ * keeps the fade color when the joins do not change its host color. So
+ * "FX OFF" follows the joins.
+ */
+static int apply(const int *want, int stop_fx)
 {
 	struct state st; read_state(&st);
+	int had_fx = st.fx[0] != 0, e, e_fx = 0;
 	if (want) {
 		memcpy(st.want, want, sizeof st.want);
 		if (want[0] || want[1] || want[2]) memcpy(st.last, want, sizeof st.last);
 	}
+	if (want || stop_fx) st.fx[0] = 0;
+	if (had_fx && !fx_capable()) st.fx[0] = had_fx = 0;	/* the bar runs another firmware now */
 	output_for(st.want, st.out);
-	int e = send_rgb(st.out);
+	e = send_rgb(st.out);
+	if (!e && st.fx[0] && !fx_paused()) e_fx = fx_send(st.fx, 0);
+	else if (!e && (had_fx || stop_fx)) {
+		int e_off = fx_send("off", !stop_fx);
+		if (stop_fx) e_fx = e_off;
+	}
 	/* With no bar, keep the wanted color: tsx-ledbard applies it at the plug-in. */
 	if (!dry_run && (!e || e == -ENODEV)) write_state(&st, backend_name());
+	return e ? e : e_fx;
+}
+
+/* fx NAME ARGS: the value ranges of the firmware. COLOR: the first three values are R G B. */
+static const struct fxdef {
+	const char *name; int nmin, nmax, color; int lo[5], hi[5];
+} fxdefs[] = {
+	{ "off", 0, 0, 0, { 0 }, { 0 } },
+	{ "fade", 4, 4, 1, { 0, 0, 0, 0 }, { 100, 100, 100, 600000 } },
+	{ "blink", 5, 5, 1, { 0, 0, 0, 1, 1 }, { 100, 100, 100, 600000, 600000 } },
+	{ "breathe", 4, 4, 1, { 0, 0, 0, 100 }, { 100, 100, 100, 600000 } },
+	{ "rainbow", 1, 2, 0, { 100, 0 }, { 600000, 100 } },
+	{ "smooth", 1, 1, 0, { 0 }, { 60000 } },
+	{ "cap", 1, 1, 0, { 10 }, { 150 } },
+};
+
+static void __attribute__((noreturn)) usage(void);
+static int to_int(const char *s, int lo, int hi, const char *what);
+
+static int cmd_fx(char **av, int n)
+{
+	const struct fxdef *d = NULL;
+	char rec[FXLEN], fw[128];
+	int v[5], len, e;
+	for (size_t i = 0; n && i < sizeof fxdefs / sizeof fxdefs[0]; i++)
+		if (!strcmp(av[0], fxdefs[i].name)) d = &fxdefs[i];
+	if (n && (!d || n - 1 < d->nmin || n - 1 > d->nmax)) usage();
+	if (bar_firmware(fw, sizeof fw) || strncmp(fw, FX_FIRMWARE, strlen(FX_FIRMWARE)))
+		die("effects need the LED bar firmware %s (this bar: %s)", FX_FIRMWARE, fw[0] ? fw : "not found");
+	if (!n) {	/* the running effect */
+		char ans[128] = "";
+		if (dry_run) { puts("console FX"); return 0; }
+		e = usb_console("FX", 1500, ans, sizeof ans);
+		if (!e) fputs(ans, stdout);
+		return e;
+	}
+	if (!strcmp(d->name, "off")) return apply(NULL, 1);
+	len = snprintf(rec, sizeof rec, "%s", d->name);
+	for (int i = 0; i < n - 1; i++) {
+		v[i] = to_int(av[i + 1], d->lo[i], d->hi[i], d->name);
+		len += snprintf(rec + len, sizeof rec - len, " %d", v[i]);
+	}
+	/* smooth and cap are settings, no effect */
+	if (!strcmp(d->name, "smooth") || !strcmp(d->name, "cap")) return fx_send(rec, 0);
+	/* The effect color becomes the wanted color. Rainbow: white at its level. */
+	struct state st; read_state(&st);
+	if (d->color) memcpy(st.want, v, sizeof st.want);
+	else st.want[0] = st.want[1] = st.want[2] = n == 3 ? v[1] : 100;
+	if (st.want[0] || st.want[1] || st.want[2]) memcpy(st.last, st.want, sizeof st.last);
+	snprintf(st.fx, sizeof st.fx, "%s", rec);
+	output_for(st.want, st.out);
+	e = fx_paused() ? 0 : fx_send(rec, 0);
+	if (!dry_run && !e) write_state(&st, backend_name());
 	return e;
 }
 
@@ -431,6 +599,16 @@ static void __attribute__((noreturn)) usage(void)
 	      "  console LINE [MS]  send LINE to the STM32 console (interface 0), print the answer\n"
 	      "                     (default 1500 ms), e.g. console 'tlcoutmode red 0'\n"
 	      "  info               backend and device details\n"
+	      "  fw                 firmware name of the bar, and \"effects yes\" for TSX-LEDBAR\n"
+	      "  fx                 print the running effect (firmware TSX-LEDBAR only)\n"
+	      "  fx fade R G B MS   fade to a color (MS 0..600000)\n"
+	      "  fx blink R G B ON OFF  blink a color (ms on, ms off)\n"
+	      "  fx breathe R G B MS  breathe a color (period MS 100..600000)\n"
+	      "  fx rainbow MS [LEVEL]  hue cycle (period MS, LEVEL 0..100, default 100)\n"
+	      "  fx smooth MS       ramp each new color over MS (0..60000, 0 = at once)\n"
+	      "  fx cap PERCENT     power cap of the three colors (10..150)\n"
+	      "  fx off             end the effect, show the wanted color\n"
+	      "                     A new color (set, on, off, boot) ends an effect, apply starts it again\n"
 	      "  -n = print the packets instead of sending; --usb = use libusb even with the kernel driver\n",
 	      stderr);
 	exit(2);
@@ -471,21 +649,27 @@ int main(int argc, char **argv)
 		if (n == 1) { if (parse_rgb(av[0], rgb)) die("set: want R G B (0..100)"); }
 		else if (n == 3) for (int i = 0; i < 3; i++) rgb[i] = to_int(av[i], 0, 100, "color");
 		else usage();
-		e = apply(rgb);
+		e = apply(rgb, 0);
 	} else if (!strcmp(cmd, "on")) {
 		struct state st; read_state(&st);
-		e = apply(st.last[0] >= 0 && (st.last[0] || st.last[1] || st.last[2]) ? st.last : C.boot);
+		e = apply(st.last[0] >= 0 && (st.last[0] || st.last[1] || st.last[2]) ? st.last : C.boot, 0);
 	} else if (!strcmp(cmd, "off")) {
-		int z[3] = { 0, 0, 0 }; e = apply(z);
+		int z[3] = { 0, 0, 0 }; e = apply(z, 0);
 	} else if (!strcmp(cmd, "boot")) {
-		e = apply(C.boot);
+		e = apply(C.boot, 0);
 	} else if (!strcmp(cmd, "apply")) {
-		e = apply(NULL);
+		e = apply(NULL, 0);
+	} else if (!strcmp(cmd, "fx")) {
+		e = cmd_fx(av, n);
+	} else if (!strcmp(cmd, "fw")) {
+		char fw[128];
+		if (bar_firmware(fw, sizeof fw)) { puts("firmware unknown\neffects no"); e = -ENODEV; }
+		else printf("firmware %s\neffects %s\n", fw, fx_capable() ? "yes" : "no");
 	} else if (!strcmp(cmd, "get")) {
 		struct state st;
 		if (read_state(&st)) { puts("unknown (no state yet)"); return 0; }
-		printf("want %d %d %d\nlast %d %d %d\nout %d %d %d\n", st.want[0], st.want[1], st.want[2],
-		       st.last[0], st.last[1], st.last[2], st.out[0], st.out[1], st.out[2]);
+		printf("want %d %d %d\nlast %d %d %d\nout %d %d %d\nfx %s\n", st.want[0], st.want[1], st.want[2],
+		       st.last[0], st.last[1], st.last[2], st.out[0], st.out[1], st.out[2], st.fx[0] ? st.fx : "none");
 	} else if (!strcmp(cmd, "analog")) {
 		if (n != 2) usage();
 		unsigned char p[8];
@@ -507,7 +691,7 @@ int main(int argc, char **argv)
 	} else if (!strcmp(cmd, "console")) {
 		if (n < 1 || n > 2) usage();
 		if (dry_run) printf("console %s\n", av[0]);
-		else e = usb_console(av[0], n == 2 ? to_int(av[1], 100, 60000, "ms") : 1500);
+		else e = usb_console(av[0], n == 2 ? to_int(av[1], 100, 60000, "ms") : 1500, NULL, 0);
 	} else if (!strcmp(cmd, "info")) {
 		printf("backend %s\nsysfs %s (%s)\n", backend_name(), sysled, have_sysfs() ? "present" : "absent");
 		if (have_sysfs()) {

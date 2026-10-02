@@ -15,6 +15,11 @@
 # screen state does nothing to the bar, so an effect that runs on the bar
 # keeps running.
 #
+# Effects: after the check it logs the firmware name of the bar. With the
+# bar firmware TSX-LEDBAR it sends FX_SMOOTH and FX_CAP of ledbar.conf to
+# the bar, and "tsx-ledbar apply" starts the recorded effect again. The
+# stock firmware has no effects, and the daemon works as before.
+#
 #   tsx-ledbard          run as the service
 #   tsx-ledbard check    check (and restart) the LED bar once, apply the
 #                        wanted color, then exit (1 if the bar stays dark)
@@ -31,6 +36,27 @@ DRIVER=${TSX_LEDBAR_DRIVER:-/sys/bus/usb/drivers/leds-crestron-stm32}
 TRIES=${TSX_LEDBAR_TRIES:-3}
 WAIT=${TSX_LEDBAR_WAIT:-20}
 log() { echo "$(date '+%F %T') tsx-ledbar: $*"; }
+
+# conf_num KEY: the number of KEY in ledbar.conf, empty when not set
+conf_num() {
+	sed -n "s/^$1=[\"]*\([0-9]*\).*/\1/p" "$CONF" 2>/dev/null | tail -n 1
+}
+
+# Log the firmware of the bar. With TSX-LEDBAR, send the effect settings.
+fx_setup() {
+	fw_out=$(tsx-ledbar fw 2>/dev/null)
+	fw_name=$(echo "$fw_out" | sed -n 's/^firmware //p')
+	smooth=$(conf_num FX_SMOOTH) cap=$(conf_num FX_CAP)
+	case $fw_out in
+	*"effects yes"*)
+		log "LED bar firmware $fw_name, effects on"
+		if [ -n "$smooth" ]; then tsx-ledbar fx smooth "$smooth" >/dev/null || log "FX_SMOOTH=$smooth failed"; fi
+		if [ -n "$cap" ]; then tsx-ledbar fx cap "$cap" >/dev/null || log "FX_CAP=$cap failed"; fi;;
+	*)
+		log "LED bar firmware ${fw_name:-unknown}, no effects"
+		[ -z "$smooth$cap" ] || log "FX_SMOOTH and FX_CAP need the LED bar firmware TSX-LEDBAR";;
+	esac
+}
 
 # BLANK of ledbar.conf: keep (default), off or dim
 blank_rule() {
@@ -127,6 +153,7 @@ check)
 	bar_id || { log "LED bar not found (USB 14be:001b)"; exit 1; }
 	wait_led
 	recover; rc=$?
+	fx_setup
 	tsx-ledbar apply || log "apply failed"
 	exit $rc;;
 "") ;;
@@ -143,6 +170,7 @@ while :; do
 			recover
 			bar_id
 			cur=$BAR
+			fx_setup
 			if [ -n "$first" ]; then
 				if tsx-ledbar boot; then
 					log "boot color set ($(tsx-ledbar get | sed -n 's/^want //p'))"

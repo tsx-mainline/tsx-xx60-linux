@@ -12,11 +12,15 @@
 #                                     It fails when no daemon reads the FIFO.
 #   tsx-panelctl get NAME             print one value: volume (percent), lux,
 #                                     als-auto (on or off), screen, ledbar
-#                                     (R G B, 0 to 100), keypad-led, last-key.
+#                                     (R G B, 0 to 100), ledbar-fx (the effect
+#                                     of the LED bar, or none), keypad-led,
+#                                     last-key.
 #                                     It prints nothing and fails when the panel
 #                                     has no value (no sound card, no sensor).
 #   tsx-panelctl has NAME             exit 0 when the panel has that hardware:
-#                                     ledbar, keypad, als or sound
+#                                     ledbar, ledbar-fx (the LED bar firmware
+#                                     TSX-LEDBAR, with effects), keypad, als
+#                                     or sound
 #   tsx-panelctl events               print a line when a value changes, until it
 #                                     is stopped: "button NAME short|long|hold",
 #                                     "lux N", "als-auto on|off", "screen ...",
@@ -135,6 +139,22 @@ bl_min() {
 
 reject() { log "rejected: $(safe "$*")"; }
 
+# fx_ok NAME VALUE...: an effect of the LED bar firmware TSX-LEDBAR with
+# the right count of plain numbers. tsx-ledbar checks the exact ranges.
+fx_ok() {
+	fx_name=$1; shift
+	case "$fx_name" in
+	off) fx_n=0;;
+	fade|breathe) fx_n=4;;
+	blink) fx_n=5;;
+	rainbow) fx_n=1; [ $# = 2 ] && fx_n=2;;
+	smooth|cap) fx_n=1;;
+	*) return 1;;
+	esac
+	[ $# = "$fx_n" ] || return 1
+	for fx_v in "$@"; do in_range "$fx_v" 0 600000 || return 1; done
+}
+
 # ---- the client side: send, get, has, events -------------------------------
 field() {  # field FILE KEY: the rest of the first line "KEY ..."
 	[ -r "$1" ] && sed -n "s/^$2 //p" "$1" | head -n 1
@@ -151,6 +171,7 @@ get_value() {
 	als-auto) v=$(field "$R/als.state" auto);;
 	screen) v=$(head -n 1 "$IDLED_STATE" 2>/dev/null);;
 	ledbar) v=$(field "$R/ledbar.state" want);;
+	ledbar-fx) v=$(field "$R/ledbar.state" fx);;
 	keypad-led) v=$(field "$R/buttons.state" led);;
 	last-key) v=$(field "$R/buttons.state" last);;
 	*) echo "tsx-panelctl: unknown value '$1'" >&2; return 2;;
@@ -163,6 +184,8 @@ has_hw() {
 	case "$1" in
 	# busybox ash returns 127 from "command -v" when the name is missing
 	ledbar) command -v "$LEDBAR" >/dev/null 2>&1 && return 0 || return 1;;
+	# the LED bar runs the firmware TSX-LEDBAR, which has effects
+	ledbar-fx) "$LEDBAR" fw 2>/dev/null | grep -qx 'effects yes';;
 	keypad) [ -r "$BUTTONS_CONF" ];;
 	als) [ -r "$ALS_CONF" ] || [ -r "$R/als.state" ];;
 	sound) [ -e "$ASOUND/$CARD" ];;
@@ -213,7 +236,7 @@ get) [ $# = 2 ] || { echo "usage: tsx-panelctl get NAME" >&2; exit 2; }; get_val
 has) [ $# = 2 ] || { echo "usage: tsx-panelctl has NAME" >&2; exit 2; }; has_hw "$2"; exit $?;;
 events) cmd_events; exit $?;;
 '') ;;
-*) sed -n '2,28p' "$0" >&2; exit 2;;
+*) sed -n '2,32p' "$0" >&2; exit 2;;
 esac
 
 mkdir -p "$R"
@@ -236,6 +259,9 @@ handle() {
 			log "ledbar on"; "$LEDBAR" on
 		elif [ "$a1" = set ] && in_range "$a2" 0 100 && in_range "$a3" 0 100 && in_range "$a4" 0 100 && [ -z "$rest" ]; then
 			log "ledbar set $a2 $a3 $a4"; "$LEDBAR" set "$a2" "$a3" "$a4"
+		elif [ "$a1" = fx ] && fx_ok "$a2" $a3 $a4 $rest; then
+			# set -f is on: the split of the numbers cannot expand a glob
+			log "ledbar fx $a2 $a3 $a4 $rest"; "$LEDBAR" fx "$a2" $a3 $a4 $rest
 		else reject "ledbar $a1 $a2 $a3 $a4 $rest"; fi;;
 	keypad)
 		if [ "$a1" = led ] && [ "$a2" = off ] && [ -z "$a3$a4$rest" ]; then

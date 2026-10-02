@@ -6,6 +6,7 @@
 #
 # Fake console: the chips report "not initialized" until the bar had
 # OK_AFTER restarts (file $T/ok_after). "silent" gives no answer.
+# Fake firmware: "tsx-ledbar fw" prints the file $T/fw (stock by default).
 # SH selects the shell for tsx-ledbard (default sh, for example SH="busybox sh").
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -45,6 +46,7 @@ console)
 		exit 0;;
 	esac;;
 get) echo "want 0 0 20";;
+fw) cat "\$T/fw";;
 esac
 exit 0
 EOF
@@ -59,7 +61,11 @@ plug() {
 	echo 2 > "$T/usb/2-1/busnum"; echo "${1:-2}" > "$T/usb/2-1/devnum"
 	: > "$T/usb/2-1:1.0/bInterfaceNumber"
 }
-reset() { echo 0 > "$T/reboots"; echo "$1" > "$T/ok_after"; : > "$T/calls"; rm -f "$T/no_reenum"; }
+STOCK="firmware TSW-XX60-LB [v1.3443.00018]
+effects no"
+OWN="firmware TSX-LEDBAR [v0.1.1]
+effects yes"
+reset() { echo 0 > "$T/reboots"; echo "$1" > "$T/ok_after"; : > "$T/calls"; rm -f "$T/no_reenum"; echo "$STOCK" > "$T/fw"; }
 reboots() { cat "$T/reboots"; }
 ncalls() { grep -c "^$1" "$T/calls"; }
 
@@ -90,7 +96,22 @@ out=$($SH "$D" check 2>&1); rc=$?
 [ $rc = 0 ] && ok "started: rc 0" || bad "started: rc $rc"
 [ "$(reboots)" = 0 ] && ok "started: no reboot" || bad "started: $(reboots) reboots"
 [ "$(ncalls 'console tlcoutmode')" = 3 ] && ok "started: red, green and blue checked" || bad "started: $(ncalls 'console tlcoutmode') checks"
-[ -z "$out" ] && ok "started: no log line" || bad "started: log: $out"
+[ "$(echo "$out" | sed 's/^[-0-9: ]*//')" = "tsx-ledbar: LED bar firmware TSW-XX60-LB [v1.3443.00018], no effects" ] && ok "started: only the firmware line" || bad "started: log: $out"
+[ "$(ncalls fx)" = 0 ] && ok "stock firmware: no fx command" || bad "stock firmware: $(grep ^fx "$T/calls")"
+
+# 3b. the effect settings of ledbar.conf: sent with TSX-LEDBAR, not with the stock firmware
+printf 'FX_SMOOTH=500\nFX_CAP="120"\n' > "$T/fx.conf"
+reset 0
+out=$(TSX_LEDBAR_CONF=$T/fx.conf $SH "$D" check 2>&1)
+[ "$(ncalls fx)" = 0 ] && ok "stock firmware: FX_SMOOTH and FX_CAP not sent" || bad "stock firmware: $(grep ^fx "$T/calls")"
+echo "$out" | grep -q "FX_SMOOTH and FX_CAP need the LED bar firmware TSX-LEDBAR" && ok "stock firmware: settings log line" || bad "stock firmware: log: $out"
+reset 0; echo "$OWN" > "$T/fw"
+out=$(TSX_LEDBAR_CONF=$T/fx.conf $SH "$D" check 2>&1)
+echo "$out" | grep -q "LED bar firmware TSX-LEDBAR \[v0.1.1\], effects on" && ok "own firmware: log line" || bad "own firmware: log: $out"
+[ "$(grep -v '^console' "$T/calls" | tr '\n' '|')" = "fw|fx smooth 500|fx cap 120|apply|" ] && ok "own firmware: settings, then apply" || bad "own firmware: calls $(cat "$T/calls")"
+reset 0; echo "$OWN" > "$T/fw"
+out=$($SH "$D" check 2>&1)
+[ "$(ncalls fx)" = 0 ] && ok "own firmware without settings: no fx command" || bad "own firmware: $(grep ^fx "$T/calls")"
 
 # 4. no clear answer on the console: no restart
 reset silent
@@ -119,6 +140,7 @@ grep -q "LED bar not found yet" "$T/log" && ok "service: waiting line" || bad "s
 plug 5
 sleep 3
 grep -qx boot "$T/calls" && ok "service: boot color at the first plug-in" || bad "service: no boot call: $(cat "$T/calls")"
+grep -q "LED bar firmware TSW-XX60-LB" "$T/log" && ok "service: firmware line" || bad "service: no firmware line"
 [ "$(reboots)" = 0 ] && ok "service: good bar, no reboot" || bad "service: $(reboots) reboots"
 rm -rf "$T/usb/2-1" "$T/usb/2-1:1.0"
 sleep 2
