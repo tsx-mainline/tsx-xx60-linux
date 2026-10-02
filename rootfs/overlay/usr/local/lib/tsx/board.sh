@@ -32,9 +32,17 @@
 #   TSX_BT_MAC_SETTABLE    yes | no: BT_MAC can set the Bluetooth address
 #   TSX_MAC_SOURCE         name of the source of the eth0 MAC (uboot)
 #   TSX_MAC_DEV            the device that tsx_board_mac_early reads
+#   TSX_SERIAL_CONSOLE     the serial console device name (ttyAML0)
+#   TSX_RENDER_ENV         NAME=value words for the GPU driver, exported by the
+#                          kiosk when a render node exists (none here)
+#   TSX_BROWSER_GL_FLAGS   extra Chromium flags for GPU rendering (none here:
+#                          kiosk-session sets the ES2 flags itself)
+#   TSX_VOLUME_CMD         a command that prints and sets the volume (none
+#                          here: the volume is the Master control of the card)
 #
 # Functions (print the value, print nothing when the board has none)
 #   tsx_board_model        the model, for example TSS-10
+#   tsx_board_ha_model     the model name for Home Assistant
 #   tsx_board_stock_fw     the version of the stock firmware, for example
 #                          v3.002.1061
 #   tsx_board_unit_id      the unit id for file names (the MAC without colons)
@@ -64,6 +72,10 @@ TSX_BT_PROXY_DEFAULT=${TSX_BT_PROXY_DEFAULT:-off}
 TSX_BT_MAC_SETTABLE=${TSX_BT_MAC_SETTABLE:-yes}
 TSX_MAC_SOURCE=${TSX_MAC_SOURCE:-uboot}
 TSX_MAC_DEV=${TSX_MAC_DEV:-${TSX_MMCBLK0:-/dev/mmcblk0}}
+TSX_SERIAL_CONSOLE=${TSX_SERIAL_CONSOLE:-ttyAML0}
+TSX_RENDER_ENV=${TSX_RENDER_ENV-}
+TSX_BROWSER_GL_FLAGS=${TSX_BROWSER_GL_FLAGS-}
+TSX_VOLUME_CMD=${TSX_VOLUME_CMD-}
 
 # The xx60 keeps its data in the U-Boot env. tsx_board_env NAME prints one
 # variable of it. In the rescue system and in the installers, tsx-lib.sh
@@ -165,4 +177,5 @@ tsx_board_mac_early() {
 	return 0
 }
 tsx_board_mac_source() { echo "$TSX_MAC_SOURCE"; }
+tsx_board_ha_model() { echo "$TSX_HA_MODEL"; }
 tsx_board_rescue_extra() { :; }

@@ -26,7 +26,7 @@ echo "== sourcing prints nothing and the values are the xx60 values =="
 out=$(env -i PATH="$PATH" sh -c ". '$BOARD'" 2>&1); eq "$out" "" "no output when sourced"
 for kv in TSX_FAMILY=xx60 TSX_APK_CATEGORY=xx60 TSX_HA_MODEL=xx60 TSX_SOUND_CARD=TSW1060 'TSX_DISPLAY_DRM=meson*' \
 	'TSX_RENDER_DRM=lima panfrost' TSX_RENDER_ES2_DRM=lima TSX_BT_PROXY_DEFAULT=off TSX_BT_MAC_SETTABLE=yes \
-	TSX_MAC_SOURCE=uboot TSX_MAC_DEV=/dev/mmcblk0 \
+	TSX_MAC_SOURCE=uboot TSX_MAC_DEV=/dev/mmcblk0 TSX_SERIAL_CONSOLE=ttyAML0 TSX_RENDER_ENV= TSX_BROWSER_GL_FLAGS= TSX_VOLUME_CMD= \
 	'TSX_DISPLAY_ENV=WLR_DRM_NO_MODIFIERS=1 CAGE_RENDER_FORMAT=argb8888' \
 	TSX_BT_CHIP=/usr/local/lib/tsx/bt-chip-csr8811.sh; do
 	k=${kv%%=*}; v=${kv#*=}
@@ -34,6 +34,22 @@ for kv in TSX_FAMILY=xx60 TSX_APK_CATEGORY=xx60 TSX_HA_MODEL=xx60 TSX_SOUND_CARD
 done
 SH_CODE='printf "%s" "$TSX_SOUND_CARD/$TSX_BT_CHIP"'
 eq "$(sh_run TSX_SOUND_CARD=OTHER TSX_BT_LIB=/x)" "OTHER//x/bt-chip-csr8811.sh" "a value in the environment wins, and TSX_BT_LIB moves the chip file"
+
+SH_CODE='tsx_board_ha_model'
+eq "$(sh_run)" "xx60" "tsx_board_ha_model gives TSX_HA_MODEL"
+SH_CODE='tsx_board_ha_model'
+eq "$(sh_run TSX_HA_MODEL=other)" "other" "tsx_board_ha_model follows a changed TSX_HA_MODEL"
+
+echo "== the kiosk board file =="
+KB=$HERE/overlay/etc/tsx/kiosk-board.conf
+busybox sh -n "$KB" 2>/dev/null && ok "kiosk-board.conf passes busybox sh -n" || bad "kiosk-board.conf: busybox sh -n"
+eq "$(env -i PATH="$PATH" sh -c ". '$KB'; echo \"\$KIOSK_GPU \$BACKLIGHT_MAX \$BRIGHTNESS_DAY \$BRIGHTNESS_NIGHT \$CPUFREQ_AWAKE \$CPUFREQ_BLANK \$OVERLAY_GESTURE\"")" \
+	"browser 23 17 8 performance schedutil off" "kiosk-board.conf holds the xx60 values"
+for k in KIOSK_GPU BACKLIGHT_MAX BRIGHTNESS_DAY BRIGHTNESS_NIGHT CPUFREQ_AWAKE CPUFREQ_BLANK; do
+	a=$(sed -n "s/^$k=//p" "$HERE/overlay/etc/kiosk.conf" | tail -n 1); b=$(sed -n "s/^$k=//p" "$KB" | tail -n 1)
+	eq "$b" "$a" "$k: the board file and kiosk.conf agree"
+done
+grep -q 'env/boot' "$HERE/overlay/etc/tsx/motd.board" && ok "motd.board has the boot status line" || bad "motd.board"
 
 echo "== the functions, with a made-up U-Boot env =="
 ENV='product_name=TSS-10_[v3.002.1061,_#0A1B2C3D]
