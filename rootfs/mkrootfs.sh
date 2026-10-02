@@ -15,6 +15,17 @@
 #   TSX_DEV_ROOT_HASH  optional. A crypt(3) hash that becomes the root password
 #                  of the image. For our own test builds only. Without it, the
 #                  image has no root password (docs/rootfs.md "Root login").
+#   TSX_FROM_PACKAGES  1 builds the image from packages (default 0). The image
+#                  then installs the profile meta package (tsx-xx60-console,
+#                  tsx-xx60-kiosk or tsx-xx60-ha) from TSX_APK_LOCAL. The
+#                  script compiles nothing and copies only the files of
+#                  profiles/image.list from the overlay. 0 keeps the old path:
+#                  the script compiles the tools and copies the whole overlay.
+#                  The new path needs TSX_APK_LOCAL (docs/rootfs.md "Build from
+#                  packages").
+#   TSX_SKIP_BOOT_CHECK  1 skips the check of the kernel packages against the
+#                  kernel pins and the initramfs stamp. For a comparison build
+#                  only. Never use it for an image that goes on a panel.
 #   TSX_APK_LOCAL  optional. A local copy of the published tree of that
 #                  repository, <ALPINE>/common and <ALPINE>/xx60. The script
 #                  installs packages-tsx.txt from it.
@@ -29,6 +40,10 @@ PROFILE=${PROFILE:-ha}
 sh "$HERE/profile.sh" includes "$PROFILE" >/dev/null || exit 1
 has() { sh "$HERE/profile.sh" has "$PROFILE" "$1" "$2"; }
 log "profile $PROFILE"
+FROMPKG=${TSX_FROM_PACKAGES:-0}
+case "$FROMPKG" in 0|1) ;; *) echo "TSX_FROM_PACKAGES must be 0 or 1"; exit 1;; esac
+[ "$FROMPKG" = 0 ] || [ -n "${TSX_APK_LOCAL:-}" ] || { echo "TSX_FROM_PACKAGES=1 needs TSX_APK_LOCAL"; exit 1; }
+[ "$FROMPKG" = 0 ] || log "build from packages: tsx-xx60-$PROFILE"
 
 printf '%s/%s/main\n%s/%s/community\n' "$MIRROR" "$ALPINE" "$MIRROR" "$ALPINE" > /etc/apk/repositories
 apk update -q
@@ -51,44 +66,46 @@ if [ -n "$TSX_APK_LOCAL" ]; then
 fi
 apk add -q --no-cache build-base linux-headers e2fsprogs tar gzip >/dev/null
 
-log "compile tsx-idled"
-gcc -O2 -Wall -s -o /build/tsx-idled "$HERE/src/tsx-idled.c"
-gcc -O2 -Wall -s -o /build/tsx-buttons "$HERE/src/tsx-buttons.c"   # front-panel
-apk add -q --no-cache libusb-dev >/dev/null                           # LED bar
-gcc -O2 -Wall -s -o /build/tsx-ledbar "$HERE/src/tsx-ledbar.c" -lusb-1.0
-gcc -O2 -Wall -s -o /build/tsx-peak "$HERE/src/tsx-peak.c" -lm       # audio
-# Boot splash: the same tool and artwork as the initramfs. OpenRC sends status
-# updates to it, and the compositor uses it as the background (docs/boot.md
-# "Boot splash").
-gcc -O2 -Wall -s -o /build/tsx-splash "$HERE/src/tsx-splash.c"
-sh "$HERE/splash/mksplash.sh" /build/splash-out >/dev/null
+if [ "$FROMPKG" = 0 ]; then
+	log "compile tsx-idled"
+	gcc -O2 -Wall -s -o /build/tsx-idled "$HERE/src/tsx-idled.c"
+	gcc -O2 -Wall -s -o /build/tsx-buttons "$HERE/src/tsx-buttons.c"   # front-panel
+	apk add -q --no-cache libusb-dev >/dev/null                           # LED bar
+	gcc -O2 -Wall -s -o /build/tsx-ledbar "$HERE/src/tsx-ledbar.c" -lusb-1.0
+	gcc -O2 -Wall -s -o /build/tsx-peak "$HERE/src/tsx-peak.c" -lm       # audio
+	# Boot splash: the same tool and artwork as the initramfs. OpenRC sends status
+	# updates to it, and the compositor uses it as the background (docs/boot.md
+	# "Boot splash").
+	gcc -O2 -Wall -s -o /build/tsx-splash "$HERE/src/tsx-splash.c"
+	sh "$HERE/splash/mksplash.sh" /build/splash-out >/dev/null
 
-if has step compile-kiosk; then
-	CAGE_VER=0.3.1
-	CAGE_SHA256=6dc1619665acd367e0174c93b234002549a66f55f1de9197d67f0305415babc8
-	log "build cage $CAGE_VER (patched)"
-	apk add -q --no-cache meson samurai pkgconf wlroots0.20-dev wayland-dev wayland-protocols \
-		libxkbcommon-dev libdrm-dev curl patch >/dev/null
-	curl -fsSL -o /build/cage.tar.gz https://github.com/cage-kiosk/cage/archive/refs/tags/v$CAGE_VER.tar.gz
-	echo "$CAGE_SHA256  /build/cage.tar.gz" | sha256sum -c -
-	rm -rf /build/cage-$CAGE_VER /build/cage-build; tar -C /build -xzf /build/cage.tar.gz
-	(cd /build/cage-$CAGE_VER && patch -p1 < "$HERE/src/cage-$CAGE_VER-argb8888-fallback.patch")
-	meson setup /build/cage-build /build/cage-$CAGE_VER -Dman-pages=disabled --prefix=/usr --buildtype=release >/dev/null
-	ninja -C /build/cage-build >/dev/null
-	strip /build/cage-build/cage
+	if has step compile-kiosk; then
+		CAGE_VER=0.3.1
+		CAGE_SHA256=6dc1619665acd367e0174c93b234002549a66f55f1de9197d67f0305415babc8
+		log "build cage $CAGE_VER (patched)"
+		apk add -q --no-cache meson samurai pkgconf wlroots0.20-dev wayland-dev wayland-protocols \
+			libxkbcommon-dev libdrm-dev curl patch >/dev/null
+		curl -fsSL -o /build/cage.tar.gz https://github.com/cage-kiosk/cage/archive/refs/tags/v$CAGE_VER.tar.gz
+		echo "$CAGE_SHA256  /build/cage.tar.gz" | sha256sum -c -
+		rm -rf /build/cage-$CAGE_VER /build/cage-build; tar -C /build -xzf /build/cage.tar.gz
+		(cd /build/cage-$CAGE_VER && patch -p1 < "$HERE/src/cage-$CAGE_VER-argb8888-fallback.patch")
+		meson setup /build/cage-build /build/cage-$CAGE_VER -Dman-pages=disabled --prefix=/usr --buildtype=release >/dev/null
+		ninja -C /build/cage-build >/dev/null
+		strip /build/cage-build/cage
 
-	# Quick-settings overlay (sway layer-shell client, kiosk user). The layer-shell
-	# protocol comes from wlr-protocols. The overlay references xdg_popup, so the
-	# build also links the xdg-shell glue.
-	log "build tsx-overlay"
-	apk add -q --no-cache cairo-dev wlr-protocols >/dev/null
-	P=/build/tsx-overlay-proto; rm -rf $P; mkdir -p $P
-	LS=/usr/share/wlr-protocols/unstable/wlr-layer-shell-unstable-v1.xml
-	wayland-scanner client-header $LS $P/wlr-layer-shell-unstable-v1-client-protocol.h
-	wayland-scanner private-code $LS $P/wlr-layer-shell-unstable-v1-protocol.c
-	wayland-scanner private-code /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml $P/xdg-shell-protocol.c
-	gcc -O2 -Wall -s -I$P -o /build/tsx-overlay "$HERE/src/tsx-overlay.c" $P/*.c \
-		$(pkg-config --cflags --libs cairo wayland-client) -lm
+		# Quick-settings overlay (sway layer-shell client, kiosk user). The layer-shell
+		# protocol comes from wlr-protocols. The overlay references xdg_popup, so the
+		# build also links the xdg-shell glue.
+		log "build tsx-overlay"
+		apk add -q --no-cache cairo-dev wlr-protocols >/dev/null
+		P=/build/tsx-overlay-proto; rm -rf $P; mkdir -p $P
+		LS=/usr/share/wlr-protocols/unstable/wlr-layer-shell-unstable-v1.xml
+		wayland-scanner client-header $LS $P/wlr-layer-shell-unstable-v1-client-protocol.h
+		wayland-scanner private-code $LS $P/wlr-layer-shell-unstable-v1-protocol.c
+		wayland-scanner private-code /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml $P/xdg-shell-protocol.c
+		gcc -O2 -Wall -s -I$P -o /build/tsx-overlay "$HERE/src/tsx-overlay.c" $P/*.c \
+			$(pkg-config --cflags --libs cairo wayland-client) -lm
+	fi
 fi
 
 log "install packages ($ALPINE, armv7)"
@@ -102,6 +119,8 @@ PKGS=$(sh "$HERE/profile.sh" packages "$PROFILE" "$HERE/packages.txt" | tr '\n' 
 : > /build/repositories
 if [ $TSXREPO = 1 ]; then
 	TSXPKGS=$(sh "$HERE/profile.sh" packages "$PROFILE" "$HERE/packages-tsx.txt" | tr '\n' ' ')
+	# The profile meta package pulls the packages that hold the panel software.
+	[ "$FROMPKG" = 0 ] || TSXPKGS="$TSXPKGS tsx-xx60-$PROFILE"
 	log "tsx-aports packages from $TSX_APK_LOCAL: $TSXPKGS"
 	# tsx-xx60-chromium provides chromium and tsx-xx60-wlroots0.20 provides
 	# wlroots0.20, so the Alpine lines for these two are dropped.
@@ -124,8 +143,14 @@ cp -a /etc/apk/keys $R/etc/apk/
 } > $R/etc/apk/repositories
 
 log "overlay ($PROFILE)"
-sh "$HERE/profile.sh" stage "$PROFILE" $R
-if has step chromium-es2; then
+if [ "$FROMPKG" = 1 ]; then
+	# The packages own the files of the panel software. The image keeps only
+	# its own files (profiles/image.list).
+	sh "$HERE/profile.sh" stage-image "$PROFILE" $R
+else
+	sh "$HERE/profile.sh" stage "$PROFILE" $R
+fi
+if [ "$FROMPKG" = 0 ] && has step chromium-es2; then
 	# tsx-autoupdate applies the Chromium ES2 patch again on the panel after an
 	# upgrade. Ship the patch tool and the signature list from their single
 	# source in src/.
@@ -142,23 +167,26 @@ printf '%s\n' "${TSX_BUILD_ID:-$(date -u +%Y%m%d%H%M)}" > $R/etc/tsx/build-id
 # build time. /etc/periodic/15min/tsx-savetime keeps the mtime current while
 # NTP has the time.
 mkdir -p $R/var/lib/misc && touch $R/var/lib/misc/openrc-shutdowntime
-install -m 755 /build/tsx-idled $R/usr/local/sbin/tsx-idled
-install -m 755 /build/tsx-buttons $R/usr/local/sbin/tsx-buttons
-install -m 755 /build/tsx-ledbar $R/usr/local/bin/tsx-ledbar
-if has step compile-kiosk; then
-	install -m 755 /build/cage-build/cage $R/usr/bin/cage
-	install -m 755 /build/tsx-overlay $R/usr/local/bin/tsx-overlay
+if [ "$FROMPKG" = 0 ]; then
+	install -m 755 /build/tsx-idled $R/usr/local/sbin/tsx-idled
+	install -m 755 /build/tsx-buttons $R/usr/local/sbin/tsx-buttons
+	install -m 755 /build/tsx-ledbar $R/usr/local/bin/tsx-ledbar
+	if has step compile-kiosk; then
+		install -m 755 /build/cage-build/cage $R/usr/bin/cage
+		install -m 755 /build/tsx-overlay $R/usr/local/bin/tsx-overlay
+	fi
+	install -m 755 /build/tsx-splash $R/usr/local/bin/tsx-splash
+	mkdir -p $R/usr/share/tsx/splash
+	cp /build/splash-out/*.ppm /build/splash-out/*.psf $R/usr/share/tsx/splash/
+	# audio: level meter
+	install -m 755 /build/tsx-peak $R/usr/local/bin/tsx-peak
 fi
-install -m 755 /build/tsx-splash $R/usr/local/bin/tsx-splash
-mkdir -p $R/usr/share/tsx/splash
-cp /build/splash-out/*.ppm /build/splash-out/*.psf $R/usr/share/tsx/splash/
 # audio: level meter, Sendspin player. rootfs/src/sendspin/build.sh builds
 # sendspin-cli from source. CI runs it before this script. For a local build,
 # run it by hand first. The build output is never committed, so this script
 # reads it from the output dir of that build.
 # voice: the Assist voice satellite linux-voice-assistant (pinned, see
 # voice/install-lva.sh below)
-install -m 755 /build/tsx-peak $R/usr/local/bin/tsx-peak
 SENDSPIN_BIN=
 if has step sendspin; then
 	if [ $TSXREPO = 1 ]; then
@@ -179,14 +207,23 @@ if has step lva; then
 	# source. The build output is never committed, and this script reads it from
 	# voice/tflite/, as it does for sendspin-cli above. For a local build, run
 	# build-tflite.sh by hand first.
-	if [ $TSXREPO = 1 ]; then
+	if [ "$FROMPKG" = 1 ]; then
+		# The package tsx-ha ships install-lva.sh and the ESPHome shim. The
+		# script copies the shim from the directory next to it, and it first
+		# deletes /opt/lva. So run it from a copy of both.
+		[ -x $R/usr/share/tsx/install-lva.sh ] || { echo "the tsx-ha package did not install /usr/share/tsx/install-lva.sh"; exit 1; }
+		rm -rf /build/lva-src; mkdir -p /build/lva-src
+		cp $R/usr/share/tsx/install-lva.sh /build/lva-src/
+		cp -a $R/opt/lva/shim /build/lva-src/shim
+		TFLITE_SO=/usr/lib/libtensorflowlite_c.so sh /build/lva-src/install-lva.sh $R
+	elif [ $TSXREPO = 1 ]; then
 		TFLITE_SO=/usr/lib/libtensorflowlite_c.so sh "$HERE/voice/install-lva.sh" $R
 	else
 		[ -s "$HERE/voice/tflite/libtensorflowlite_c.so" ] || echo "WARNING: no voice/tflite/libtensorflowlite_c.so (run rootfs/voice/build-tflite.sh first). install-lva.sh will fail its checksum check"
 		sh "$HERE/voice/install-lva.sh" $R
 	fi
 fi
-has step compile-kiosk && echo "cage $CAGE_VER + argb8888-fallback.patch (built from source, sha256 $CAGE_SHA256)" > $R/usr/share/tsx-cage.version
+[ "$FROMPKG" = 0 ] && has step compile-kiosk && echo "cage $CAGE_VER + argb8888-fallback.patch (built from source, sha256 $CAGE_SHA256)" > $R/usr/share/tsx-cage.version
 chown -R 0:0 $R/etc $R/usr/local
 
 # DSP: TFA9890 CoolFlux DSP tuning containers (.cnt). These are proprietary
@@ -287,7 +324,8 @@ chroot $R /bin/sh -e <<'CH'
 case " $TSX_USERS " in *" kiosk "*)
 	addgroup -S seat 2>/dev/null || true
 	addgroup -S render 2>/dev/null || true
-	adduser -D -H -h /var/lib/kiosk -s /sbin/nologin -g "kiosk browser" kiosk
+	# The package tsx-kiosk makes this user in its pre-install script.
+	getent passwd kiosk >/dev/null || adduser -D -H -h /var/lib/kiosk -s /sbin/nologin -g "kiosk browser" kiosk
 	for g in video input seat render audio; do addgroup kiosk $g 2>/dev/null || true; done
 	mkdir -p /var/lib/kiosk && chown kiosk:kiosk /var/lib/kiosk;;
 esac
@@ -299,7 +337,7 @@ esac
 # talks to root only through the FIFOs of tsx-setup-helper (group tsx-setup,
 # which that service creates).
 case " $TSX_USERS " in *" tsx-setup "*)
-	adduser -D -H -s /sbin/nologin -g "on-panel setup page" tsx-setup;;
+	getent passwd tsx-setup >/dev/null || adduser -D -H -s /sbin/nologin -g "on-panel setup page" tsx-setup;;
 esac
 for s in devfs dmesg udev udev-trigger udev-settle; do rc-update add $s sysinit; done
 for s in root localmount modules sysctl hostname bootmisc syslog swclock seedrng udev-postmount machine-id $TSX_SVC_BOOT; do
@@ -340,7 +378,7 @@ if [ -s "$HERE/authorized_keys" ]; then
 	mkdir -p $R/root/.ssh; cp "$HERE/authorized_keys" $R/root/.ssh/; chmod 700 $R/root/.ssh; chmod 600 $R/root/.ssh/authorized_keys
 fi
 
-if has step cursors; then
+if [ "$FROMPKG" = 0 ] && has step cursors; then
 	log "blank cursor theme"
 	# The theme has one 1x1 fully transparent Xcursor image.
 	C=$R/usr/share/tsx/cursors/blank/cursors; mkdir -p $C
@@ -427,10 +465,12 @@ fi
 # the initramfs of this checkout. An old package in the local tree would put an
 # old /boot/tsxboot-emmc-<flavor>.img in the image, and tsx-kernel-flavor would
 # boot it.
-if [ $TSXREPO = 1 ]; then
+if [ $TSXREPO = 1 ] && [ "${TSX_SKIP_BOOT_CHECK:-0}" = 1 ]; then
+	echo "WARNING: TSX_SKIP_BOOT_CHECK=1: the kernel packages are not checked against the kernel pins and the initramfs stamp"
+elif [ $TSXREPO = 1 ]; then
 	log "check the kernel packages against kernel/KERNEL_REV.* and the initramfs"
 	apk add -q --no-cache python3 >/dev/null
-	python3 "$HERE/check-boot-images.py" "$R" "$HERE/../kernel" || { echo "ERROR: the kernel packages in $TSX_APK_LOCAL do not match the kernel pins or the initramfs of this checkout"; exit 1; }
+	TSX_FROM_PACKAGES=$FROMPKG python3 "$HERE/check-boot-images.py" "$R" "$HERE/../kernel" || { echo "ERROR: the kernel packages in $TSX_APK_LOCAL do not match the kernel pins or the initramfs of this checkout"; exit 1; }
 fi
 
 log "manifest and sizes"
@@ -446,6 +486,7 @@ apk info --root $R -v 2>/dev/null | sort > "$OUT/rootfs.manifest"
 	du -xm -d 3 $R/usr $R/lib 2>/dev/null | sort -rn | head -15 | sed "s|$R||"
 	echo "chromium-es2-patch: $ES2_RESULT"
 	echo "profile: $PROFILE"
+	if [ "$FROMPKG" = 1 ]; then echo "image source: packages (tsx-xx60-$PROFILE)"; else echo "image source: build step and overlay copy"; fi
 	echo "root password: $ROOT_PW_RESULT"
 	if [ $TSXREPO = 1 ]; then echo "tsx-aports: installed from a local tree: $TSXPKGS"
 	else echo "tsx-aports: no local tree (TSX_APK_LOCAL unset): local builds of sendspin-cli/TFLite, Alpine chromium + in-place patch, unowned module trees"; fi

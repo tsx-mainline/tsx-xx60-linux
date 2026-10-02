@@ -53,6 +53,12 @@
 # packages-tsx.txt (tsx-xx60-chromium, both kernel flavors, sendspin-cli,
 # tensorflow-lite-c, tsx-keys) from that copy. It does not use the Alpine
 # chromium with the in-place patch, or the local sendspin and TFLite builds.
+# TSX_FROM_PACKAGES (default 0): 1 builds the rootfs from the profile meta
+# package (tsx-xx60-console, -kiosk or -ha) and the initramfs from the packages
+# of initramfs/packages.pin. Both need TSX_APK_LOCAL. 0 compiles the tools and
+# copies the overlay, as before (docs/rootfs.md "Build from packages").
+# TSX_SKIP_BOOT_CHECK=1 skips the check of the kernel packages (comparison
+# builds only).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 TOP=$(cd "$HERE/../.." && pwd)
@@ -124,12 +130,18 @@ rootfs() {
 		-e ALPINE="$ALPINE" -e PROFILE="${PROFILE:-ha}" -e TSX_DEV_ROOT_HASH="${TSX_DEV_ROOT_HASH:-}" -e KVER="$KVER" -e OUT=/w/out -e UIDGID="$UIDGID" -e IMG_MB="$IMG_MB" -e CHROMIUM_ES2_PATCH="${CHROMIUM_ES2_PATCH:-1}" \
 		-e TSX_APK_URL="${TSX_APK_URL:-https://tsx-aports.unexceptional.net}" \
 		-e TFA_VENDOR_FETCH="${TFA_VENDOR_FETCH:-yes}" \
+		-e TSX_FROM_PACKAGES="${TSX_FROM_PACKAGES:-0}" -e TSX_SKIP_BOOT_CHECK="${TSX_SKIP_BOOT_CHECK:-0}" \
 		"$IMAGE" /w/mkrootfs.sh
 }
 
 initramfs() {
 	need_binfmt
-	docker run --rm --platform linux/arm/v7 -v "$HERE:/w" -e ALPINE="$ALPINE" -e TSX_DEV_RESCUE_HASH="${TSX_DEV_RESCUE_HASH:-}" "$IMAGE" sh -c "
+	local mnt=() apk=()
+	if [ "${TSX_FROM_PACKAGES:-0}" = 1 ]; then
+		[ -n "${TSX_APK_LOCAL:-}" ] && [ -d "$TSX_APK_LOCAL/$ALPINE" ] || { echo "TSX_FROM_PACKAGES=1 needs TSX_APK_LOCAL (a tsx-aports published tree with $ALPINE/)"; exit 1; }
+		mnt+=(-v "$(cd "$TSX_APK_LOCAL" && pwd):/aports:ro"); apk=(-e TSX_APK_LOCAL=/aports)
+	fi
+	docker run --rm --platform linux/arm/v7 -v "$HERE:/w" "${mnt[@]}" "${apk[@]}" -e ALPINE="$ALPINE" -e TSX_FROM_PACKAGES="${TSX_FROM_PACKAGES:-0}" -e TSX_DEV_RESCUE_HASH="${TSX_DEV_RESCUE_HASH:-}" "$IMAGE" sh -c "
 		printf 'https://dl-cdn.alpinelinux.org/alpine/%s/main\nhttps://dl-cdn.alpinelinux.org/alpine/%s/community\n' $ALPINE $ALPINE > /etc/apk/repositories
 		apk add -q --no-cache cpio mkpasswd >/dev/null
 		/w/initramfs/mkinitramfs-switchroot.sh /w/out/initramfs-switchroot.cpio.gz /w/authorized_keys

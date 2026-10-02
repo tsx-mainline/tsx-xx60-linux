@@ -49,13 +49,13 @@ wait_drm_fb() {
 # rotate_all needs a bound console). Then tsx-confont sets a Terminus font
 # sized for the LCD (80x25 or more).
 text_console() {
-	verbose=1; wait_drm_fb; /usr/sbin/tsx-splash console 2>/dev/null
+	verbose=1; wait_drm_fb; /usr/local/bin/tsx-splash console 2>/dev/null
 	echo "$fbrot" > /sys/class/graphics/fbcon/rotate_all 2>/dev/null
 	/usr/sbin/tsx-confont 2>/dev/null
 }
 # splash TEXT PERCENT [show]: draw a status line and a progress bar. It does
 # nothing in verbose mode.
-splash() { [ -n "$verbose" ] || /usr/sbin/tsx-splash -o "$orient" -s "$1" -p "$2" "${3:-status}" 2>/dev/null; }
+splash() { [ -n "$verbose" ] || /usr/local/bin/tsx-splash -o "$orient" -s "$1" -p "$2" "${3:-status}" 2>/dev/null; }
 # The rescue system is busybox init (etc/inittab). rcS starts the network and
 # dropbear. The LCD shows the rescue screen /usr/sbin/tsx-rescue-status, with
 # "Press Enter for a rescue shell" for a USB keyboard. Every way into the

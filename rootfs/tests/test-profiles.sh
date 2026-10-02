@@ -156,6 +156,25 @@ rm -f "$T/pkill.log"; run_ban 192.0.2.12; run_ban 192.0.2.12
 eq "$(cat "$T/pkill.log" 2>/dev/null | tr '\n' ' ')" "-x getty " "the idle getty ends once for a changed address, and not for the same address"
 busybox sh -n "$BAN" && ok "tsx-banner passes busybox sh -n" || bad "tsx-banner: busybox sh -n"
 
+echo "== image.list (build from packages) =="
+busybox sh -n "$HERE/initramfs/mkinitramfs-switchroot.sh" && ok "mkinitramfs-switchroot.sh passes busybox sh -n" || bad "mkinitramfs-switchroot.sh: busybox sh -n"
+imgs=$(awk '/^[ \t]*(#|$)/ { next } $1 == "image" { print $2 }' "$HERE/profiles/image.list" | sort | tr '\n' ' ')
+eq "$imgs" "etc/fstab etc/inittab etc/tsx/profile " "image.list names fstab, inittab and the profile marker"
+for p in console kiosk ha; do
+	rm -rf "$T/img-$p"; sh "$PS" stage-image $p "$T/img-$p" >/dev/null
+	got=$(cd "$T/img-$p" && find . -type f | sed 's|^\./||' | sort | tr '\n' ' ')
+	case $p in ha) want="etc/fstab etc/inittab ";; *) want="etc/fstab etc/inittab etc/tsx/profile ";; esac
+	eq "$got" "$want" "stage-image $p copies only the image files"
+done
+cmp -s "$T/img-console/etc/inittab" "$HERE/profiles/console/overlay/etc/inittab" && ok "stage-image console: the console inittab (getty on tty1)" || bad "stage-image console: wrong inittab"
+cmp -s "$T/img-kiosk/etc/inittab" "$OV/etc/inittab" && ok "stage-image kiosk: the kiosk inittab" || bad "stage-image kiosk: wrong inittab"
+eq "$(cat "$T/img-console/etc/tsx/profile")" console "stage-image console: profile marker"
+eq "$(cat "$T/img-kiosk/etc/tsx/profile")" kiosk "stage-image kiosk: profile marker"
+for f in $imgs; do [ -e "$OV/$f" ] || [ -e "$HERE/profiles/console/overlay/$f" ] || bad "image.list: $f is nowhere"; done
+grep -q '^tsx-rescue-ui=' "$HERE/initramfs/packages.pin" && grep -q '^tsx-splash=' "$HERE/initramfs/packages.pin" && grep -q '^tsx-xx60-board=' "$HERE/initramfs/packages.pin" && ok "initramfs/packages.pin pins the initramfs packages" || bad "initramfs/packages.pin is incomplete"
+a=$(TSX_FROM_PACKAGES=0 sh "$HERE/initramfs-stamp.sh"); b=$(TSX_FROM_PACKAGES=1 sh "$HERE/initramfs-stamp.sh")
+[ "$a" != "$b" ] && ok "the initramfs stamp differs between the two build modes" || bad "same stamp in both modes"
+
 echo "== usage errors =="
 sh "$PS" includes nothing >/dev/null 2>&1 && bad "an unknown profile is accepted" || ok "an unknown profile is refused"
 

@@ -10,6 +10,9 @@
 #   profile.sh stage PROFILE ROOTFS     copy the overlay into ROOTFS, minus the
 #                                       files of the profiles that build on PROFILE,
 #                                       plus the files of profiles/PROFILE/overlay
+#   profile.sh stage-image PROFILE ROOTFS  the same as stage, but copy only the
+#                                       files that profiles/image.list names (the
+#                                       package path: the packages own the rest)
 #   profile.sh unclassified             list overlay files that no list names
 #
 # The profiles are console, kiosk and ha. Each one holds all the earlier ones.
@@ -82,10 +85,24 @@ stage)
 	# the image holds the file and not a link into the repository.
 	[ -d "$PD/$p/overlay" ] && cp -aL "$PD/$p/overlay"/. "$R"/
 	exit 0;;
+stage-image)
+	[ $# = 2 ] || die "usage: stage-image PROFILE ROOTFS"
+	p=$1; R=$2
+	[ -r "$PD/image.list" ] || die "no $PD/image.list"
+	t=$(mktemp -d "${TMPDIR:-/tmp}/profile-stage.XXXXXX")
+	sh "$0" stage "$p" "$t"
+	mkdir -p "$R"
+	awk '/^[ \t]*(#|$)/ { next } $1 == "image" { print $2 }' "$PD/image.list" | while read -r f; do
+		[ -e "$t/$f" ] || continue
+		mkdir -p "$R/$(dirname "$f")"
+		cp -a "$t/$f" "$R/$f"
+	done
+	rm -rf "$t"
+	exit 0;;
 unclassified)
 	( cd "$OV" && find . \( -type f -o -type l \) | sed 's|^\./||' | grep -v '__pycache__' | sort ) > "${TMPDIR:-/tmp}/profile-ov.$$"
 	for l in $ALL; do awk '$1 == "overlay" { print $2 }' "$PD/$l.list"; done | sort > "${TMPDIR:-/tmp}/profile-ls.$$"
 	comm -23 "${TMPDIR:-/tmp}/profile-ov.$$" "${TMPDIR:-/tmp}/profile-ls.$$"
 	rm -f "${TMPDIR:-/tmp}/profile-ov.$$" "${TMPDIR:-/tmp}/profile-ls.$$";;
-*) sed -n '2,19p' "$0" >&2; exit 2;;
+*) sed -n '2,22p' "$0" >&2; exit 2;;
 esac

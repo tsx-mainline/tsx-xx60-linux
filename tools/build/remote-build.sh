@@ -33,7 +33,9 @@
 #                    TSX_APK_LOCAL=<local tsx-aports published tree>: the script
 #                    mirrors it to rootfs/aports-local/ on the host, and
 #                    build-rootfs.sh installs from there. The script passes
-#                    TSX_APK_URL, PROFILE (console, kiosk or ha, default ha)
+#                    TSX_APK_URL, PROFILE (console, kiosk or ha, default ha),
+#                    TSX_FROM_PACKAGES=1 (build from the packages of TSX_APK_LOCAL,
+#                    for rootfs and initramfs), TSX_SKIP_BOOT_CHECK=1
 #                    and TSX_DEV_ROOT_HASH (a root password hash for a test
 #                    image) through.
 #   initramfs        build-rootfs.sh initramfs -> initramfs-switchroot.cpio.gz
@@ -297,6 +299,10 @@ rootfs)
 	# TFA_VENDOR_FETCH=no: no Crestron file in the image (as CI and release.yml)
 	# A build through this script fetches nothing unless TSX_ALLOW_PROPRIETARY=1.
 	[ "$ALLOW_PROP" = 1 ] && [ -z "${TFA_VENDOR_FETCH:-}" ] || apkenv="$apkenv TFA_VENDOR_FETCH=${TFA_VENDOR_FETCH:-no}"
+	# TSX_FROM_PACKAGES=1 builds from the packages of TSX_APK_LOCAL (docs/rootfs.md
+	# "Build from packages"). TSX_SKIP_BOOT_CHECK=1 is for comparison builds only.
+	[ "${TSX_FROM_PACKAGES:-0}" != 1 ] || apkenv="$apkenv TSX_FROM_PACKAGES=1"
+	[ "${TSX_SKIP_BOOT_CHECK:-0}" != 1 ] || apkenv="$apkenv TSX_SKIP_BOOT_CHECK=1"
 	if [ -n "${TSX_APK_LOCAL:-}" ]; then
 		say "tsx-aports tree $TSX_APK_LOCAL -> $BUILD_DIR/rootfs/aports-local"
 		rsh "mkdir -p $BUILD_DIR/rootfs/aports-local"
@@ -310,7 +316,15 @@ rootfs)
 	maybe_pull "$to" "$o/rootfs.ext4" "$o/rootfs.tar.gz" "$o/rootfs.manifest" "$o/rootfs.sizes" "$o/rootfs.sha256";;
 initramfs)
 	push_common; push_rootfs
-	rjob initramfs "cd $BUILD_DIR/rootfs && flock $BUILD_DIR/rootfs/.rootfs.lock ./build-rootfs.sh initramfs"
+	iev=
+	if [ "${TSX_FROM_PACKAGES:-0}" = 1 ]; then
+		[ -n "${TSX_APK_LOCAL:-}" ] || { echo "TSX_FROM_PACKAGES=1 needs TSX_APK_LOCAL"; exit 1; }
+		say "tsx-aports tree $TSX_APK_LOCAL -> $BUILD_DIR/rootfs/aports-local"
+		rsh "mkdir -p $BUILD_DIR/rootfs/aports-local"
+		"${RS[@]}" --delete "$TSX_APK_LOCAL/" "$HOST:$BUILD_DIR/rootfs/aports-local/"
+		iev="TSX_FROM_PACKAGES=1 TSX_APK_LOCAL=$BUILD_DIR/rootfs/aports-local"
+	fi
+	rjob initramfs "cd $BUILD_DIR/rootfs && flock $BUILD_DIR/rootfs/.rootfs.lock env $iev ./build-rootfs.sh initramfs"
 	say "artifacts:"; maybe_pull "${DEST:-$REPO/rootfs/out}" "$BUILD_DIR/rootfs/out/initramfs-switchroot.cpio.gz";;
 image)
 	br=${ARG:-$(flavor_branch "$FLAVOR")}; wt=$(worktree_of "$br")
