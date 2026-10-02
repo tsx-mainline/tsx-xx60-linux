@@ -17,6 +17,8 @@ command -v busybox >/dev/null 2>&1 || { echo "SKIPPED test-panelctl: no busybox 
 T=$(mktemp -d); PID=
 trap '[ -n "$PID" ] && kill "$PID" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "kept $T" || rm -rf "$T"' EXIT
 mkdir -p "$T/run" "$T/bin"
+# the backlight top level as tsx-idled reports it (the range of tsx-panelctl)
+printf 'level 17\nmax 31\n' > "$T/run/brightness.state"
 N=0 F=0
 ok() { echo "  ok: $*"; N=$((N + 1)); }
 bad() { echo "  FAIL: $*"; F=$((F + 1)); }
@@ -47,7 +49,7 @@ chmod +x "$T/bin/reboot"
 # searches PATH. So a $T/bin/reboot fixture on PATH would silently never run.
 # This is harmless on the panel, where the reboot of busybox is what we want,
 # but it defeats the override in this test.
-PATH="$T/bin:$PATH" TSX_RUN_DIR="$T/run" TSX_REBOOT_BIN="$T/bin/reboot" \
+PATH="$T/bin:$PATH" TSX_RUN_DIR="$T/run" TSX_REBOOT_BIN="$T/bin/reboot" TSX_LEARN_FILE="$T/learn.json" \
 	busybox sh "$SCRIPT" > "$T/panelctl.log" 2>&1 &
 PID=$!
 for _ in $(seq 1 20); do grep -q "listening on" "$T/panelctl.log" 2>/dev/null && break; sleep 0.1; done
@@ -142,7 +144,7 @@ echo "== the seam: commands for the Home Assistant layer (ledbar on, keypad led 
 mkdir -p "$T/bl/dev0"; echo 0 > "$T/bl/dev0/brightness"; echo "on 17" > "$T/idled.state"
 restart_with_hw() {
 	kill "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
-	PATH="$T/bin:$PATH" TSX_RUN_DIR="$T/run" TSX_REBOOT_BIN="$T/bin/reboot" TSX_IDLED_STATE="$T/idled.state" \
+	PATH="$T/bin:$PATH" TSX_RUN_DIR="$T/run" TSX_REBOOT_BIN="$T/bin/reboot" TSX_IDLED_STATE="$T/idled.state" TSX_LEARN_FILE="$T/learn.json" \
 		TSX_BACKLIGHT_DIR="$T/bl" TSX_BUTTONS_CONF="$T/buttons.conf" TSX_ALS_CONF="$T/als.conf" TSX_ASOUND_DIR="$T/asound" \
 		busybox sh "$SCRIPT" > "$T/panelctl.log" 2>&1 &
 	PID=$!
@@ -202,6 +204,52 @@ echo "$EV" | head -n 4 | grep -qx 'lux 12.5' && echo "$EV" | grep -qx 'als-auto 
 echo "$EV" | grep -q 'button home' && bad "events: the old key press came out as an event" || ok "events: the key press of before the start is not an event"
 echo "$EV" | grep -qx 'button power long' && ok "events: a new key press is 'button NAME TYPE'" || bad "events: no button event: $EV"
 echo "$EV" | grep -qx 'screen blank' && ok "events: a screen change is an event" || bad "events: no screen event: $EV"
+
+echo "== the seam: the Home Assistant layer holds no hardware call =="
+hw='tsx-(ledbar|lightbar|usbpower|keypad|blank|als|config|autoupdate|audio)|amixer'
+for f in "$HERE/../ha/usr/local/sbin/tsx-mqtt" "$HERE/../ha/voice/shim/tsx_panel/backend.py"; do
+	if grep -nE "^[[:space:]]*($hw)[[:space:]]|[;&|(][[:space:]]*($hw)[[:space:]]|\"($hw)\"|subprocess\.(run|Popen)\(\[?self\.[a-z_]*_bin" "$f" | grep -vE '^[0-9]+:[[:space:]]*#' | grep -q .; then
+		bad "$(basename "$f") calls a hardware tool: $(grep -nE "^[[:space:]]*($hw)[[:space:]]|[;&|(][[:space:]]*($hw)[[:space:]]|\"($hw)\"" "$f" | grep -vE '^[0-9]+:[[:space:]]*#' | head -n 3 | tr '\n' '|')"
+	else ok "$(basename "$f") calls no hardware tool, only tsx-panelctl"; fi
+done
+
+echo "== the floor (BACKLIGHT_MIN) and the reset of the learned brightness =="
+printf 'level 2400\nbase 2400\noffset 0\noverride 0\nmax 4095\nmin 123\n' > "$T/run/brightness.state"
+rm -f "$T/run/brightness" "$T/run/brightness-offset"
+send "brightness 50"
+[ ! -e "$T/run/brightness" ] && ok "brightness 50 is below the floor: refused" || bad "brightness below the floor was written"
+send "brightness 122"
+[ ! -e "$T/run/brightness" ] && ok "brightness 122 is refused (the floor is 123)" || bad "brightness 122 was written"
+send "brightness 123"
+[ "$(cat "$T/run/brightness" 2>/dev/null)" = 123 ] && ok "brightness 123 (the floor) is accepted" || bad "brightness 123 refused"
+rm -f "$T/run/brightness"
+send "backlight 100"
+[ ! -e "$T/run/brightness" ] && ok "backlight 100 is below the floor: refused" || bad "backlight below the floor was written"
+send "brightness-offset -3000"
+[ "$(cat "$T/run/brightness-offset" 2>/dev/null)" = -2277 ] && ok "offset -3000 on a base of 2400 is cut to -2277 (the floor)" || bad "offset not cut: '$(cat "$T/run/brightness-offset" 2>/dev/null)'"
+send "brightness-offset -100"
+[ "$(cat "$T/run/brightness-offset" 2>/dev/null)" = -100 ] && ok "an offset above the floor stays as it is" || bad "offset changed: '$(cat "$T/run/brightness-offset" 2>/dev/null)'"
+printf '{"version": 1, "points": []}\n' > "$T/learn.json"
+send "brightness-learn-reset"
+[ ! -e "$T/learn.json" ] && [ -e "$T/run/brightness-learn.reset" ] && ok "brightness-learn-reset removes the file and sets the flag" || bad "learn reset did not act"
+rm -f "$T/run/brightness-learn.reset"
+send "brightness-learn-reset now"
+[ ! -e "$T/run/brightness-learn.reset" ] && ok "brightness-learn-reset with an argument is refused" || bad "learn reset with an argument ran"
+rm -f "$T/run/brightness" "$T/run/brightness-offset"
+printf 'level 17\nmax 31\n' > "$T/run/brightness.state"
+send "brightness 1"
+[ "$(cat "$T/run/brightness" 2>/dev/null)" = 1 ] && ok "without a min line the floor is 1 (xx60)" || bad "floor without a min line"
+rm -f "$T/run/brightness"
+
+echo "== volume without TSX_VOLUME_CMD: the Master control of the sound card =="
+mkdir -p "$T/asound/TSW1060" "$T/bin3"
+printf '#!/bin/sh\necho "Simple mixer control Master,0"\necho "  Front Left: Playback 40 [63%%] [on]"\n' > "$T/bin3/amixer"; chmod +x "$T/bin3/amixer"
+[ "$(env -u TSX_VOLUME_CMD PATH="$T/bin3:$PATH" TSX_RUN_DIR="$T/run" TSX_ASOUND_DIR="$T/asound" busybox sh "$SCRIPT" get volume)" = 63 ] && ok "get volume: the percent of the Master control" || bad "get volume (amixer) wrong"
+rm -rf "$T/asound/TSW1060"
+: > "$T/cmds.log"
+env -u TSX_VOLUME_CMD PATH="$T/bin:$PATH" TSX_RUN_DIR="$T/run" TSX_PANELCTL_ONESHOT=1 TSX_PANELCTL="$T/fifo3" busybox sh "$SCRIPT" > "$T/oneshot.log" 2>&1 &
+OP=$!; sleep 0.5; echo "volume 42" > "$T/fifo3"; wait $OP 2>/dev/null
+grep -qxF 'amixer -q -c TSW1060 sset Master 42%' "$T/cmds.log" && ok "volume 42 -> amixer sset Master 42%" || bad "volume (amixer): $(cat "$T/cmds.log") $(cat "$T/oneshot.log")"
 
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-panelctl || echo FAIL test-panelctl

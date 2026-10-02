@@ -668,7 +668,7 @@ class Handler(BaseHTTPRequestHandler):
         routes = {}
         for p in PLUGINS:
             routes.update(getattr(p, "POST_ROUTES", {}))
-        if path not in ("/setup/api/pair", "/setup/api/submit") and path not in routes:
+        if path not in ("/setup/api/pair", "/setup/api/submit", "/setup/api/brightness-learn-reset") and path not in routes:
             self.send_error(404)
             return
         data, code = self._read_json_body()
@@ -679,6 +679,8 @@ class Handler(BaseHTTPRequestHandler):
             self._api_pair(data)
         elif path == "/setup/api/submit":
             self._api_submit(data)
+        elif path == "/setup/api/brightness-learn-reset":
+            self._api_learn_reset()
         else:
             routes[path](self, data)
 
@@ -734,6 +736,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         cookie = "tsxsetup=%s; Path=/setup; HttpOnly; SameSite=Strict; Max-Age=%d" % (token, WINDOW)
         self._send_json(200, {"ok": True}, set_cookie=cookie)
+
+    def _api_learn_reset(self):
+        """Forget the brightness points that the panel learned."""
+        if not self._authorized():
+            self._send_json(403, {"error": "not authorized"})
+            return
+        ok, text = helper_call("brightness-learn-reset")
+        if ok:
+            self._send_json(200, {"ok": True})
+        else:
+            self._send_json(502, {"error": text or "could not forget the learned brightness"})
 
     def _api_submit(self, data):
         if not self._authorized():
@@ -878,6 +891,10 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
         </select>
         <label for="f-alsscale">Light sensor scale (0.01 to 1000)</label>
         <input id="f-alsscale" name="ALS_SCALE" type="text" inputmode="decimal" placeholder="(default: 1)" maxlength="8">
+        <label>Learned brightness</label>
+        <button type="button" class="secondary" id="learn-reset">Forget the learned brightness</button>
+        <div class="status" id="learn-status"></div>
+        <div class="hint">When the backlight follows the ambient light, the panel remembers the brightness that you set by hand and holds for a few seconds. This button removes what it learned.</div>
         <div class="hint" id="als-hint">The light sensor sits behind the front window, which passes only part of the light. Lux is the sensor lux times this scale.</div>
       </div>
     </details>
@@ -970,7 +987,7 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
 
   function applyUnavailable(u){
     if (u.AUTO_BRIGHTNESS) {
-      $("f-autobri").disabled = true; $("f-alsscale").disabled = true;
+      $("f-autobri").disabled = true; $("f-alsscale").disabled = true; $("learn-reset").disabled = true;
       $("als-hint").textContent = "Not available on this panel: " + u.AUTO_BRIGHTNESS + ".";
     }
     /*SLOT:unavailable*/
@@ -1011,6 +1028,18 @@ details summary { cursor:pointer; color:var(--muted); padding:8px 0; }
     el.className = "status " + cls;
     el.textContent = text;
   }
+
+  $("learn-reset").addEventListener("click", function(){
+    var b = $("learn-reset"), st = $("learn-status");
+    b.disabled = true;
+    api("POST", "/setup/api/brightness-learn-reset", {}).then(function(r){
+      b.disabled = false;
+      st.className = r.status === 200 ? "status ok" : "status bad";
+      st.textContent = r.status === 200 ? "The learned brightness is removed." : "Not done. Try again.";
+    }).catch(function(){
+      b.disabled = false; st.className = "status bad"; st.textContent = "network error; try again";
+    });
+  });
 
   /*SLOT:init*/
 

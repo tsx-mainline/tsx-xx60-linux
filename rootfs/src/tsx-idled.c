@@ -23,6 +23,15 @@
  *    limits it (the TSX panels: MP3309C 0..31, vendor cap 23, U-Boot 17).
  *    A value that no config file sets is a share of max_brightness (see
  *    resolve_levels), so the defaults fit any backlight range.
+ *  - No lit level goes below BACKLIGHT_MIN (the floor). A slider at the
+ *    bottom then still shows a picture. The default is 3 % of max_brightness
+ *    (at least 1). Blanking still turns the backlight off.
+ *  - A change of the level ramps. The slider (brightness and
+ *    brightness-offset files) takes RAMP_SLIDER_MS (default 400). A change
+ *    of the ambient light level, the schedule or a reload takes RAMP_AUTO_MS
+ *    (default 2000). 0 = jump. The ramp is linear in the slider scale of
+ *    tsx-level.h, so it looks even. The daemon has no timer while no ramp
+ *    runs. The wake from blank and the start set the level at once.
  *  - KEY_POWER (the TSX power key, gpio-keys-polled) toggles blank and wake
  *    when POWER_KEY=blank.
  *  - On-screen keyboard toggle (OSK_GESTURE=threefinger|twofinger|off): a
@@ -94,12 +103,16 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "tsx-level.h"
+
 #define MAXDEV 32
 
 struct cfg {
 	int blank_timeout;      /* s, 0 = never */
 	int day, night;         /* backlight steps */
 	int bl_max;             /* cap, <= max_brightness */
+	int bl_min;             /* floor of a lit level, -1 = share of max_brightness */
+	int ramp_slider_ms, ramp_auto_ms;
 	int power_key;          /* 1 = KEY_POWER toggles blank */
 	int night_start, night_end; /* hour 0-23; equal = no night */
 	int swallow;            /* grab while blank */
@@ -151,7 +164,8 @@ static long long now_ms(void)
 
 static void cfg_defaults(struct cfg *c)
 {
-	c->blank_timeout = 300; c->day = -1; c->night = -1; c->bl_max = -1; c->power_key = 1;
+	c->blank_timeout = 300; c->day = -1; c->night = -1; c->bl_max = -1; c->bl_min = -1; c->power_key = 1;
+	c->ramp_slider_ms = 400; c->ramp_auto_ms = 2000;
 	c->night_start = 22; c->night_end = 7; c->swallow = 1; c->swallow_ms = 700;
 	strcpy(c->backlight, "auto");
 	c->osk_gesture = 3; c->osk_tap_ms = 500;
@@ -180,6 +194,7 @@ static void cfg_parse(struct cfg *c, const char *cfgfile, int first)
 		I("BRIGHTNESS_NIGHT", night); I("NIGHT_START", night_start);
 		I("NIGHT_END", night_end); I("SWALLOW_WAKE_TOUCH", swallow);
 		I("WAKE_SWALLOW_MS", swallow_ms); I("BACKLIGHT_MAX", bl_max);
+		I("BACKLIGHT_MIN", bl_min); I("RAMP_SLIDER_MS", ramp_slider_ms); I("RAMP_AUTO_MS", ramp_auto_ms);
 		if (!strcmp(p, "POWER_KEY")) c->power_key = !strcmp(v, "blank");
 		if (!strcmp(p, "BACKLIGHT") && *v) snprintf(c->backlight, sizeof c->backlight, "%s", v);
 		if (!strcmp(p, "OSK_GESTURE")) c->osk_gesture = !strcmp(v, "threefinger") ? 3 : !strcmp(v, "twofinger") ? 2 : 0;
@@ -266,6 +281,17 @@ static void resolve_levels(void)
 	if (C.bl_max < 0) C.bl_max = (int)((max * 74LL + 50) / 100);
 }
 
+/* The floor of a lit level: BACKLIGHT_MIN, or 3 % of max_brightness. It is at
+ * least 1 and at most the top level. */
+static int min_level(int top)
+{
+	int max = bldir[0] ? read_int(bldir, "max_brightness") : -1, m = C.bl_min;
+	if (m < 0) m = max > 0 ? (int)((max * 3LL + 50) / 100) : 1;
+	if (m < 1) m = 1;
+	if (m > top) m = top;
+	return m;
+}
+
 /* The level without any manual setting. It is the tsx-als level while its
  * file is fresh. Otherwise it is the day/night schedule. */
 static int base_level(void)
@@ -283,7 +309,7 @@ static int base_level(void)
 	return night ? C.night : C.day;
 }
 
-static int st_base, st_offset, st_override, st_max = -1;
+static int st_base, st_offset, st_override, st_max = -1, st_min = 1;
 
 static int target_level(void)
 {
@@ -327,13 +353,13 @@ static int eff_timeout;   /* BLANK_TIMEOUT, or the runtime file */
  * changed. */
 static void write_bstate(int lvl)
 {
-	static char last[160];
-	char b[160];
+	static char last[192];
+	char b[192];
 	int base = st_base;
 	if (st_max > 0 && base > st_max) base = st_max;
-	if (base < 1) base = 1;
-	snprintf(b, sizeof b, "level %d\nbase %d\noffset %d\noverride %d\nmax %d\nblank_timeout %d\n",
-		 lvl, base, st_offset, st_override, st_max, eff_timeout);
+	if (base < st_min) base = st_min;
+	snprintf(b, sizeof b, "level %d\nbase %d\noffset %d\noverride %d\nmax %d\nblank_timeout %d\nmin %d\n",
+		 lvl, base, st_offset, st_override, st_max, eff_timeout, st_min);
 	if (!strcmp(b, last)) return;
 	snprintf(last, sizeof last, "%s", b);
 	write_run_file("brightness.state", b);
@@ -349,7 +375,47 @@ static int als_fresh(void)
 
 static int cur_level = -1;
 static long long hold_until;   /* boot hold (see the header), 0 = none */
-static void backlight_on(void)
+
+/* The ramp: from ramp_from to ramp_to over ramp_ms, in the position scale of
+ * tsx-level.h. ramp_next is the time of the next step. */
+enum { RAMP_NONE, RAMP_FAST, RAMP_SLOW };
+static int ramp_on, ramp_from, ramp_to, ramp_ms;
+static long long ramp_t0, ramp_next;
+
+static void write_level(int lvl)
+{
+	write_int(bldir, "bl_power", 0);
+	if (write_int(bldir, "brightness", lvl)) logm("write brightness failed: %s", strerror(errno));
+	else if (verbose) logm("backlight %d (cap %d)", lvl, st_max);
+	cur_level = lvl;
+}
+
+/* Do one ramp step now and set the time of the next one. */
+static void ramp_step(long long t)
+{
+	double p0, p1, f;
+	int lvl, steps;
+	if (!ramp_on) return;
+	f = ramp_ms > 0 ? (double)(t - ramp_t0) / ramp_ms : 1;
+	if (f >= 1) {
+		lvl = ramp_to; ramp_on = 0;
+	} else {
+		p0 = tsx_level_to_pos(ramp_from, st_min, st_max);
+		p1 = tsx_level_to_pos(ramp_to, st_min, st_max);
+		lvl = tsx_pos_to_level(p0 + (p1 - p0) * f, st_min, st_max);
+		/* the level never goes past the end of the ramp, and it moves one way */
+		if (ramp_to > ramp_from ? lvl > ramp_to : lvl < ramp_to) lvl = ramp_to;
+	}
+	if (lvl != cur_level) write_level(lvl);
+	steps = abs(ramp_to - ramp_from);
+	ramp_next = t + (steps > 0 ? ramp_ms / steps : ramp_ms);
+	if (ramp_next < t + 15) ramp_next = t + 15;
+	if (ramp_next > t + 250) ramp_next = t + 250;
+}
+
+/* mode: RAMP_NONE jumps. RAMP_FAST is a change that the user made (the slider).
+ * RAMP_SLOW is a change of the ambient light, the schedule or the config. */
+static void backlight_on(int mode)
 {
 	int max, lvl = target_level();
 	char st[64];
@@ -368,18 +434,29 @@ static void backlight_on(void)
 	}
 	if (C.bl_max > 0 && max > C.bl_max) max = C.bl_max;
 	st_max = max;
+	st_min = min_level(max);
 	if (lvl > max) lvl = max;
-	if (lvl < 1) lvl = 1;
+	if (lvl < st_min) lvl = st_min;
 	write_bstate(lvl);
 	/* Write the level again also when someone else changed it (the panel
 	 * enable of drm/meson restores 16 on unblank, and so does brightnessctl).
-	 * The config is authoritative. */
-	if (lvl != cur_level || read_int(bldir, "brightness") != lvl) {
-		write_int(bldir, "bl_power", 0);
-		if (write_int(bldir, "brightness", lvl)) logm("write brightness failed: %s", strerror(errno));
-		else if (verbose) logm("backlight %d (cap %d)", lvl, max);
-		cur_level = lvl;
+	 * The config is authoritative. A ramp step is the last value that this
+	 * daemon wrote, so it is no outside change. */
+	int actual = read_int(bldir, "brightness");
+	if (ramp_on && lvl == ramp_to && actual == cur_level) goto done;
+	if (lvl != cur_level || actual != lvl) {
+		int ms = mode == RAMP_FAST ? C.ramp_slider_ms : C.ramp_auto_ms;
+		ramp_on = 0;
+		if (mode == RAMP_NONE || ms <= 0 || actual <= 0 || actual == lvl) {
+			write_level(lvl);
+		} else {
+			ramp_on = 1; ramp_from = actual < st_min ? st_min : actual > max ? max : actual;
+			ramp_to = lvl; ramp_ms = ms; ramp_t0 = now_ms();
+			cur_level = actual;
+			ramp_step(ramp_t0);
+		}
 	}
+done:
 	snprintf(st, sizeof st, "on %d", lvl);
 	set_state(st);
 }
@@ -391,7 +468,7 @@ static void backlight_off(void)
 		write_int(bldir, "brightness", 0);
 		write_int(bldir, "bl_power", 4); /* FB_BLANK_POWERDOWN, ignored if absent */
 	}
-	cur_level = 0;
+	cur_level = 0; ramp_on = 0;
 	if (verbose) logm("blank");
 	set_state("blank");
 }
@@ -447,7 +524,7 @@ static void screen_on(void)
 {
 	display_power(1);
 	cur_level = -1;
-	backlight_on();
+	backlight_on(RAMP_NONE);
 }
 
 static void grab_all(int on)
@@ -569,9 +646,10 @@ static void watch_rundir(void)
 	}
 }
 
-/* Return 1 if a brightness input changed, or 2 if the blank timeout file
- * changed. The 5 s re-apply handles als-level. The file changes every second,
- * and tsx-als ramps the backlight toward it itself. */
+/* Return a bit mask: 1 if a manual brightness file changed (the slider), 2 if
+ * the blank timeout file changed, 4 if als-level changed (ALS_WATCH only).
+ * Without ALS_WATCH, the 5 s re-apply handles als-level. On the xx60 that file
+ * changes every second, and tsx-als ramps the backlight toward it itself. */
 static int read_inotify(void)
 {
 	char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
@@ -580,8 +658,8 @@ static int read_inotify(void)
 		for (char *p = buf; p < buf + n; ) {
 			struct inotify_event *e = (struct inotify_event *)p;
 			if (e->len) {
-				if (!strcmp(e->name, "brightness") || !strcmp(e->name, "brightness-offset") ||
-				    (C.als_watch && !strcmp(e->name, "als-level"))) m |= 1;
+				if (!strcmp(e->name, "brightness") || !strcmp(e->name, "brightness-offset")) m |= 1;
+				else if (C.als_watch && !strcmp(e->name, "als-level")) m |= 4;
 				else if (!strcmp(e->name, "blank-timeout")) m |= 2;
 			}
 			p += sizeof *e + e->len;
@@ -641,7 +719,7 @@ int main(int argc, char **argv)
 	     C.osk_gesture == 3 ? "threefinger" : C.osk_gesture == 2 ? "twofinger" : "off");
 	/* A previous instance can have stopped while the output was off. */
 	display_power(1);
-	backlight_on();
+	backlight_on(RAMP_NONE);
 
 	int blanked = 0, swallowing = 0;
 	long long last_input = now_ms(), last_scan = 0, last_sched = 0, swallow_until = 0, last_off = 0;
@@ -652,7 +730,7 @@ int main(int argc, char **argv)
 		if (t - last_scan >= 5000) { scan_devices(blanked && C.swallow); last_scan = t; }
 		if (sig_hup) {
 			sig_hup = 0; cfg_load(&C); load_timeout(0); bldir[0] = 0; find_backlight(); resolve_levels(); cur_level = -1;
-			if (!blanked) backlight_on();
+			if (!blanked) backlight_on(RAMP_SLOW);
 			logm("config reloaded");
 		}
 		if (sig_blank) { sig_blank = 0; if (!blanked) { screen_off(); blanked = 1; last_off = t; } }
@@ -663,7 +741,8 @@ int main(int argc, char **argv)
 		}
 		/* A compositor that started during the blank has its output on. */
 		if (blanked && off_repeat > 0 && t - last_off >= off_repeat) { display_power(0); last_off = t; }
-		if (!blanked && !swallowing && t - last_sched >= 5000) { backlight_on(); last_sched = t; }
+		if (!blanked && !swallowing && t - last_sched >= 5000) { backlight_on(RAMP_SLOW); last_sched = t; }
+		if (ramp_on && t >= ramp_next) ramp_step(t);
 		if (swallowing && t >= swallow_until) { swallowing = 0; grab_all(0); if (verbose) logm("ungrab"); }
 
 		/* The poll timeout runs until the next deadline, 1 s at most. */
@@ -672,6 +751,7 @@ int main(int argc, char **argv)
 			long long left = last_input + (long long)eff_timeout * 1000 - t;
 			if (left < to) to = left < 0 ? 0 : (int)left;
 		}
+		if (ramp_on && ramp_next - t < to) to = ramp_next - t < 0 ? 0 : (int)(ramp_next - t);
 		if (swallowing && swallow_until - t < to) to = swallow_until - t < 0 ? 0 : (int)(swallow_until - t);
 
 		struct pollfd pfd[MAXDEV + 1];
@@ -686,7 +766,7 @@ int main(int argc, char **argv)
 			if (m & 2) load_timeout(0);
 			/* A manual level, offset or timeout change applies now, not at
 			 * the next 5 s tick (key-strip slide, overlay slider). */
-			if (m && !blanked && !swallowing) backlight_on();
+			if (m & 5 && !blanked && !swallowing) backlight_on(m & 1 ? RAMP_FAST : RAMP_SLOW);
 		}
 		t = now_ms();
 		for (int i = ndev - 1; i >= 0; i--) {
@@ -744,7 +824,7 @@ int main(int argc, char **argv)
 	grab_all(0);
 	if (blanked) display_power(1);
 	cur_level = -1;
-	backlight_on();
+	backlight_on(RAMP_NONE);
 	logm("exit");
 	return 0;
 }

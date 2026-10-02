@@ -8,7 +8,7 @@ T=$(mktemp -d); PID=; trap '[ -n "$PID" ] && kill $PID 2>/dev/null; rm -rf $T' E
 gcc -O2 -Wall -Werror -o $T/tsx-idled $SRC
 mkdir -p $T/bl/mp3309c $T/input $T/run
 echo 31 > $T/bl/mp3309c/max_brightness; echo 17 > $T/bl/mp3309c/brightness
-printf 'BLANK_TIMEOUT=0\nBRIGHTNESS_DAY=10\nBRIGHTNESS_NIGHT=10\nBACKLIGHT_MAX=23\nNIGHT_START=0\nNIGHT_END=0\n' > $T/kiosk.conf
+printf 'RAMP_SLIDER_MS=0\nRAMP_AUTO_MS=0\nBLANK_TIMEOUT=0\nBRIGHTNESS_DAY=10\nBRIGHTNESS_NIGHT=10\nBACKLIGHT_MAX=23\nNIGHT_START=0\nNIGHT_END=0\n' > $T/kiosk.conf
 TSX_INPUT_DIR=$T/input TSX_BACKLIGHT_DIR=$T/bl TSX_STATE_FILE=$T/state TSX_RUN_DIR=$T/run $T/tsx-idled -c $T/kiosk.conf -v > $T/log 2>&1 &
 PID=$!
 fail=0; b() { cat $T/bl/mp3309c/brightness; }

@@ -50,6 +50,15 @@ PATH=$T/bin:$PATH TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_
 	sh -c 'trap "exit 0" TERM; exec sh "$0"' "$ALS" >> "$T/log" 2>&1 &
 P=$!; sleep 0.5; l1=$(cat "$T/run/als-level"); sleep 0.35; l2=$(cat "$T/run/als-level"); sleep 0.7; l3=$(cat "$T/run/als-level"); kill $P; wait $P 2>/dev/null || true; wait
 [ "$l1" = 17 ] && [ "$l2" = 17 ] && [ "$l3" = 18 ] && ok "hysteresis 300->340 keeps 17, 450 -> 18" || bad "hysteresis levels $l1 $l2 $l3, want 17 17 18"
+# 3b. a learned curve (als-curve of tsx_brightness.py) replaces ALS_CURVE. A bad file is ignored.
+rm -f "$T/run/"*; echo "0:3 100:9 3000:23" > "$T/run/als-curve"; lux 100.000000; run 1
+[ "$(cat "$T/run/als-level")" = 9 ] && ok "learned curve: 100 lx -> 9 (the default curve gives 13)" || bad "learned curve: $(cat "$T/run/als-level")"
+rm -f "$T/run/"*; echo "not a curve" > "$T/run/als-curve"; lux 300.000000; run 1
+[ "$(cat "$T/run/als-level")" = 17 ] && ok "a bad als-curve file is ignored" || bad "bad als-curve: $(cat "$T/run/als-level")"
+# 3c. the floor: BACKLIGHT_MIN of the board file
+rm -f "$T/run/"*; printf 'BACKLIGHT_MIN=5\n' > "$T/board.conf"; lux 0.000000
+TSX_PANEL_BOARD_CONF=$T/board.conf run 1
+[ "$(cat "$T/run/als-level")" = 5 ] && ok "floor: 0 lx gives 5 (BACKLIGHT_MIN), not 3" || bad "floor: $(cat "$T/run/als-level")"
 # 4. blank: no backlight writes
 rm -f "$T/run/"*; echo 0 > "$T/bl/mp3309c/brightness"; echo blank > "$T/idled"; lux 3000.0; run 1
 [ "$(bl)" = 0 ] && ok "blank: backlight untouched" || bad "blank: backlight $(bl)"

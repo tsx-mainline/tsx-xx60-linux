@@ -34,7 +34,8 @@
 # (tsx-ledbar, tsx-keypad, tsx-blank, tsx-config, reboot), or it writes the
 # runtime override files that they use. Its second client is the
 # quick-settings overlay (tsx-overlay, also user kiosk): brightness-offset,
-# als, blank, reload-page, setup (the "Setup" button, docs/rootfs.md "Setup
+# brightness-learn-reset (forget the points that the automatic brightness
+# learned from manual changes), als, blank, reload-page, setup (the "Setup" button, docs/rootfs.md "Setup
 # page").
 #
 # WHY THIS EXISTS: the voice satellite (tsx-voice / linux-voice-assistant)
@@ -106,6 +107,31 @@ is_uint() {
 	[ "${#1}" -le 6 ]
 }
 in_range() { is_uint "$1" && [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]; }
+
+# The top level of the backlight. tsx-idled reports it ("max M" in
+# brightness.state: BACKLIGHT_MAX cut to the max_brightness of the device).
+# Before tsx-idled has written it, the max_brightness of the first backlight
+# device. 31 is the last resort.
+bl_max() {
+	m=$(sed -n 's/^max //p' "$R/brightness.state" 2>/dev/null | head -n 1)
+	is_uint "$m" && [ "$m" -gt 0 ] && { echo "$m"; return; }
+	set +f
+	for d in "$BL_DIR"/*; do
+		m=$(cat "$d/max_brightness" 2>/dev/null)
+		break
+	done
+	set -f
+	is_uint "$m" && [ "$m" -gt 0 ] && { echo "$m"; return; }
+	echo 31
+}
+
+# The floor of a lit level ("min M" in brightness.state, from tsx-idled).
+# Before tsx-idled has written it, 1.
+bl_min() {
+	m=$(sed -n 's/^min //p' "$R/brightness.state" 2>/dev/null | head -n 1)
+	is_uint "$m" && [ "$m" -gt 0 ] && { echo "$m"; return; }
+	echo 1
+}
 
 reject() { log "rejected: $(safe "$*")"; }
 
@@ -228,14 +254,14 @@ handle() {
 			log "als auto $a2"; "$ALS" auto "$a2"
 		else reject "als $a1 $a2 $a3 $a4 $rest"; fi;;
 	brightness)
-		if in_range "$a1" 1 31 && [ -z "$a2$a3$a4$rest" ]; then
+		if in_range "$a1" "$(bl_min)" "$(bl_max)" && [ -z "$a2$a3$a4$rest" ]; then
 			log "brightness $a1"; echo "$a1" > "$R/brightness"
 		else reject "brightness $a1 $a2 $a3 $a4 $rest"; fi;;
 	backlight)
 		# A level for the backlight at once, as the up and down keys give it:
 		# the override file for tsx-idled, and the backlight device itself
 		# while the screen is lit.
-		if in_range "$a1" 1 31 && [ -z "$a2$a3$a4$rest" ]; then
+		if in_range "$a1" "$(bl_min)" "$(bl_max)" && [ -z "$a2$a3$a4$rest" ]; then
 			log "backlight $a1"; echo "$a1" > "$R/brightness"
 			s=; [ -r "$IDLED_STATE" ] && read -r s _ < "$IDLED_STATE"
 			if [ "$s" != blank ]; then
@@ -254,10 +280,21 @@ handle() {
 		# either). The script does not log it, because a slider drag sends
 		# one line per step.
 		n=${a1#-}
-		if [ -z "$a2$a3$a4$rest" ] && in_range "$n" 0 31 && { [ "$n" = "$a1" ] || [ "-$n" = "$a1" ]; }; then
-			if [ "$n" = 0 ]; then rm -f "$R/brightness-offset"; else echo "$a1" > "$R/brightness-offset"; fi
+		if [ -z "$a2$a3$a4$rest" ] && in_range "$n" 0 "$(bl_max)" && { [ "$n" = "$a1" ] || [ "-$n" = "$a1" ]; }; then
+			# The result must not go below the floor: base + offset >= min.
+			b=$(sed -n 's/^base //p' "$R/brightness.state" 2>/dev/null | head -n 1)
+			if is_uint "$b" && [ "$((b + a1))" -lt "$(bl_min)" ]; then a1=$(( $(bl_min) - b )); fi
+			if [ "$((a1))" = 0 ]; then rm -f "$R/brightness-offset"; else echo "$a1" > "$R/brightness-offset"; fi
 			rm -f "$R/brightness"
 		else reject "brightness-offset $a1 $a2 $a3 $a4 $rest"; fi;;
+	brightness-learn-reset)
+		# Forget the learned points: remove the file, and tell the daemon
+		# of the light curve (tsx-sensord or tsx-als-learn) with a flag file.
+		if [ -z "$a1$a2$a3$a4$rest" ]; then
+			log "brightness-learn-reset"
+			rm -f "${TSX_LEARN_FILE:-/data/tsx/brightness-learn.json}"
+			: > "$R/brightness-learn.reset"
+		else reject "brightness-learn-reset $a1 $a2 $a3 $a4 $rest"; fi;;
 	blank-timeout)
 		# Seconds (0 = never). panel.conf stores it, and tsx-idled gets it
 		# through /run/tsx/blank-timeout (it watches that file).

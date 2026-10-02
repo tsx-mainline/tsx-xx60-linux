@@ -113,6 +113,11 @@ echo "rc-service \$*" >> "$T/rc-service.log"
 case "\$2" in status) exit 1;; *) exit 0;; esac
 EOF
 chmod +x "$T/bin/rc-service"
+cat > "$T/bin/tsx-panelctl" <<EOF
+#!/bin/sh
+echo "tsx-panelctl \$*" >> "$T/panelctl-cmds.log"
+EOF
+chmod +x "$T/bin/tsx-panelctl"
 # A deliberately broken `date`, early on PATH. tsx-config setup and
 # tsx-kiosk-url must not be affected AT ALL. They read /proc/uptime and never
 # call date +%s (docs/rootfs.md "Setup page"). This proves that the setup
@@ -252,7 +257,7 @@ export FAKE_CHPASSWD_LOG FAKE_CMD_LOG
 PATH="$T/bin:$PATH" TSX_CONFIG_BIN="$T/bin/tsx-config" TSX_CONF="$CONF" \
 TSX_RUN="$RUNBASE" TSX_RUN_DIR="$RUNDIR" TSX_APPLY_ALLOW_NONROOT=1 \
 TSX_APPLY_PREFIX="$T/prefix" TSX_STATE_DIR="$T/state" \
-TSX_CHPASSWD_BIN="$T/bin/chpasswd" TSX_SHADOW_FILE="$T/shadow" TSX_RCSERVICE_BIN="$T/bin/rc-service" \
+TSX_CHPASSWD_BIN="$T/bin/chpasswd" TSX_SHADOW_FILE="$T/shadow" TSX_RCSERVICE_BIN="$T/bin/rc-service" TSX_PANELCTL_BIN="$T/bin/tsx-panelctl" \
 	busybox sh "$HELPER" > "$T/helper.log" 2>&1 &
 HELPER_PID=$!
 for _ in $(seq 1 50); do grep -q "listening on" "$T/helper.log" 2>/dev/null && break; sleep 0.1; done
@@ -326,6 +331,10 @@ r=$(helper_send "; rm -rf /"); echo "$r" | grep -q '^err' && ok "a shell-metacha
 r=$(helper_send "rootpw short"); echo "$r" | grep -q '^err' && ok "a too-short root password rejected: $r" || bad "short root password accepted: $r"
 [ ! -s "$FAKE_CMD_LOG" ] && ok "none of the rejected lines ever ran the fake chpasswd" || { bad "a rejected line reached a real command"; cat "$FAKE_CMD_LOG"; }
 grep -q '^ok' <(helper_send "show") && ok "the allowed 'show' command still works after the rejected batch" || bad "helper stopped answering after rejections"
+r=$(helper_send "brightness-learn-reset"); [ "$r" = ok ] && grep -qxF 'tsx-panelctl send brightness-learn-reset' "$T/panelctl-cmds.log" && ok "brightness-learn-reset asks tsx-panelctl to forget the learned brightness" || bad "learn reset: '$r' $(cat "$T/panelctl-cmds.log" 2>/dev/null)"
+r=$(helper_send "brightness-learn-reset now"); echo "$r" | grep -q '^err' && ok "brightness-learn-reset with an argument is refused" || bad "learn reset with an argument: $r"
+out=$(call POST /setup/api/brightness-learn-reset --data '{}')
+[ "$(status_of "$out")" = 200 ] && [ "$(grep -c 'send brightness-learn-reset' "$T/panelctl-cmds.log")" = 2 ] && ok "the setup page button (POST brightness-learn-reset) reaches the helper" || bad "page reset: $out"
 
 # ---- 4. form validation: bad URL, bad TZ, overlong field, shell metacharacters
 echo "== form validation =="

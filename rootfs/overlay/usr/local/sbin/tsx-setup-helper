@@ -34,6 +34,8 @@
 #   setup                 tsx-config setup (reopen the window)
 #   kiosk-restart          rc-service kiosk restart, only if it is running
 #                          (a save loads the new URL now)
+#   brightness-learn-reset tsx-panelctl send brightness-learn-reset (forget
+#                          the brightness points that the panel learned)
 #   clear-setup-open       rm -f $TSX_RUN_DIR/setup-open (a save closes the
 #                          reopened window again, as if it expired)
 #   rootpw PASSWORD       chpasswd (PASSWORD over its stdin, never argv).
@@ -42,7 +44,7 @@
 #                          already does for that key.
 #
 # Env overrides for tests: TSX_RUN_DIR, TSX_SETUP_HELPER_REQ,
-# TSX_SETUP_HELPER_RESP, TSX_CONFIG_BIN, TSX_CHPASSWD_BIN, TSX_SHADOW_FILE,
+# TSX_SETUP_HELPER_RESP, TSX_CONFIG_BIN, TSX_PANELCTL_BIN, TSX_CHPASSWD_BIN, TSX_SHADOW_FILE,
 # TSX_RCSERVICE_BIN, TSX_SETUP_HELPER_ONESHOT=1 (handle exactly one request,
 # then exit. Tests only), TSX_APPLY_ALLOW_NONROOT (passed through to
 # tsx-config, tests only).
@@ -51,6 +53,7 @@ R=${TSX_RUN_DIR:-/run/tsx}
 REQ=${TSX_SETUP_HELPER_REQ:-$R/setup-helper}
 RESP=${TSX_SETUP_HELPER_RESP:-$R/setup-helper.resp}
 CONFIG=${TSX_CONFIG_BIN:-tsx-config}
+PANELCTL=${TSX_PANELCTL_BIN:-tsx-panelctl}
 CHPASSWD=${TSX_CHPASSWD_BIN:-chpasswd}
 SHADOW=${TSX_SHADOW_FILE:-/etc/shadow}
 RCSERVICE=${TSX_RCSERVICE_BIN:-rc-service}
@@ -124,6 +127,12 @@ handle() {
 		else
 			reply_ok "kiosk not running"
 		fi
+		;;
+	brightness-learn-reset)
+		[ -z "$rest" ] || { reply_err "brightness-learn-reset takes no arguments"; return; }
+		log "brightness-learn-reset"
+		if out=$("$PANELCTL" send brightness-learn-reset 2>&1); then reply_ok
+		else reply_err "$out"; fi
 		;;
 	clear-setup-open)
 		[ -z "$rest" ] || { reply_err "clear-setup-open takes no arguments"; return; }

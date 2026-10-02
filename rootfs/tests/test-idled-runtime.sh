@@ -18,7 +18,7 @@ gcc -O2 -Wall -Werror -o $T/tsx-idled $SRC
 mkdir -p $T/bl/mp3309c $T/input $T/run
 echo 31 > $T/bl/mp3309c/max_brightness; echo 17 > $T/bl/mp3309c/brightness
 mkfifo $T/input/event0
-printf 'BLANK_TIMEOUT=0\nBRIGHTNESS_DAY=10\nBRIGHTNESS_NIGHT=10\nBACKLIGHT_MAX=23\nNIGHT_START=0\nNIGHT_END=0\nWAKE_SWALLOW_MS=200\nDISPLAY_POWER_CMD=\n' > $T/kiosk.conf
+printf 'RAMP_SLIDER_MS=0\nRAMP_AUTO_MS=0\nBLANK_TIMEOUT=0\nBRIGHTNESS_DAY=10\nBRIGHTNESS_NIGHT=10\nBACKLIGHT_MAX=23\nNIGHT_START=0\nNIGHT_END=0\nWAKE_SWALLOW_MS=200\nDISPLAY_POWER_CMD=\n' > $T/kiosk.conf
 exec 7<>$T/input/event0
 ev() { python3 -c 'import struct,sys,time; t=time.time(); sys.stdout.buffer.write(struct.pack("llHHi",int(t),0,int(sys.argv[1]),int(sys.argv[2]),int(sys.argv[3]))+struct.pack("llHHi",int(t),0,0,0,0))' "$@" >&7; }
 TSX_INPUT_DIR=$T/input TSX_BACKLIGHT_DIR=$T/bl TSX_STATE_FILE=$T/state TSX_RUN_DIR=$T/run $T/tsx-idled -c $T/kiosk.conf -v > $T/log 2>&1 &

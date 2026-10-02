@@ -8,4 +8,4 @@ output_log=/var/log/tsx-als.log
 error_log=/var/log/tsx-als.log
 depend() { after udev-settle tsx-idled; }
 start_pre() { checkpath -d -m 0755 /run/tsx; }
-stop_post() { rm -f /run/tsx/als-level; }
+stop_post() { rm -f /run/tsx/als-level; pkill -f 'tsx_brightness.py als-daemon' 2>/dev/null; return 0; }

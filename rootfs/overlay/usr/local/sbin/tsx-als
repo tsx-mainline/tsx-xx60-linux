@@ -31,11 +31,18 @@
 # file again every 5 readings. A change of AUTO_BRIGHTNESS there (the setup
 # page) acts like "tsx-als auto on|off".
 #
+# Learning: tsx_brightness.py (als-daemon) runs beside the loop. A manual
+# change that the user holds for a few seconds becomes a point of the curve.
+# The daemon writes the whole curve to /run/tsx/als-curve. The loop uses that
+# file in place of ALS_CURVE while it exists and moves to the new level at
+# once when the file changes (docs/adaptive-brightness.md). No level goes
+# below BACKLIGHT_MIN (default 1).
+#
 # State for tsx-mqtt: /run/tsx/als.state ("lux N", "raw N", "report N",
 # "level N", "auto on|off"). Lux values are integers.
 #
 # Env overrides for tests: TSX_ALS_CONF, TSX_ALS_PANEL, TSX_CONFIG_BIN, TSX_KIOSK_CONF, TSX_RUN_DIR,
-# TSX_IIO_DIR, TSX_BACKLIGHT_DIR, TSX_IDLED_STATE, TSX_ALS_LOOPS (stop after N
+# TSX_IIO_DIR, TSX_BACKLIGHT_DIR, TSX_LEARN_MOD (the path of tsx_brightness.py), TSX_IDLED_STATE, TSX_ALS_LOOPS (stop after N
 # readings), TSX_ALS_NOW (fixed epoch seconds per reading: start value).
 set -u
 CONF=${TSX_ALS_CONF:-/etc/tsx/als.conf}
@@ -52,8 +59,11 @@ ALS_SMOOTH=5 ALS_HYST_PCT=25 ALS_HYST_ABS=2 ALS_HOLD=10 ALS_RAMP_MS=150
 ALS_NIGHT_CAP=0 ALS_BL_COMP=0 ALS_REPORT_PCT=10 ALS_REPORT_MAX=300 ALS_DEVICE=auto
 ALS_START_WAIT=12 ALS_SCALE=
 [ -r "$CONF" ] && . "$CONF"
-BACKLIGHT_MAX=23 NIGHT_START=22 NIGHT_END=7
-[ -r "$KCONF" ] && eval "$(grep -E '^(BACKLIGHT_MAX|NIGHT_START|NIGHT_END)=[0-9]+$' "$KCONF")"
+BACKLIGHT_MAX=23 BACKLIGHT_MIN=1 NIGHT_START=22 NIGHT_END=7
+[ -r "$KCONF" ] && eval "$(grep -E '^(BACKLIGHT_MAX|BACKLIGHT_MIN|NIGHT_START|NIGHT_END)=[0-9]+$' "$KCONF")"
+BOARD=${TSX_PANEL_BOARD_CONF:-/etc/tsx/panel-board.conf}
+[ -r "$BOARD" ] && eval "$(grep -E '^(BACKLIGHT_MAX|BACKLIGHT_MIN)=[0-9]+$' "$BOARD")"
+LEARN_MOD=${TSX_LEARN_MOD:-/usr/local/lib/tsx/tsx_brightness.py}
 
 log() { echo "$(date '+%F %T') tsx-als: $*"; }
 
@@ -103,10 +113,19 @@ read_dlux() {
 	echo $(( ${i:-0} * 10 + f ))
 }
 
-# deci-lux -> step (piecewise linear on ALS_CURVE)
+# The learned curve (als-curve of the learning daemon), or empty
+USE_CURVE= curve_changed=
+load_curve() {
+	c=
+	[ -r "$R/als-curve" ] && read -r c < "$R/als-curve"
+	if [ -n "$c" ] && ! printf '%s' "$c" | grep -Eq '^[0-9]+:[0-9]+( [0-9]+:[0-9]+)*$'; then c=; fi
+	if [ "$c" != "$USE_CURVE" ]; then USE_CURVE=$c; curve_changed=1; fi
+}
+
+# deci-lux -> step (piecewise linear on the learned curve, else ALS_CURVE)
 curve_level() {
 	x=$1; pl=; ps=; out=
-	for p in $ALS_CURVE; do
+	for p in ${USE_CURVE:-$ALS_CURVE}; do
 		l=$(( ${p%%:*} * 10 )); s=${p#*:}
 		if [ "$x" -le "$l" ]; then
 			if [ -z "$pl" ] || [ "$l" -le "$pl" ]; then out=$s
@@ -193,7 +212,12 @@ load_panel; load_scale
 seen_auto=$PANEL_AUTO
 dev= acc= cur=0 last_dl=-1 last_change=0 rep=-1 rep_t=0 n=0 warned=
 now=${TSX_ALS_NOW:-}
-trap 'rm -f "$R/als-level"; exit 0' INT TERM
+LEARN_PID=
+if [ -z "${TSX_ALS_LOOPS:-}" ] && command -v python3 >/dev/null 2>&1 && [ -r "$LEARN_MOD" ]; then
+	python3 "$LEARN_MOD" als-daemon &
+	LEARN_PID=$!
+fi
+trap 'rm -f "$R/als-level"; [ -n "$LEARN_PID" ] && kill "$LEARN_PID" 2>/dev/null; exit 0' INT TERM
 
 while :; do
 	if [ -n "${TSX_ALS_LOOPS:-}" ] && [ "$n" -ge "$TSX_ALS_LOOPS" ]; then break; fi
@@ -238,11 +262,14 @@ while :; do
 	dl=$(( acc / ALS_SMOOTH ))
 
 	# Pick the level with hysteresis
+	load_curve
 	want=$(curve_level "$dl")
 	if [ "$ALS_NIGHT_CAP" -gt 0 ] && is_night && [ "$want" -gt "$ALS_NIGHT_CAP" ]; then want=$ALS_NIGHT_CAP; fi
 	[ "$want" -le "$BACKLIGHT_MAX" ] || want=$BACKLIGHT_MAX
-	[ "$want" -ge 1 ] || want=1
-	if [ "$cur" -eq 0 ]; then
+	[ "$want" -ge "$BACKLIGHT_MIN" ] || want=$BACKLIGHT_MIN
+	if [ "$cur" -eq 0 ] || [ -n "$curve_changed" ]; then
+		# the first level, or a new learned curve: no hysteresis
+		curve_changed=
 		cur=$want; last_dl=$dl; last_change=$now
 	elif [ "$want" -ne "$cur" ]; then
 		d=$(( dl - last_dl )); [ "$d" -ge 0 ] || d=$(( -d ))
@@ -260,7 +287,7 @@ while :; do
 		# The local manual offset, as tsx-idled adds it (clamped 1..BACKLIGHT_MAX)
 		off=0; [ -r "$R/brightness-offset" ] && read -r off _ < "$R/brightness-offset"
 		case $off in [0-9]|[0-9][0-9]|-[0-9]|-[0-9][0-9]) ;; *) off=0;; esac
-		tgt=$((cur + off)); [ "$tgt" -ge 1 ] || tgt=1; [ "$tgt" -le "$BACKLIGHT_MAX" ] || tgt=$BACKLIGHT_MAX
+		tgt=$((cur + off)); [ "$tgt" -ge "$BACKLIGHT_MIN" ] || tgt=$BACKLIGHT_MIN; [ "$tgt" -le "$BACKLIGHT_MAX" ] || tgt=$BACKLIGHT_MAX
 		if [ "$st" = on ] && [ ! -e "$R/brightness" ] && [ -n "$bd" ] && [ "$bl" -gt 0 ] && [ "$bl" -ne "$tgt" ]; then
 			if [ "$ALS_RAMP_MS" -gt 0 ]; then
 				b=$bl

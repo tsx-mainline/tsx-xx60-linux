@@ -21,6 +21,12 @@
  * (FIFO /run/tsx/panelctl, group kiosk, a fixed command list):
  *   brightness-offset N   the slider. The local manual setting is an offset
  *                         on top of ALS or the day/night schedule.
+ *                         The slider runs from the floor (the "min" line of
+ *                         brightness.state) to the top level. On a wide
+ *                         range, the position maps to the level with a
+ *                         square (tsx-level.h), so the dark end has finer
+ *                         steps. The label shows the level as a percent of
+ *                         the top level.
  *   als auto on|off
  *   blank on
  *   reload-page
@@ -58,6 +64,7 @@
 #include <wayland-client.h>
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "tsx-overlay-layout.h"
+#include "tsx-level.h"
 
 enum mode { HIDDEN, SLIDER, FULL };
 
@@ -85,7 +92,7 @@ static int cur_mv, out_h;                /* the top and bottom margin of the sur
 static long long hide_at;
 
 /* the state on show */
-static int level = -1, base = -1, offset, override, maxlvl = 23, als_auto = -1;
+static int level = -1, base = -1, offset, override, maxlvl = 23, minlvl = 1, als_auto = -1;
 static int drag_level = -1;              /* level under the finger while dragging */
 static long long drag_hold;              /* ...shown until tsx-idled reports it (or until this time) */
 static int pressed = B_NONE, press_inside, touch_id = -1, ptr_down;
@@ -143,11 +150,12 @@ static int read_state(void)
 {
 	char b[32];
 	int l = ifield(bstate, "level", -1), ba = ifield(bstate, "base", -1), of = ifield(bstate, "offset", 0);
-	int ov = ifield(bstate, "override", 0), mx = ifield(bstate, "max", 23), a = -1;
+	int ov = ifield(bstate, "override", 0), mx = ifield(bstate, "max", 23), mn = ifield(bstate, "min", 1), a = -1;
 	if (!field(astate, "auto", b, sizeof b)) a = !strcmp(b, "on");
 	if (mx < 2) mx = 23;
-	int ch = l != level || ba != base || of != offset || ov != override || mx != maxlvl || a != als_auto;
-	level = l; base = ba; offset = of; override = ov; maxlvl = mx; als_auto = a;
+	if (mn < 1 || mn >= mx) mn = 1;
+	int ch = l != level || ba != base || of != offset || ov != override || mx != maxlvl || mn != minlvl || a != als_auto;
+	level = l; base = ba; offset = of; override = ov; maxlvl = mx; minlvl = mn; als_auto = a;
 	return ch;
 }
 
@@ -167,7 +175,7 @@ static void panelctl_send(const char *fmt, ...)
 
 static void set_level(int l)
 {
-	if (l < 1) l = 1;
+	if (l < minlvl) l = minlvl;     /* the floor: the slider never blanks the screen */
 	if (l > maxlvl) l = maxlvl;
 	if (l == drag_level) return;
 	drag_level = l;
@@ -241,7 +249,7 @@ static void draw(cairo_t *c, int w, int h)
 	cairo_set_source_rgba(c, 1, 1, 1, 0.14);
 	cairo_fill(c);
 	if (shown > 0) {
-		double frac = maxlvl > 1 ? (double)(shown - 1) / (maxlvl - 1) : 1;
+		double frac = tsx_level_to_pos(shown, minlvl, maxlvl);
 		double fh = t.w + frac * (t.h - t.w);
 		rounded(c, t.x, t.y + t.h - fh, t.w, fh, t.w / 2.0);
 		cairo_set_source_rgba(c, 1.0, 0.78, 0.30, 0.95);
@@ -424,7 +432,7 @@ static void slider_at(double y)
 	double frac = (t.y + t.h - y) / t.h;
 	if (frac < 0) frac = 0;
 	if (frac > 1) frac = 1;
-	set_level(1 + (int)lround(frac * (maxlvl - 1)));
+	set_level(tsx_pos_to_level(frac, minlvl, maxlvl));
 }
 
 static void press_down(double x, double y)
