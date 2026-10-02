@@ -164,6 +164,72 @@ else
 	bad "overlay layout"; cat "$T/ov.out" 2>/dev/null
 fi
 
+echo "== tsx-overlay slider offset (CC=$CC) =="
+cat > "$T/off.c" <<'C'
+#include <stdio.h>
+#include "tsx-overlay-layout.h"
+static int fails;
+static void want(const char *what, int got, int exp)
+{
+	printf("%s %s: %d (want %d)\n", got == exp ? "ok" : "FAIL", what, got, exp);
+	fails += got != exp;
+}
+int main(void)
+{
+	/* 0..4095 backlight: base 2400, the slider covers the whole range */
+	want("wide range, slider to the top", overlay_offset(4095, 2400, 4095), 1695);
+	want("wide range, slider to the bottom", overlay_offset(1, 2400, 4095), -2399);
+	want("wide range, slider step of 100", overlay_offset(2500, 2400, 4095), 100);
+	want("wide range, level 2369 on base 2400", overlay_offset(2369, 2400, 4095), -31);
+	/* 0..23 backlight (xx60): same offsets as with the old limit of 31 */
+	want("xx60 slider to the top", overlay_offset(23, 17, 23), 6);
+	want("xx60 slider to the bottom", overlay_offset(1, 17, 23), -16);
+	want("xx60 night base", overlay_offset(23, 1, 23), 22);
+	/* the offset never leaves the backlight range */
+	want("clamp above the range", overlay_offset(9000, 10, 4095), 4095);
+	want("clamp below the range", overlay_offset(-9000, 10, 4095), -4095);
+	return fails != 0;
+}
+C
+if $CC -O2 -Wall -Wextra -Werror -I"$HERE/rootfs/src" -o "$T/off" "$T/off.c" && "$T/off" > "$T/off.out"; then
+	ok "the slider offset has the range of the backlight"; sed 's/^/      /' "$T/off.out"
+else
+	bad "slider offset"; cat "$T/off.out" 2>/dev/null
+fi
+
+echo "== tsx-overlay brightness percent (CC=$CC) =="
+cat > "$T/pct.c" <<'C'
+#include <stdio.h>
+#include "tsx-overlay-layout.h"
+static int fails;
+static void want(const char *what, int got, int exp)
+{
+	printf("%s %s: %d (want %d)\n", got == exp ? "ok" : "FAIL", what, got, exp);
+	fails += got != exp;
+}
+int main(void)
+{
+	want("wide range, level 2369 of 4095", overlay_percent(2369, 4095), 58);
+	want("wide range, level 1024 of 4095", overlay_percent(1024, 4095), 25);
+	want("wide range, full level", overlay_percent(4095, 4095), 100);
+	want("wide range, level 1", overlay_percent(1, 4095), 0);
+	want("xx60 level 17 of 23", overlay_percent(17, 23), 74);
+	want("xx60 level 12 of 23", overlay_percent(12, 23), 52);
+	want("xx60 full level", overlay_percent(23, 23), 100);
+	want("level above the maximum", overlay_percent(30, 23), 100);
+	want("no level", overlay_percent(-1, 4095), 0);
+	want("no maximum", overlay_percent(10, 0), 0);
+	/* the text "100 %" at 30 px is about 5 * 0.6 * 30 = 90 px wide: it fits the 150 px slider */
+	want("the slider is wide enough for the percent text", SLIDER_W >= 5 * 30 * 6 / 10 + 20, 1);
+	return fails != 0;
+}
+C
+if $CC -O2 -Wall -Wextra -Werror -I"$HERE/rootfs/src" -o "$T/pct" "$T/pct.c" && "$T/pct" > "$T/pct.out"; then
+	ok "the overlay percent is level / max, rounded"; sed 's/^/      /' "$T/pct.out"
+else
+	bad "overlay percent"; cat "$T/pct.out" 2>/dev/null
+fi
+
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-orientation || echo FAIL test-orientation
 exit $F

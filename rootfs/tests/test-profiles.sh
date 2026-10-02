@@ -80,6 +80,8 @@ eq "$(sh "$PS" entries console user | tr '\n' ' ')" "" "console has no kiosk or 
 [ -e "$T/console/usr/local/sbin/tsx-config" ] && [ -e "$T/console/usr/local/sbin/tsx-autoupdate" ] && ok "console has tsx-config and tsx-autoupdate" || bad "console lacks tsx-config or tsx-autoupdate"
 [ -e "$T/console/usr/local/lib/tsx/board.sh" ] && ok "console has the board file" || bad "console lacks the board file"
 [ ! -e "$T/console/etc/kiosk.conf" ] && ok "console: no /etc/kiosk.conf (tsx-idled and tsx-buttons use their built-in defaults)" || bad "console ships /etc/kiosk.conf"
+[ -e "$T/console/etc/tsx/panel-board.conf" ] && ok "console has the board values /etc/tsx/panel-board.conf" || bad "console lacks /etc/tsx/panel-board.conf"
+grep -q 'command_args="-c /etc/kiosk.conf -c /etc/tsx/panel-board.conf"' "$HERE/overlay/etc/init.d/tsx-idled" && ok "tsx-idled reads the board file after /etc/kiosk.conf" || bad "tsx-idled does not read /etc/tsx/panel-board.conf"
 # tsx-data moves /var/lib/sendspin only when the image has the player
 dirs_for() { # dirs_for SENDSPIN-INIT-PATH: the DIRS list of tsx-data
 	sed -n '/^DIRS=/,/^\[ -e \/etc\/init.d\/tsx-sendspin/p' "$HERE/overlay/etc/init.d/tsx-data" | sed "s#/etc/init.d/tsx-sendspin#$1#" > "$T/dirs.sh"

@@ -40,6 +40,7 @@ done
 [ -x $R/usr/sbin/tsx-confont ] || { echo "tsx-confont missing in the overlay"; exit 1; }
 [ -x $R/usr/sbin/tsx-rescue-status ] || { echo "tsx-rescue-status missing in the overlay"; exit 1; }
 [ -x $R/usr/sbin/tsx-rescue-login ] || { echo "tsx-rescue-login missing in the overlay"; exit 1; }
+[ -x $R/usr/sbin/tsx-rescue-backlight ] || { echo "tsx-rescue-backlight missing in the overlay"; exit 1; }
 # The orientation table (panel.conf ORIENTATION). This is the same script as
 # on the rootfs, so the initramfs and the kiosk always agree on a name.
 install -m 755 "$HERE/../overlay/usr/local/bin/tsx-orientation" $R/usr/sbin/tsx-orientation

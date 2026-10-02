@@ -39,6 +39,9 @@
 #                          kiosk-session sets the ES2 flags itself)
 #   TSX_VOLUME_CMD         a command that prints and sets the volume (none
 #                          here: the volume is the Master control of the card)
+#   TSX_RESCUE_BACKLIGHT   percent of max_brightness that the rescue system
+#                          sets at start (default 50, at most 80), so the
+#                          screen is not at the boot level, which can be full
 #
 # Functions (print the value, print nothing when the board has none)
 #   tsx_board_model        the model, for example TSS-10
@@ -76,6 +79,7 @@ TSX_SERIAL_CONSOLE=${TSX_SERIAL_CONSOLE:-ttyAML0}
 TSX_RENDER_ENV=${TSX_RENDER_ENV-}
 TSX_BROWSER_GL_FLAGS=${TSX_BROWSER_GL_FLAGS-}
 TSX_VOLUME_CMD=${TSX_VOLUME_CMD-}
+TSX_RESCUE_BACKLIGHT=${TSX_RESCUE_BACKLIGHT:-50}
 
 # The xx60 keeps its data in the U-Boot env. tsx_board_env NAME prints one
 # variable of it. In the rescue system and in the installers, tsx-lib.sh

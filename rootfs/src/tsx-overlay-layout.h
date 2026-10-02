@@ -56,4 +56,26 @@ static inline void overlay_layout(int full, int h, struct rect *track, struct re
 	}
 }
 
+/* The slider offset for the level l on the base b of tsx-idled. The offset
+ * has the range of the backlight (maxlvl), so a 0..4095 backlight can use the
+ * whole slider. A fixed limit of 31 steps moved a 0..4095 backlight by 31 at
+ * most. A 0..23 backlight keeps its old range, because |l - b| < 23 there. */
+static inline int overlay_offset(int l, int b, int maxlvl)
+{
+	int off = l - b;
+	if (maxlvl < 1) maxlvl = 1;
+	if (off > maxlvl) off = maxlvl;
+	if (off < -maxlvl) off = -maxlvl;
+	return off;
+}
+
+/* The brightness as a percent of the backlight maximum, rounded. The overlay
+ * shows it under the slider. A level of 0 or less shows 0. */
+static inline int overlay_percent(int level, int maxlvl)
+{
+	if (level <= 0 || maxlvl <= 0) return 0;
+	if (level >= maxlvl) return 100;
+	return (int)(((long long)level * 100 + maxlvl / 2) / maxlvl);
+}
+
 #endif

@@ -18,7 +18,7 @@ gcc -O2 -Wall -Werror -o $T/tsx-idled $SRC
 mkdir -p $T/bl/mp3309c $T/input $T/run
 echo 31 > $T/bl/mp3309c/max_brightness; echo 17 > $T/bl/mp3309c/brightness
 mkfifo $T/input/event0
-printf 'BLANK_TIMEOUT=0\nBRIGHTNESS_DAY=10\nBRIGHTNESS_NIGHT=10\nBACKLIGHT_MAX=23\nNIGHT_START=0\nNIGHT_END=0\nWAKE_SWALLOW_MS=200\n' > $T/kiosk.conf
+printf 'BLANK_TIMEOUT=0\nBRIGHTNESS_DAY=10\nBRIGHTNESS_NIGHT=10\nBACKLIGHT_MAX=23\nNIGHT_START=0\nNIGHT_END=0\nWAKE_SWALLOW_MS=200\nDISPLAY_POWER_CMD=\n' > $T/kiosk.conf
 exec 7<>$T/input/event0
 ev() { python3 -c 'import struct,sys,time; t=time.time(); sys.stdout.buffer.write(struct.pack("llHHi",int(t),0,int(sys.argv[1]),int(sys.argv[2]),int(sys.argv[3]))+struct.pack("llHHi",int(t),0,0,0,0))' "$@" >&7; }
 TSX_INPUT_DIR=$T/input TSX_BACKLIGHT_DIR=$T/bl TSX_STATE_FILE=$T/state TSX_RUN_DIR=$T/run $T/tsx-idled -c $T/kiosk.conf -v > $T/log 2>&1 &
@@ -45,7 +45,11 @@ echo 5 > $T/run/brightness; sleep 0.4; chk 5 "absolute override wins over ALS + 
 rm $T/run/brightness; sleep 0.4; chk 14 "override removed: ALS + offset again, at once"
 rm $T/run/brightness-offset; sleep 0.4; chk 12 "offset removed: ALS level"
 echo garbage > $T/run/brightness-offset; sleep 0.4; chk 12 "garbage offset ignored"
+# ALS_WATCH=1: a light sensor service that writes als-level only when the level changes
+printf 'ALS_WATCH=1\n' >> $T/kiosk.conf; kill -HUP $PID; sleep 0.4
+echo 20 > $T/run/als-level; sleep 0.4; chk 20 "ALS_WATCH=1: a new als-level applies at once"
 rm -f $T/run/brightness-offset $T/run/als-level
+sed -i '/^ALS_WATCH=1$/d' $T/kiosk.conf; kill -HUP $PID; sleep 0.4
 
 echo 1 > $T/run/blank-timeout; sleep 2; chk 0 "blank-timeout 1 s (runtime file) blanks"
 grep -q 'blank timeout 1s (runtime override)' $T/log && pass "override logged" || no "no log line for the override"

@@ -1,0 +1,41 @@
+#!/bin/sh
+# tsx-rescue-backlight: set the backlight once, at the start of the rescue
+# system. The rescue has no tsx-idled. Without this step the backlight keeps
+# its boot value, which can be the full level. The script sets it to
+# TSX_RESCUE_BACKLIGHT percent of max_brightness. The board file
+# (board.sh) gives the value. The default is 50. A value above 80 becomes 80,
+# a value that is not a number becomes 50. The level is never below 1.
+# The script waits up to 10 seconds for the backlight to appear, then exits
+# with 0. A panel with no backlight is no error. It prints one line.
+# Test hooks: TSX_BOARD_CONF TSX_RESCUE_SYS (the backlight class directory)
+# TSX_RESCUE_BL_WAIT (seconds to wait, default 10).
+set -u
+BOARD=${TSX_BOARD_CONF:-/usr/local/lib/tsx/board.sh}
+SYS=${TSX_RESCUE_SYS:-/sys/class/backlight}
+WAIT=${TSX_RESCUE_BL_WAIT:-10}
+[ -r "$BOARD" ] && . "$BOARD"
+PCT=${TSX_RESCUE_BACKLIGHT:-50}
+case $PCT in ''|*[!0-9]*) PCT=50;; esac
+[ "$PCT" -ge 1 ] || PCT=1
+[ "$PCT" -le 80 ] || PCT=80
+
+i=0 dir=
+while :; do
+	for d in "$SYS"/*; do
+		[ -r "$d/max_brightness" ] && { dir=$d; break; }
+	done
+	[ -n "$dir" ] && break
+	[ "$i" -lt $((WAIT * 2)) ] || { echo "tsx-rescue-backlight: no backlight"; exit 0; }
+	sleep 0.5; i=$((i + 1))
+done
+max=$(cat "$dir/max_brightness" 2>/dev/null)
+case $max in ''|*[!0-9]*) echo "tsx-rescue-backlight: bad max_brightness"; exit 0;; esac
+[ "$max" -gt 0 ] || { echo "tsx-rescue-backlight: bad max_brightness"; exit 0; }
+lvl=$(( (max * PCT + 50) / 100 ))
+[ "$lvl" -ge 1 ] || lvl=1
+if echo "$lvl" > "$dir/brightness" 2>/dev/null; then
+	echo "tsx-rescue-backlight: ${dir##*/} $lvl of $max"
+else
+	echo "tsx-rescue-backlight: cannot write $dir/brightness"
+fi
+exit 0

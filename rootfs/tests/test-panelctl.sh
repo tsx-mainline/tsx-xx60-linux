@@ -189,7 +189,8 @@ printf 'raw 12.50\nreport 12.5\nauto on\n' > "$T/run/als.state"
 printf '#!/bin/sh\n' > "$T/als.conf"; : > "$T/buttons.conf"; : > "$T/bin/tsx-ledbar"; chmod +x "$T/bin/tsx-ledbar"; mkdir -p "$T/asound/TSW1060"
 for h in ledbar keypad als sound; do $PCTL has $h && ok "has $h: yes" || bad "has $h: no"; done
 rm -f "$T/als.conf" "$T/buttons.conf" "$T/run/als.state"; rm -rf "$T/asound/TSW1060"; rm -f "$T/bin/tsx-ledbar"
-for h in keypad als sound; do $PCTL has $h && bad "has $h: yes without the hardware" || ok "has $h: no without the hardware"; done
+for h in ledbar keypad als sound; do $PCTL has $h && bad "has $h: yes without the hardware" || ok "has $h: no without the hardware"; done
+for h in ledbar keypad als sound; do $PCTL has $h >/dev/null 2>&1; [ $? = 1 ] && ok "has $h: exit 1 without the hardware" || bad "has $h: exit is not 1"; done
 $PCTL has toaster >/dev/null 2>&1; [ $? = 2 ] && ok "has of an unknown name: exit 2" || bad "has of an unknown name"
 # events: the present values first, then a line for each change
 printf 'want 10 20 30\n' > "$T/run/ledbar.state"; printf 'led 128 day\nlast home short 12:00:01\n' > "$T/run/buttons.state"

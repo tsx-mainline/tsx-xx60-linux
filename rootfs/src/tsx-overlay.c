@@ -174,10 +174,7 @@ static void set_level(int l)
 	/* The offset is relative to the base of tsx-idled (ALS or schedule).
 	 * Without a base (an old tsx-idled), the current level replaces it. */
 	int b = base > 0 ? base : (level > 0 ? level - offset : l);
-	int off = l - b;
-	if (off > 31) off = 31;
-	if (off < -31) off = -31;
-	panelctl_send("brightness-offset %d", off);
+	panelctl_send("brightness-offset %d", overlay_offset(l, b, maxlvl));
 }
 
 /* ---- drawing ---------------------------------------------------------------- */
@@ -249,7 +246,7 @@ static void draw(cairo_t *c, int w, int h)
 		rounded(c, t.x, t.y + t.h - fh, t.w, fh, t.w / 2.0);
 		cairo_set_source_rgba(c, 1.0, 0.78, 0.30, 0.95);
 		cairo_fill(c);
-		snprintf(s, sizeof s, "%d", shown);
+		snprintf(s, sizeof s, "%d %%", overlay_percent(shown, maxlvl));
 	} else snprintf(s, sizeof s, "-");
 	cairo_set_source_rgba(c, 1, 1, 1, 0.95);
 	text_center(c, s, cx, t.y + t.h + 32, 30, 1);

@@ -2,7 +2,7 @@
 description="Screen blanking with wake-on-touch, backlight schedule"
 supervisor=supervise-daemon
 command=/usr/local/sbin/tsx-idled
-command_args="-c /etc/kiosk.conf"
+command_args="-c /etc/kiosk.conf -c /etc/tsx/panel-board.conf"
 respawn_delay=2
 respawn_max=0
 output_log=/var/log/tsx-idled.log
