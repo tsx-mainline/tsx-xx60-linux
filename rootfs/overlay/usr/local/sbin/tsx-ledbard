@@ -1,29 +1,163 @@
 #!/bin/sh
-# tsx-ledbard: set BOOT_COLOR of /etc/tsx/ledbar.conf once the LED bar is
-# there (the STM32 enumerates a few seconds into the boot). Then apply the
-# wanted color again whenever tsx-idled blanks or wakes the screen
-# (/run/tsx-idled.state, the same file that tsx-buttons follows).
+# tsx-ledbard: service of the USB LED bar (tsx-ledbar).
+#
+# When the bar appears (at boot, or when it is plugged in later), the daemon
+# checks that the STM32 of the bar started its three LED driver chips. At
+# power-up the chips sometimes do not start, and then no color can light.
+# A restart of the STM32 through its console fixes this. The daemon tries
+# this at most TSX_LEDBAR_TRIES times (default 3). Then it sets the color:
+# BOOT_COLOR of /etc/tsx/ledbar.conf the first time, the wanted color after
+# a plug-in. The STM32 starts with all colors off.
+#
+# It also applies the wanted color again when tsx-idled blanks or wakes the
+# screen (/run/tsx-idled.state, the same file that tsx-buttons follows).
+#
+#   tsx-ledbard          run as the service
+#   tsx-ledbard check    check (and restart) the LED bar once, apply the
+#                        wanted color, then exit (1 if the bar stays dark)
+#
+# Env overrides for tests: TSX_IDLED_STATE, TSX_USB_SYSFS (USB devices dir),
+# TSX_LEDBAR_SYSFS (LED dir), TSX_LEDBAR_DRIVER (driver dir),
+# TSX_LEDBAR_TRIES, TSX_LEDBAR_WAIT (seconds for the STM32 to come back).
 STATE=${TSX_IDLED_STATE:-/run/tsx-idled.state}
+USB=${TSX_USB_SYSFS:-/sys/bus/usb/devices}
+LED=${TSX_LEDBAR_SYSFS:-/sys/class/leds/tsx:rgb:bar}
+DRIVER=${TSX_LEDBAR_DRIVER:-/sys/bus/usb/drivers/leds-crestron-stm32}
+TRIES=${TSX_LEDBAR_TRIES:-3}
+WAIT=${TSX_LEDBAR_WAIT:-20}
 log() { echo "$(date '+%F %T') tsx-ledbar: $*"; }
 
-n=0
-until tsx-ledbar boot 2>/dev/null; do
-	n=$((n + 1))
-	[ $n = 1 ] && log "LED bar not there yet (lsusb 14be:001b). Retrying every 5 s"
-	[ $n = 60 ] && log "still no LED bar after 5 min. Keep polling slowly"
-	[ $n -ge 60 ] && sleep 55
-	sleep 5
-done
-log "boot color set ($(tsx-ledbar get | sed -n 's/^want //p'))"
+# Set BAR to "bus-dev" of the bar (14be:001b). The number changes at each
+# USB enumeration, so a new value means a plug-in or a restart of the STM32.
+bar_id() {
+	BAR=
+	for d in "$USB"/*; do
+		[ -r "$d/idVendor" ] || continue
+		read -r usb_v < "$d/idVendor" || continue
+		[ "$usb_v" = 14be ] || continue
+		read -r usb_p < "$d/idProduct" || continue
+		[ "$usb_p" = 001b ] || continue
+		read -r usb_b < "$d/busnum" && read -r usb_n < "$d/devnum" || continue
+		BAR=$usb_b-$usb_n
+		return 0
+	done
+	return 1
+}
 
-prev=
+# Wait until the kernel driver made the LED device. Without it, tsx-ledbar
+# uses libusb, and libusb would detach the kernel driver.
+# (Shell variables are global: each function uses its own names.)
+wait_led() {
+	[ -d "$DRIVER" ] || return 0
+	led_i=0
+	while [ ! -e "$LED/multi_intensity" ] && [ $led_i -lt 10 ]; do
+		sleep 1
+		led_i=$((led_i + 1))
+	done
+}
+
+# Set DRV to ok, bad (a chip did not start) or unknown (no clear answer).
+check_drivers() {
+	for color in red green blue; do
+		answer=$(tsx-ledbar console "tlcoutmode $color 0" 2>&1) || { DRV=unknown; return; }
+		case $answer in
+		*"not initialized"*) DRV=bad; return;;
+		*"output mode is"*) ;;
+		*) DRV=unknown; return;;
+		esac
+	done
+	DRV=ok
+}
+
+# Wait for the bar to come back with a new USB number after a restart.
+wait_new() {
+	new_i=0
+	while [ $new_i -lt "$WAIT" ]; do
+		if bar_id && [ "$BAR" != "$1" ]; then
+			wait_led
+			return 0
+		fi
+		sleep 1
+		new_i=$((new_i + 1))
+	done
+	return 1
+}
+
+# Check the LED driver chips and restart the STM32 until they start.
+recover() {
+	restarts=0
+	while :; do
+		check_drivers
+		case $DRV in
+		ok)
+			[ $restarts = 0 ] || log "LED drivers started after $restarts restart(s) of the LED bar controller"
+			return 0;;
+		unknown)
+			log "cannot read the LED driver state on the LED bar console, no restart"
+			return 0;;
+		esac
+		if [ $restarts -ge "$TRIES" ]; then
+			log "LED drivers did not start after $TRIES restarts. The LED bar stays dark. Unplug the LED bar and plug it in again"
+			return 1
+		fi
+		restarts=$((restarts + 1))
+		log "LED drivers did not start. Restarting the LED bar controller (try $restarts of $TRIES)"
+		old_bar=$BAR
+		tsx-ledbar console reboot 500 >/dev/null 2>&1
+		if ! wait_new "$old_bar"; then
+			log "the LED bar did not come back within $WAIT s after the restart"
+			return 1
+		fi
+	done
+}
+
+case ${1:-} in
+check)
+	bar_id || { log "LED bar not found (USB 14be:001b)"; exit 1; }
+	wait_led
+	recover; rc=$?
+	tsx-ledbar apply || log "apply failed"
+	exit $rc;;
+"") ;;
+*) echo "usage: tsx-ledbard [check]" >&2; exit 2;;
+esac
+
+cur= first=1 told= prev=
 while :; do
+	if bar_id; then
+		if [ "$BAR" != "$cur" ]; then
+			if [ -n "$first" ]; then log "LED bar found"; else log "LED bar plugged in"; fi
+			told=1
+			wait_led
+			recover
+			bar_id
+			cur=$BAR
+			if [ -n "$first" ]; then
+				if tsx-ledbar boot; then
+					log "boot color set ($(tsx-ledbar get | sed -n 's/^want //p'))"
+					first=
+				else
+					log "boot color failed, trying again in 5 s"
+					cur=
+					sleep 4
+				fi
+			else
+				tsx-ledbar apply || log "apply failed"
+			fi
+		fi
+	elif [ -n "$cur" ]; then
+		log "LED bar removed"
+		cur=
+	elif [ -z "$told" ]; then
+		log "LED bar not found yet (USB 14be:001b). Waiting for it"
+		told=1
+	fi
 	s=
 	[ -r "$STATE" ] && read -r s _ < "$STATE"
 	[ "$s" = blank ] || s=awake
 	if [ "$s" != "$prev" ]; then
 		[ -n "$prev" ] && log "screen $s"
-		tsx-ledbar apply || log "apply failed"
+		if [ -n "$cur" ]; then tsx-ledbar apply || log "apply failed"; fi
 		prev=$s
 	fi
 	sleep 1

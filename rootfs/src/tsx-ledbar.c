@@ -6,6 +6,14 @@
  *   analog join  : 00 05 14 JH JL VH VL   joins 3/4/5 = red/green/blue, V 0..100
  *   digital join : 00 03 00 JL JH|80*off  joins 0/1/2 = red/green/blue
  * (the vendor sysfs .../2-1:1.1/stm32_io took exactly these bytes).
+ * The bar lights a color only while its digital join is on. The analog join
+ * sets the level.
+ *
+ * Interface 0 is a text console of the STM32 (lines end with CR LF). The
+ * "console" command sends one line there with libusb and prints the answer.
+ * No kernel driver binds interface 0, so the LED driver stays bound.
+ * tsx-ledbard uses it to check the LED driver chips after a plug-in and to
+ * restart the STM32 when they did not start.
  *
  * Backends: when the kernel driver leds-crestron-stm32 is present, the tool
  * uses it (/sys/class/leds/tsx:rgb:bar, multi_intensity and brightness, and
@@ -42,6 +50,7 @@
 #define VID 0x14be
 #define PID 0x001b
 #define IO_IFACE 1
+#define CONSOLE_IFACE 0
 #define MAXPKT 257
 #define JOIN_ANALOG_RED 3
 #define JOIN_DIGITAL_RED 0
@@ -252,6 +261,7 @@ static libusb_context *uctx;
 static libusb_device_handle *uh;
 static unsigned char ep_out, ep_in;
 static int out_int, in_int;
+static int usb_iface = IO_IFACE;	/* the interface that usb_open() claims */
 
 static int usb_open(void)
 {
@@ -260,13 +270,13 @@ static int usb_open(void)
 	uh = libusb_open_device_with_vid_pid(uctx, VID, PID);
 	if (!uh) return -ENODEV;
 	libusb_set_auto_detach_kernel_driver(uh, 1);
-	int r = libusb_claim_interface(uh, IO_IFACE);
-	if (r) { fprintf(stderr, "tsx-ledbar: claim interface %d: %s\n", IO_IFACE, libusb_strerror(r)); return -EBUSY; }
+	int r = libusb_claim_interface(uh, usb_iface);
+	if (r) { fprintf(stderr, "tsx-ledbar: claim interface %d: %s\n", usb_iface, libusb_strerror(r)); return -EBUSY; }
 	struct libusb_config_descriptor *cd;
 	if (libusb_get_active_config_descriptor(libusb_get_device(uh), &cd)) return -EIO;
 	for (int i = 0; i < cd->bNumInterfaces; i++) {
 		const struct libusb_interface_descriptor *id = &cd->interface[i].altsetting[0];
-		if (id->bInterfaceNumber != IO_IFACE) continue;
+		if (id->bInterfaceNumber != usb_iface) continue;
 		for (int e = 0; e < id->bNumEndpoints; e++) {
 			const struct libusb_endpoint_descriptor *ed = &id->endpoint[e];
 			int t = ed->bmAttributes & 3;
@@ -283,7 +293,7 @@ static int usb_open(void)
 
 static void usb_close(void)
 {
-	if (uh) { libusb_release_interface(uh, IO_IFACE); libusb_close(uh); uh = NULL; }
+	if (uh) { libusb_release_interface(uh, usb_iface); libusb_close(uh); uh = NULL; }
 	if (uctx) { libusb_exit(uctx); uctx = NULL; }
 }
 
@@ -326,9 +336,42 @@ static int usb_read_loop(int ms)
 	}
 	return 0;
 }
+
+/*
+ * One line on the console (interface 0): drop old output, send LINE CR LF,
+ * then print the answer until it is quiet for 300 ms or MS have passed.
+ * The STM32 can drop off the bus during the answer ("reboot"). That ends the
+ * answer and is no error.
+ */
+static int usb_console(const char *line, int ms)
+{
+	usb_iface = CONSOLE_IFACE;
+	int r = usb_open(), got;
+	if (r) return r;
+	if (!ep_in) die("console: no IN endpoint");
+	unsigned char in[512], out[MAXPKT];
+	while (!usb_xfer(ep_in, in_int, in, sizeof in, &got, 100) && got > 0)
+		;
+	int n = snprintf((char *)out, sizeof out, "%s\r\n", line);
+	if (n >= (int)sizeof out) die("console: line too long");
+	r = usb_xfer(ep_out, out_int, out, n, &got, 1000);
+	if (r) { fprintf(stderr, "tsx-ledbar: console write: %s\n", libusb_strerror(r)); return -EIO; }
+	int quiet = 0, any = 0;
+	for (int left = ms; left > 0; left -= 100) {
+		r = usb_xfer(ep_in, in_int, in, sizeof in, &got, 100);
+		if (r && r != LIBUSB_ERROR_TIMEOUT) break;
+		if (!r && got > 0) {
+			for (int i = 0; i < got; i++) if (in[i] != '\r') putchar(in[i]);
+			any = 1; quiet = 0;
+		} else if (any && (quiet += 100) >= 300) break;
+	}
+	putchar('\n');
+	return 0;
+}
 #else
 static int usb_send(const unsigned char *p, int n) { (void)p; (void)n; return -ENOSYS; }
 static int usb_read_loop(int ms) { (void)ms; return -ENOSYS; }
+static int usb_console(const char *line, int ms) { (void)line; (void)ms; return -ENOSYS; }
 static void usb_close(void) {}
 #endif
 
@@ -348,9 +391,11 @@ static int send_pkt(const unsigned char *p, int n)
 static int send_rgb(const int *rgb)
 {
 	if (!dry_run && have_sysfs()) return sys_set_rgb(rgb);
+	/* The kernel driver sends the digital joins itself. Here send both. */
 	unsigned char p[8];
 	for (int i = 0; i < 3; i++) {
 		int e = send_pkt(p, enc_analog(p, JOIN_ANALOG_RED + i, rgb[i]));
+		if (!e) e = send_pkt(p, enc_digital(p, JOIN_DIGITAL_RED + i, rgb[i] > 0));
 		if (e) return e;
 	}
 	return 0;
@@ -366,7 +411,8 @@ static int apply(const int *want)
 	}
 	output_for(st.want, st.out);
 	int e = send_rgb(st.out);
-	if (!dry_run && !e) write_state(&st, backend_name());
+	/* With no bar, keep the wanted color: tsx-ledbard applies it at the plug-in. */
+	if (!dry_run && (!e || e == -ENODEV)) write_state(&st, backend_name());
 	return e;
 }
 
@@ -382,6 +428,8 @@ static void __attribute__((noreturn)) usage(void)
 	      "  digital JOIN on|off  one digital join packet (0/1/2 = red/green/blue)\n"
 	      "  raw HEX...         any Cresnet packet, e.g. raw 00 05 14 00 03 00 64\n"
 	      "  read [MS]          print packets from the STM32 (libusb, default 2000 ms)\n"
+	      "  console LINE [MS]  send LINE to the STM32 console (interface 0), print the answer\n"
+	      "                     (default 1500 ms), e.g. console 'tlcoutmode red 0'\n"
 	      "  info               backend and device details\n"
 	      "  -n = print the packets instead of sending; --usb = use libusb even with the kernel driver\n",
 	      stderr);
@@ -456,6 +504,10 @@ int main(int argc, char **argv)
 			char b[256] = ""; sys_read("rx_last", b, sizeof b);
 			printf("rx_last (count hex): %s\n(kernel driver bound; --usb read to poll the endpoint yourself)\n", b);
 		} else e = usb_read_loop(n ? to_int(av[0], 1, 3600000, "ms") : 2000);
+	} else if (!strcmp(cmd, "console")) {
+		if (n < 1 || n > 2) usage();
+		if (dry_run) printf("console %s\n", av[0]);
+		else e = usb_console(av[0], n == 2 ? to_int(av[1], 100, 60000, "ms") : 1500);
 	} else if (!strcmp(cmd, "info")) {
 		printf("backend %s\nsysfs %s (%s)\n", backend_name(), sysled, have_sysfs() ? "present" : "absent");
 		if (have_sysfs()) {
