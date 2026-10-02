@@ -12,10 +12,10 @@ N=0 F=0
 ok() { echo "  ok: $*"; N=$((N+1)); }
 bad() { echo "  FAIL: $*"; F=$((F+1)); }
 
-LTS_REV=f521d0d9730e70596754b9032d1062f372984a04
-STABLE_REV=a67b2346cec51812f0a970257f91c4ea5fefdcfe
-GOODL=6.18.54-00121-gf521d0d9730e
-GOODS=7.2.8-00119-ga67b2346cec5
+LTS_REV=b29884cc97aeecf224345d70a9383b59f3f6c18f
+STABLE_REV=23c7a292cc7c654ef96f79c70b0f0acbdd4f2f37
+GOODL=6.18.54-00122-gb29884cc97ae
+GOODS=7.2.8-00120-g23c7a292cc7c
 mkdir -p "$W/pins"
 printf '# lts\n%s\n' "$LTS_REV" > "$W/pins/KERNEL_REV.lts"
 printf '# stable\n%s\n' "$STABLE_REV" > "$W/pins/KERNEL_REV.stable"
