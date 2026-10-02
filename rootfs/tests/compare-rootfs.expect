@@ -14,7 +14,5 @@
 ^(usr/local/lib/tsx/(bt-chip-csr8811\.sh|btgatt\.py|btscan\.py|csr_psload\.py)|usr/local/sbin/tsx-bt)$  Bluetooth tools: tsx-ha owns them, so the console and kiosk images no longer have them
 ^etc/motd$  motd of alpine-baselayout (the old path deleted it in the console image). tsx-banner writes it at boot
 # initramfs
-^usr/(sbin|share|share/tsx)$  directory owner: the cpio of the old path keeps the owner of the checkout
-^usr/sbin/tsx-(confont|rescue-login|rescue-status)$  owner: the package file is root, the old cpio keeps the owner of the checkout
 ^usr/local/bin/tsx-splash$  compiled in the package build (other flags), same source, other bytes
 ^usr/share/tsx/initramfs\.stamp$  the stamp covers packages.pin in the package mode

@@ -128,5 +128,5 @@ else
   echo "rescue root password: none (tsx-rescue-login chooses at boot)"
 fi
 rm -rf $R/var/cache/apk/* $R/lib/apk/db/scripts.tar
-(cd $R && find . | cpio -o -H newc --quiet | gzip -9) > "$OUT"
+(cd $R && find . | cpio -o -H newc -R 0:0 --quiet | gzip -9) > "$OUT"
 ls -l "$OUT"

@@ -201,7 +201,7 @@ push_rootfs() {
 	local p=$REPO/rootfs
 	rsh "mkdir -p $BUILD_DIR/rootfs"
 	for d in overlay profiles src initramfs config voice splash; do [ -d "$p/$d" ] && "${RS[@]}" --delete "${PROTECT[@]}" "$p/$d/" "$HOST:$BUILD_DIR/rootfs/$d/"; done
-	for f in mkrootfs.sh build-rootfs.sh profile.sh mkbootimg.sh packages.txt packages-tsx.txt vendor-fetch.sh install.sh tsx-disk.sh authorized_keys; do [ -e "$p/$f" ] && "${RS[@]}" "$p/$f" "$HOST:$BUILD_DIR/rootfs/"; done
+	for f in mkrootfs.sh build-rootfs.sh profile.sh mkbootimg.sh check-boot-images.py initramfs-stamp.sh packages.txt packages-tsx.txt vendor-fetch.sh install.sh tsx-disk.sh authorized_keys; do [ -e "$p/$f" ] && "${RS[@]}" "$p/$f" "$HOST:$BUILD_DIR/rootfs/"; done
 	true
 }
 
@@ -257,7 +257,7 @@ maybe_pull() {  # like pull, but --no-pull/REMOTE_PULL=0 leaves the files on the
 
 t0=$(date +%s)
 RS_PATHS=(tools/build ci kernel/mkimage.sh kernel/aml-dt.py rootfs/overlay rootfs/profiles rootfs/src rootfs/initramfs rootfs/config rootfs/voice rootfs/splash
-	rootfs/mkrootfs.sh rootfs/build-rootfs.sh rootfs/profile.sh rootfs/mkbootimg.sh rootfs/packages.txt rootfs/packages-tsx.txt rootfs/vendor-fetch.sh rootfs/install.sh rootfs/tsx-disk.sh rootfs/authorized_keys)
+	rootfs/mkrootfs.sh rootfs/build-rootfs.sh rootfs/profile.sh rootfs/mkbootimg.sh rootfs/check-boot-images.py rootfs/initramfs-stamp.sh rootfs/packages.txt rootfs/packages-tsx.txt rootfs/vendor-fetch.sh rootfs/install.sh rootfs/tsx-disk.sh rootfs/authorized_keys)
 case $CMD in
 kernel) guard_sources tools/build ci kernel/mkimage.sh kernel/aml-dt.py;;
 rootfs|initramfs|image) guard_sources "${RS_PATHS[@]}";;

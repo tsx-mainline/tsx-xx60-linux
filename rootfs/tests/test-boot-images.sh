@@ -123,6 +123,8 @@ echo "== 11. the pins of this checkout"
 echo "== 12. the build runs the guard and writes the stamp"
 grep -q 'check-boot-images.py' "$HERE/mkrootfs.sh" && ok "mkrootfs.sh runs the check" || bad "mkrootfs.sh does not run the check"
 grep -q 'initramfs-stamp.sh' "$HERE/initramfs/mkinitramfs-switchroot.sh" && ok "the initramfs build writes the stamp" || bad "mkinitramfs-switchroot.sh has no stamp"
+grep -q "cpio -o -H newc -R 0:0" "$HERE/initramfs/mkinitramfs-switchroot.sh" && ok "the initramfs cpio has root-owned files" || bad "the initramfs cpio keeps the owner of the checkout"
+for f in check-boot-images.py initramfs-stamp.sh; do [ $(grep -c "$f" "$HERE/../tools/build/remote-build.sh") -ge 2 ] && ok "remote-build.sh sends $f" || bad "remote-build.sh does not send $f"; done
 grep -q ':/kernel:ro' "$HERE/build-rootfs.sh" && ok "build-rootfs.sh mounts the pins" || bad "build-rootfs.sh does not mount the pins"
 
 echo "boot images: $N ok, $F failed"
