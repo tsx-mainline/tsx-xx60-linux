@@ -22,11 +22,11 @@
  * the tool runs.
  *
  * Color model: the tool keeps the "wanted" color (set, on, off, boot) in
- * /run/tsx/ledbar.state. The output is the wanted color, scaled by the
- * screen state of tsx-idled (/run/tsx-idled.state "blank"). BLANK=off|dim|keep
- * and BLANK_DIM (percent) in /etc/tsx/ledbar.conf control the scaling.
- * "apply" applies the color again. The tsx-ledbar service runs it when the
- * screen blanks or wakes.
+ * /run/tsx/ledbar.state. BLANK in /etc/tsx/ledbar.conf decides what the
+ * screen state of tsx-idled (/run/tsx-idled.state "blank") does: keep (the
+ * default) leaves the color as it is, off and dim (BLANK_DIM percent) scale
+ * it while the screen is blank. "apply" applies the color again. With off
+ * or dim the tsx-ledbar service runs it when the screen blanks or wakes.
  *
  * Env overrides for tests: TSX_LEDBAR_SYSFS (LED dir), TSX_RUN_DIR,
  * TSX_IDLED_STATE, TSX_LEDBAR_CONF.

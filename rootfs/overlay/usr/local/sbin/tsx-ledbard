@@ -9,8 +9,11 @@
 # BOOT_COLOR of /etc/tsx/ledbar.conf the first time, the wanted color after
 # a plug-in. The STM32 starts with all colors off.
 #
-# It also applies the wanted color again when tsx-idled blanks or wakes the
-# screen (/run/tsx-idled.state, the same file that tsx-buttons follows).
+# With BLANK=off or dim in /etc/tsx/ledbar.conf it also applies the wanted
+# color again when tsx-idled blanks or wakes the screen (/run/tsx-idled.state,
+# the same file that tsx-buttons follows). With BLANK=keep (the default) the
+# screen state does nothing to the bar, so an effect that runs on the bar
+# keeps running.
 #
 #   tsx-ledbard          run as the service
 #   tsx-ledbard check    check (and restart) the LED bar once, apply the
@@ -18,14 +21,22 @@
 #
 # Env overrides for tests: TSX_IDLED_STATE, TSX_USB_SYSFS (USB devices dir),
 # TSX_LEDBAR_SYSFS (LED dir), TSX_LEDBAR_DRIVER (driver dir),
-# TSX_LEDBAR_TRIES, TSX_LEDBAR_WAIT (seconds for the STM32 to come back).
+# TSX_LEDBAR_TRIES, TSX_LEDBAR_WAIT (seconds for the STM32 to come back),
+# TSX_LEDBAR_CONF (the config file).
 STATE=${TSX_IDLED_STATE:-/run/tsx-idled.state}
+CONF=${TSX_LEDBAR_CONF:-/etc/tsx/ledbar.conf}
 USB=${TSX_USB_SYSFS:-/sys/bus/usb/devices}
 LED=${TSX_LEDBAR_SYSFS:-/sys/class/leds/tsx:rgb:bar}
 DRIVER=${TSX_LEDBAR_DRIVER:-/sys/bus/usb/drivers/leds-crestron-stm32}
 TRIES=${TSX_LEDBAR_TRIES:-3}
 WAIT=${TSX_LEDBAR_WAIT:-20}
 log() { echo "$(date '+%F %T') tsx-ledbar: $*"; }
+
+# BLANK of ledbar.conf: keep (default), off or dim
+blank_rule() {
+	rule=$(sed -n 's/^BLANK=["]*\([a-z]*\).*/\1/p' "$CONF" 2>/dev/null | tail -n 1)
+	case $rule in off|dim) echo "$rule";; *) echo keep;; esac
+}
 
 # Set BAR to "bus-dev" of the bar (14be:001b). The number changes at each
 # USB enumeration, so a new value means a plug-in or a restart of the STM32.
@@ -152,13 +163,15 @@ while :; do
 		log "LED bar not found yet (USB 14be:001b). Waiting for it"
 		told=1
 	fi
-	s=
-	[ -r "$STATE" ] && read -r s _ < "$STATE"
-	[ "$s" = blank ] || s=awake
-	if [ "$s" != "$prev" ]; then
-		[ -n "$prev" ] && log "screen $s"
-		if [ -n "$cur" ]; then tsx-ledbar apply || log "apply failed"; fi
-		prev=$s
+	if [ "$(blank_rule)" != keep ]; then
+		s=
+		[ -r "$STATE" ] && read -r s _ < "$STATE"
+		[ "$s" = blank ] || s=awake
+		if [ "$s" != "$prev" ]; then
+			[ -n "$prev" ] && log "screen $s"
+			if [ -n "$cur" ]; then tsx-ledbar apply || log "apply failed"; fi
+			prev=$s
+		fi
 	fi
 	sleep 1
 done

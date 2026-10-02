@@ -135,5 +135,27 @@ sleep 2
 [ "$(ncalls 'console tlcoutmode red 0')" = "$n" ] && ok "service: no check while the bar stays" || bad "service: checks go on"
 kill "$DPID"; wait "$DPID" 2>/dev/null; DPID=
 
+# 8. the screen rule: BLANK=keep ignores the screen state, BLANK=off follows it
+for rule in keep off; do
+	reset 0; plug 5; : > "$T/calls"
+	echo "BLANK=$rule" > "$T/ledbar.conf"
+	echo awake > "$T/idled.state"
+	TSX_LEDBAR_CONF=$T/ledbar.conf TSX_IDLED_STATE=$T/idled.state $SH "$D" > "$T/log" 2>&1 &
+	DPID=$!
+	sleep 3
+	: > "$T/calls"
+	echo blank > "$T/idled.state"
+	sleep 2
+	echo awake > "$T/idled.state"
+	sleep 2
+	n=$(ncalls apply)
+	if [ "$rule" = keep ]; then
+		[ "$n" = 0 ] && ! grep -q "screen" "$T/log" && ok "screen rule keep: no apply on blank or wake" || bad "screen rule keep: $n apply calls, log $(grep screen "$T/log")"
+	else
+		[ "$n" = 2 ] && grep -q "screen blank" "$T/log" && grep -q "screen awake" "$T/log" && ok "screen rule off: apply on blank and on wake" || bad "screen rule off: $n apply calls, log $(grep screen "$T/log")"
+	fi
+	kill "$DPID"; wait "$DPID" 2>/dev/null; DPID=
+done
+
 [ $fail = 0 ] && echo "PASS tsx-ledbard host test"
 exit $fail
