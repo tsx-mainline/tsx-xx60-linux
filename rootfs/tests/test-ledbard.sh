@@ -53,7 +53,7 @@ EOF
 chmod +x "$T/bin/tsx-ledbar"
 PATH=$T/bin:$PATH
 export TSX_USB_SYSFS=$T/usb TSX_LEDBAR_SYSFS=$T/led TSX_LEDBAR_DRIVER=$T/nodriver
-export TSX_IDLED_STATE=$T/idled TSX_LEDBAR_WAIT=3
+export TSX_LEDBAR_WAIT=3
 
 plug() {
 	mkdir -p "$T/usb/2-1" "$T/usb/2-1:1.0"
@@ -157,10 +157,11 @@ sleep 2
 [ "$(ncalls 'console tlcoutmode red 0')" = "$n" ] && ok "service: no check while the bar stays" || bad "service: checks go on"
 kill "$DPID"; wait "$DPID" 2>/dev/null; DPID=
 
-# 8. the screen rule: BLANK=keep ignores the screen state, BLANK=off follows it
-for rule in keep off; do
+# 8. an old ledbar.conf with BLANK keys: logged once, the screen state does nothing
+for old in 'BLANK=off' 'BLANK=dim
+BLANK_DIM=50'; do
 	reset 0; plug 5; : > "$T/calls"
-	echo "BLANK=$rule" > "$T/ledbar.conf"
+	echo "$old" > "$T/ledbar.conf"
 	echo awake > "$T/idled.state"
 	TSX_LEDBAR_CONF=$T/ledbar.conf TSX_IDLED_STATE=$T/idled.state $SH "$D" > "$T/log" 2>&1 &
 	DPID=$!
@@ -171,11 +172,8 @@ for rule in keep off; do
 	echo awake > "$T/idled.state"
 	sleep 2
 	n=$(ncalls apply)
-	if [ "$rule" = keep ]; then
-		[ "$n" = 0 ] && ! grep -q "screen" "$T/log" && ok "screen rule keep: no apply on blank or wake" || bad "screen rule keep: $n apply calls, log $(grep screen "$T/log")"
-	else
-		[ "$n" = 2 ] && grep -q "screen blank" "$T/log" && grep -q "screen awake" "$T/log" && ok "screen rule off: apply on blank and on wake" || bad "screen rule off: $n apply calls, log $(grep screen "$T/log")"
-	fi
+	[ "$n" = 0 ] && ! grep -Eq "screen (blank|awake)" "$T/log" && ok "old conf ($(echo "$old" | head -n 1)): no apply on blank or wake" || bad "old conf: $n apply calls, log $(cat "$T/log")"
+	[ "$(grep -c 'BLANK and BLANK_DIM' "$T/log")" = 1 ] && ok "old conf: one log line" || bad "old conf: log $(cat "$T/log")"
 	kill "$DPID"; wait "$DPID" 2>/dev/null; DPID=
 done
 

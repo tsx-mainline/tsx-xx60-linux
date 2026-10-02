@@ -9,11 +9,8 @@
 # BOOT_COLOR of /etc/tsx/ledbar.conf the first time, the wanted color after
 # a plug-in. The STM32 starts with all colors off.
 #
-# With BLANK=off or dim in /etc/tsx/ledbar.conf it also applies the wanted
-# color again when tsx-idled blanks or wakes the screen (/run/tsx-idled.state,
-# the same file that tsx-buttons follows). With BLANK=keep (the default) the
-# screen state does nothing to the bar, so an effect that runs on the bar
-# keeps running.
+# The screen state never changes the bar. An old ledbar.conf with BLANK or
+# BLANK_DIM still works: the daemon ignores both keys and logs one line.
 #
 # Effects: after the check it logs the firmware name of the bar. With the
 # bar firmware TSX-LEDBAR it sends FX_SMOOTH and FX_CAP of ledbar.conf to
@@ -24,11 +21,10 @@
 #   tsx-ledbard check    check (and restart) the LED bar once, apply the
 #                        wanted color, then exit (1 if the bar stays dark)
 #
-# Env overrides for tests: TSX_IDLED_STATE, TSX_USB_SYSFS (USB devices dir),
+# Env overrides for tests: TSX_USB_SYSFS (USB devices dir),
 # TSX_LEDBAR_SYSFS (LED dir), TSX_LEDBAR_DRIVER (driver dir),
 # TSX_LEDBAR_TRIES, TSX_LEDBAR_WAIT (seconds for the STM32 to come back),
 # TSX_LEDBAR_CONF (the config file).
-STATE=${TSX_IDLED_STATE:-/run/tsx-idled.state}
 CONF=${TSX_LEDBAR_CONF:-/etc/tsx/ledbar.conf}
 USB=${TSX_USB_SYSFS:-/sys/bus/usb/devices}
 LED=${TSX_LEDBAR_SYSFS:-/sys/class/leds/tsx:rgb:bar}
@@ -58,10 +54,11 @@ fx_setup() {
 	esac
 }
 
-# BLANK of ledbar.conf: keep (default), off or dim
-blank_rule() {
-	rule=$(sed -n 's/^BLANK=["]*\([a-z]*\).*/\1/p' "$CONF" 2>/dev/null | tail -n 1)
-	case $rule in off|dim) echo "$rule";; *) echo keep;; esac
+# An old ledbar.conf may still have BLANK or BLANK_DIM. Ignore them and log it.
+old_keys() {
+	if grep -qE '^[[:space:]]*BLANK(_DIM)?=' "$CONF" 2>/dev/null; then
+		log "BLANK and BLANK_DIM in $CONF are not used any more. The screen does not change the LED bar"
+	fi
 }
 
 # Set BAR to "bus-dev" of the bar (14be:001b). The number changes at each
@@ -160,7 +157,8 @@ check)
 *) echo "usage: tsx-ledbard [check]" >&2; exit 2;;
 esac
 
-cur= first=1 told= prev=
+old_keys
+cur= first=1 told=
 while :; do
 	if bar_id; then
 		if [ "$BAR" != "$cur" ]; then
@@ -190,16 +188,6 @@ while :; do
 	elif [ -z "$told" ]; then
 		log "LED bar not found yet (USB 14be:001b). Waiting for it"
 		told=1
-	fi
-	if [ "$(blank_rule)" != keep ]; then
-		s=
-		[ -r "$STATE" ] && read -r s _ < "$STATE"
-		[ "$s" = blank ] || s=awake
-		if [ "$s" != "$prev" ]; then
-			[ -n "$prev" ] && log "screen $s"
-			if [ -n "$cur" ]; then tsx-ledbar apply || log "apply failed"; fi
-			prev=$s
-		fi
 	fi
 	sleep 1
 done

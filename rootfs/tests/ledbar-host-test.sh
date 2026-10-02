@@ -2,7 +2,7 @@
 # Host test of tsx-ledbar. It checks these parts: the frame encoder (against
 # the frames captured from the vendor userland, LED.md), hex parsing, and
 # packet validation. It also checks the kernel (sysfs) backend against a fake
-# LED directory, screen-blank scaling and the state file, the firmware check
+# LED directory, the state file, an old ledbar.conf with BLANK keys, the firmware check
 # and the effects (fx) with a fake console.
 # The test builds without libusb (-DNO_LIBUSB). The libusb path needs the panel.
 set -eu
@@ -10,7 +10,7 @@ HERE=$(cd "$(dirname "$0")" && pwd); SRC=$HERE/../../rootfs/src/tsx-ledbar.c
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 ${CC:-gcc} -O2 -Wall -Wextra -DNO_LIBUSB -o "$T/tsx-ledbar" "$SRC"
 B=$T/tsx-ledbar; fail=0
-export TSX_RUN_DIR=$T/run TSX_IDLED_STATE=$T/idled TSX_LEDBAR_CONF=$T/ledbar.conf TSX_LEDBAR_SYSFS=$T/led
+export TSX_RUN_DIR=$T/run TSX_LEDBAR_CONF=$T/ledbar.conf TSX_LEDBAR_SYSFS=$T/led
 eq() { [ "$2" = "$3" ] && echo "ok   $1" || { echo "FAIL $1: got '$2' want '$3'"; fail=1; }; }
 # vendor frames (LED.md, strace of platformd writing .../2-1:1.1/stm32_io)
 eq "analog red 100"   "$($B -n analog 3 100)" "00 05 14 00 03 00 64"
@@ -35,16 +35,26 @@ $B -n raw 00 05 14 00 >/dev/null 2>&1 && { echo "FAIL bad length accepted"; fail
 $B -n set 101 0 0 >/dev/null 2>&1 && { echo "FAIL 101 accepted"; fail=1; } || echo "ok   101 rejected"
 # fake kernel LED dir
 mkdir -p "$T/led"; echo "red green blue" > "$T/led/multi_index"; echo "0 0 0" > "$T/led/multi_intensity"; echo 0 > "$T/led/brightness"; : > "$T/led/raw"
-printf 'BOOT_COLOR="0 0 20"\nBLANK=dim\nBLANK_DIM=50\n' > "$T/ledbar.conf"
-echo "on 17" > "$T/idled"
+printf 'BOOT_COLOR="0 0 20"\n' > "$T/ledbar.conf"
 $B set 10 20 30
 eq "sysfs intensity" "$(cat "$T/led/multi_intensity")" "10 20 30"
 eq "sysfs brightness" "$(cat "$T/led/brightness")" "100"
 eq "state want" "$(sed -n 's/^want //p' "$T/run/ledbar.state")" "10 20 30"
-echo blank > "$T/idled"; $B apply
-eq "blank dim 50%" "$(cat "$T/led/multi_intensity")" "5 10 15"
-eq "want kept" "$(sed -n 's/^want //p' "$T/run/ledbar.state")" "10 20 30"
-echo "on 17" > "$T/idled"; $B off
+# an old conf with BLANK keys, and a screen state file: the bar does not change
+for old in 'BLANK=off' 'BLANK=dim\nBLANK_DIM=50'; do
+	lbl=$(printf '%s' "$old" | tr '\n' ' ')
+	printf "BOOT_COLOR=\"0 0 20\"\n$old\n" > "$T/ledbar.conf"
+	for scr in blank "on 17" blank; do
+		echo "$scr" > "$T/idled"; export TSX_IDLED_STATE=$T/idled
+		$B apply
+		eq "old conf ($lbl), screen '$scr': color" "$(cat "$T/led/multi_intensity")" "10 20 30"
+		eq "old conf ($lbl), screen '$scr': state" "$(sed -n 's/^want //p;s/^out //p' "$T/run/ledbar.state" | tr '\n' '|')" "10 20 30|10 20 30|"
+	done
+done
+unset TSX_IDLED_STATE
+eq "get has no screen line" "$($B get | grep -c screen || true)" "0"
+printf 'BOOT_COLOR="0 0 20"\n' > "$T/ledbar.conf"
+$B off
 eq "off" "$(cat "$T/led/multi_intensity")" "0 0 0"
 $B on
 eq "on = last color" "$(cat "$T/led/multi_intensity")" "10 20 30"
@@ -58,8 +68,7 @@ eq "multi_index order" "$(cat "$T/led/multi_intensity")" "2 1 3"
 CON=$T/console; export TSX_LEDBAR_CONSOLE=$CON
 st() { sed -n "s/^$1 //p" "$T/run/ledbar.state"; }
 no() { if "$@" >/dev/null 2>&1; then echo "FAIL accepted: $*"; fail=1; else echo "ok   rejected: $*"; fi; }
-echo "red green blue" > "$T/led/multi_index"; printf 'BLANK=keep\n' > "$T/ledbar.conf"
-out=$($B fw 2>/dev/null) && rc=0 || rc=$?
+echo "red green blue" > "$T/led/multi_index"; out=$($B fw 2>/dev/null) && rc=0 || rc=$?
 eq "fw without a bar" "$(echo "$out" | tr '\n' '|')rc $rc" "firmware unknown|effects no|rc 1"
 # stock firmware: no effects, the colors work as before
 echo "TSW-XX60-LB [v1.3443.00018]" > "$T/led/firmware"
@@ -149,23 +158,19 @@ eq "apply: joins, then the effect" "$(cat "$T/led/multi_intensity"; cat "$CON"; 
 FX BREATHE 0 0 80 4000
 10 20 30"
 # boot ends an effect and becomes the wanted color
-printf 'BOOT_COLOR="0 0 20"\nBLANK=keep\n' > "$T/ledbar.conf"
 fx rainbow 10000; rm -f "$CON"; $B boot
 eq "boot ends fx" "$(cat "$CON"; st fx; st want)" "FX OFF
 none
 0 0 20"
-# BLANK=off: the effect waits while the screen is blank
+# an old conf with BLANK=off: the effect does not wait for the screen
 printf 'BLANK=off\n' > "$T/ledbar.conf"
-fx breathe 0 0 80 4000; echo blank > "$T/idled"; rm -f "$CON"; $B apply
-eq "blank: dark" "$(cat "$T/led/multi_intensity")" "0 0 0"
-eq "blank: FX OFF, record kept" "$(cat "$CON"; st fx)" "FX OFF
-breathe 0 0 80 4000"
-rm -f "$CON"; $B fx blink 1 2 3 100 100
-[ ! -e "$CON" ] && eq "blank: new effect recorded, not sent" "$(st fx)" "blink 1 2 3 100 100" || { echo "FAIL blank: console $(cat "$CON")"; fail=1; }
-echo "on 17" > "$T/idled"; rm -f "$CON"; $B apply
-eq "wake: wanted color, then the effect" "$(cat "$T/led/multi_intensity"; cat "$CON")" "0 0 20
-FX BLINK 1 2 3 100 100"
-printf 'BLANK=keep\n' > "$T/ledbar.conf"
+fx breathe 0 0 80 4000; echo blank > "$T/idled"; rm -f "$CON"; TSX_IDLED_STATE=$T/idled $B apply
+eq "blank screen: color, then the effect" "$(cat "$T/led/multi_intensity"; cat "$CON")" "0 0 20
+FX BREATHE 0 0 80 4000"
+rm -f "$CON"; TSX_IDLED_STATE=$T/idled $B fx blink 1 2 3 100 100
+eq "blank screen: new effect is sent" "$(cat "$CON"; st fx)" "FX BLINK 1 2 3 100 100
+blink 1 2 3 100 100"
+printf 'BOOT_COLOR="0 0 20"\n' > "$T/ledbar.conf"
 # the bar refuses: exit 1, the record stays as it was
 $B fx off; TSX_LEDBAR_ANSWER="usage: see HELP" $B fx breathe 0 0 80 4000 2>/dev/null && { echo "FAIL refusal accepted"; fail=1; } || echo "ok   refusal: exit 1"
 eq "refusal: record" "$(st fx)" "none"

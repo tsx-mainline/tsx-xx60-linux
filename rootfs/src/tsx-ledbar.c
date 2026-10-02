@@ -22,11 +22,8 @@
  * the tool runs.
  *
  * Color model: the tool keeps the "wanted" color (set, on, off, boot) in
- * /run/tsx/ledbar.state. BLANK in /etc/tsx/ledbar.conf decides what the
- * screen state of tsx-idled (/run/tsx-idled.state "blank") does: keep (the
- * default) leaves the color as it is, off and dim (BLANK_DIM percent) scale
- * it while the screen is blank. "apply" applies the color again. With off
- * or dim the tsx-ledbar service runs it when the screen blanks or wakes.
+ * /run/tsx/ledbar.state. The screen state never changes the bar. "apply"
+ * sends the wanted color again and starts the recorded effect again.
  *
  * Effects: the open bar firmware "TSX-LEDBAR" (USB string 4, the "firmware"
  * attribute of the kernel driver) runs effects on the bar itself. The "fx"
@@ -41,7 +38,7 @@
  * again, for example after a restart of the bar.
  *
  * Env overrides for tests: TSX_LEDBAR_SYSFS (LED dir), TSX_RUN_DIR,
- * TSX_IDLED_STATE, TSX_LEDBAR_CONF. A test build (-DNO_LIBUSB) writes
+ * TSX_LEDBAR_CONF. A test build (-DNO_LIBUSB) writes
  * console lines to the file TSX_LEDBAR_CONSOLE and answers as the firmware.
  */
 #define _GNU_SOURCE
@@ -72,12 +69,11 @@
 
 static const char *sysled = "/sys/class/leds/tsx:rgb:bar";
 static const char *rundir = "/run/tsx";
-static const char *idled_state = "/run/tsx-idled.state";
 static const char *conffile = "/etc/tsx/ledbar.conf";
 static int dry_run, force_usb, verbose;
 
-struct conf { int boot[3]; char blank[16]; int blank_dim; };
-static struct conf C = { { 0, 0, 0 }, "off", 10 };
+struct conf { int boot[3]; };
+static struct conf C = { { 0, 0, 0 } };
 
 static void __attribute__((noreturn, format(printf, 1, 2))) die(const char *fmt, ...)
 {
@@ -140,7 +136,6 @@ static int parse_hex(char **argv, int argc, unsigned char *out)
 }
 
 /* ---- config -------------------------------------------------------------- */
-static int clamp100(int v) { return v < 0 ? 0 : v > 100 ? 100 : v; }
 
 static int parse_rgb(const char *s, int *rgb)
 {
@@ -171,8 +166,7 @@ static void load_conf(void)
 		if (!*s || *s == '#' || !(eq = strchr(s, '='))) continue;
 		*eq = 0; char *k = trim(s), *v = trim(eq + 1);
 		if (!strcmp(k, "BOOT_COLOR")) { if (parse_rgb(v, C.boot)) fprintf(stderr, "tsx-ledbar: bad BOOT_COLOR '%s'\n", v); }
-		else if (!strcmp(k, "BLANK")) snprintf(C.blank, sizeof C.blank, "%s", v);
-		else if (!strcmp(k, "BLANK_DIM")) C.blank_dim = clamp100(atoi(v));
+		/* BLANK and BLANK_DIM of an old file are ignored, tsx-ledbard logs them */
 	}
 	fclose(f);
 }
@@ -204,40 +198,23 @@ static int read_state(struct state *st)
 	return 0;
 }
 
-static int screen_blank(void)
-{
-	char b[32] = ""; FILE *f = fopen(idled_state, "r");
-	if (!f) return 0;
-	if (!fgets(b, sizeof b, f)) b[0] = 0;
-	fclose(f);
-	return !strncmp(b, "blank", 5);
-}
-
 static void write_state(const struct state *st, const char *backend)
 {
 	char p[PATH_MAX], tmp[PATH_MAX + 8]; FILE *f;
 	mkdir(rundir, 0755);
 	state_path(p, sizeof p); snprintf(tmp, sizeof tmp, "%s.tmp", p);
 	if (!(f = fopen(tmp, "w"))) return;
-	fprintf(f, "want %d %d %d\nlast %d %d %d\nout %d %d %d\nscreen %s\nbackend %s\nfx %s\n",
+	fprintf(f, "want %d %d %d\nlast %d %d %d\nout %d %d %d\nbackend %s\nfx %s\n",
 		st->want[0], st->want[1], st->want[2], st->last[0], st->last[1], st->last[2],
-		st->out[0], st->out[1], st->out[2], screen_blank() ? "blank" : "awake", backend,
+		st->out[0], st->out[1], st->out[2], backend,
 		st->fx[0] ? st->fx : "none");
 	fclose(f);
 	rename(tmp, p);
 }
 
-/* The screen is blank and the BLANK rule scales the color: an effect waits for the wake. */
-static int fx_paused(void)
-{
-	return screen_blank() && strcmp(C.blank, "keep");
-}
-
 static void output_for(const int *want, int *out)
 {
-	int pct = 100;
-	if (fx_paused()) pct = !strcmp(C.blank, "dim") ? C.blank_dim : 0;
-	for (int i = 0; i < 3; i++) out[i] = (want[i] * pct + 50) / 100;
+	for (int i = 0; i < 3; i++) out[i] = want[i];
 }
 
 /* ---- backends ------------------------------------------------------------ */
@@ -506,8 +483,7 @@ static int fx_send(const char *rec, int quiet)
 /*
  * Set the wanted color (NULL keeps the old one), compute the output, send it
  * and record it. A new color or STOP_FX ends the recorded effect. Without
- * them, the recorded effect starts again after the color, or it waits while
- * the screen is blank. The joins end an effect. But after a fade, the bar
+ * them, the recorded effect starts again after the color. The joins end an effect. But after a fade, the bar
  * keeps the fade color when the joins do not change its host color. So
  * "FX OFF" follows the joins.
  */
@@ -523,7 +499,7 @@ static int apply(const int *want, int stop_fx)
 	if (had_fx && !fx_capable()) st.fx[0] = had_fx = 0;	/* the bar runs another firmware now */
 	output_for(st.want, st.out);
 	e = send_rgb(st.out);
-	if (!e && st.fx[0] && !fx_paused()) e_fx = fx_send(st.fx, 0);
+	if (!e && st.fx[0]) e_fx = fx_send(st.fx, 0);
 	else if (!e && (had_fx || stop_fx)) {
 		int e_off = fx_send("off", !stop_fx);
 		if (stop_fx) e_fx = e_off;
@@ -577,7 +553,7 @@ static int cmd_fx(char **av, int n)
 	/* The effect color stays with the effect. The wanted color is the color from before it. */
 	struct state st; read_state(&st);
 	snprintf(st.fx, sizeof st.fx, "%s", rec);
-	e = fx_paused() ? 0 : fx_send(rec, 0);
+	e = fx_send(rec, 0);
 	if (!dry_run && !e) write_state(&st, backend_name());
 	return e;
 }
@@ -585,10 +561,10 @@ static int cmd_fx(char **av, int n)
 static void __attribute__((noreturn)) usage(void)
 {
 	fputs("usage: tsx-ledbar [-n] [-v] [--usb] COMMAND\n"
-	      "  set R G B          color, each 0..100 (screen-blank rule of ledbar.conf applies)\n"
+	      "  set R G B          color, each 0..100\n"
 	      "  on | off           last non-black color (else BOOT_COLOR) | black\n"
 	      "  boot               BOOT_COLOR of /etc/tsx/ledbar.conf\n"
-	      "  apply              re-send the wanted color for the current screen state\n"
+	      "  apply              re-send the wanted color and start the recorded effect again\n"
 	      "  get                print wanted/last/output color and the running effect\n"
 	      "  analog JOIN VALUE  one analog join packet (3/4/5 = red/green/blue level)\n"
 	      "  digital JOIN on|off  one digital join packet (0/1/2 = red/green/blue)\n"
@@ -623,7 +599,6 @@ int main(int argc, char **argv)
 {
 	if (getenv("TSX_LEDBAR_SYSFS")) sysled = getenv("TSX_LEDBAR_SYSFS");
 	if (getenv("TSX_RUN_DIR")) rundir = getenv("TSX_RUN_DIR");
-	if (getenv("TSX_IDLED_STATE")) idled_state = getenv("TSX_IDLED_STATE");
 	if (getenv("TSX_LEDBAR_CONF")) conffile = getenv("TSX_LEDBAR_CONF");
 	int a = 1;
 	for (; a < argc && argv[a][0] == '-' && argv[a][1]; a++) {
@@ -700,8 +675,7 @@ int main(int argc, char **argv)
 			if (!sys_read("brightness", b, sizeof b)) printf("brightness %s\n", b);
 			if (!sys_read("rx_last", b, sizeof b)) printf("rx_last %s\n", b);
 		}
-		printf("config BOOT_COLOR=%d,%d,%d BLANK=%s BLANK_DIM=%d\nscreen %s\n", C.boot[0], C.boot[1], C.boot[2],
-		       C.blank, C.blank_dim, screen_blank() ? "blank" : "awake");
+		printf("config BOOT_COLOR=%d,%d,%d\n", C.boot[0], C.boot[1], C.boot[2]);
 	} else usage();
 
 	usb_close();

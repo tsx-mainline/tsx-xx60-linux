@@ -72,7 +72,7 @@ jobs:
         run: rootfs/tests/test-setup.sh
       - name: rootfs/tests/test-esphome.sh - one Home Assistant device over the ESPHome API, plaintext and encrypted, both front ends, Bluetooth proxy
         run: rootfs/tests/test-esphome.sh
-      - name: rootfs/tests/ledbar-host-test.sh - LED bar packets, sysfs backend, screen-blank scaling
+      - name: rootfs/tests/ledbar-host-test.sh - LED bar packets, sysfs backend, state file
         run: sh rootfs/tests/ledbar-host-test.sh
       - name: rootfs/tests/test-ledbard.sh - LED bar start check and restart of the STM32 (fake console)
         run: sh rootfs/tests/test-ledbard.sh
