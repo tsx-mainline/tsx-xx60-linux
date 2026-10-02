@@ -71,6 +71,7 @@ overlay usr/local/lib/tsx/btgatt.py
 overlay usr/local/lib/tsx/btscan.py
 overlay usr/local/lib/tsx/csr_psload.py
 overlay usr/local/lib/tsx/tfa_dsp.py
+overlay usr/local/lib/tsx/tsx_brightness.py
 overlay usr/local/sbin/tsx-als
 overlay usr/local/sbin/tsx-autoupdate
 overlay usr/local/sbin/tsx-boot-ok
