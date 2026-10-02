@@ -10,4 +10,3 @@
    config:      /etc/kiosk.conf, tsx-config show      then: rc-service kiosk restart
    login token: kiosk-set-token <long-lived-token>
    screen:      tsx-blank on|off       logs: /var/log/messages
-   env/boot:    /usr/local/sbin/tsx-boot-ok --status

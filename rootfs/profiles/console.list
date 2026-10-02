@@ -52,6 +52,8 @@ overlay etc/tsx/audio.conf
 overlay etc/tsx/autoupdate.conf
 overlay etc/tsx/buttons.conf
 overlay etc/tsx/ledbar.conf
+overlay etc/tsx/motd.board
+overlay etc/tsx/panel-board.conf
 overlay etc/tsx/tfa-dsp.conf
 overlay etc/tsx/uboot-env.conf
 overlay etc/udev/rules.d/60-tsx-backlight.rules

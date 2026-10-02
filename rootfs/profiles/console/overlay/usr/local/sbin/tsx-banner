@@ -79,7 +79,6 @@ tmp=$MOTD.tmp.$$
 	echo
 	echo "   config:      tsx-config show        logs: /var/log/messages"
 	echo "   screen:      tsx-blank on|off       update: tsx-autoupdate status"
-	echo "   env/boot:    /usr/local/sbin/tsx-boot-ok --status"
 } > "$tmp" && chmod 644 "$tmp" && mv "$tmp" "$MOTD" || rm -f "$tmp"
 
 # A getty that waits at the prompt shows the old /etc/issue. Ending it makes

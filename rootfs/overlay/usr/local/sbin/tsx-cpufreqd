@@ -16,7 +16,7 @@ log() { echo "$(date '+%F %T') tsx-cpufreq: $*"; }
 conf() {
 	CPUFREQ_AWAKE=performance CPUFREQ_BLANK=schedutil
 	[ -r /etc/kiosk.conf ] && . /etc/kiosk.conf
-	[ -r /etc/tsx/kiosk-board.conf ] && . /etc/tsx/kiosk-board.conf
+	[ -r /etc/tsx/panel-board.conf ] && . /etc/tsx/panel-board.conf
 }
 set_gov() {
 	ok=0

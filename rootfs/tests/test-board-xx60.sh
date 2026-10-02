@@ -41,10 +41,10 @@ SH_CODE='tsx_board_ha_model'
 eq "$(sh_run TSX_HA_MODEL=other)" "other" "tsx_board_ha_model follows a changed TSX_HA_MODEL"
 
 echo "== the kiosk board file =="
-KB=$HERE/overlay/etc/tsx/kiosk-board.conf
-busybox sh -n "$KB" 2>/dev/null && ok "kiosk-board.conf passes busybox sh -n" || bad "kiosk-board.conf: busybox sh -n"
+KB=$HERE/overlay/etc/tsx/panel-board.conf
+busybox sh -n "$KB" 2>/dev/null && ok "panel-board.conf passes busybox sh -n" || bad "panel-board.conf: busybox sh -n"
 eq "$(env -i PATH="$PATH" sh -c ". '$KB'; echo \"\$KIOSK_GPU \$BACKLIGHT_MAX \$BRIGHTNESS_DAY \$BRIGHTNESS_NIGHT \$CPUFREQ_AWAKE \$CPUFREQ_BLANK \$OVERLAY_GESTURE\"")" \
-	"browser 23 17 8 performance schedutil off" "kiosk-board.conf holds the xx60 values"
+	"browser 23 17 8 performance schedutil off" "panel-board.conf holds the xx60 values"
 for k in KIOSK_GPU BACKLIGHT_MAX BRIGHTNESS_DAY BRIGHTNESS_NIGHT CPUFREQ_AWAKE CPUFREQ_BLANK; do
 	a=$(sed -n "s/^$k=//p" "$HERE/overlay/etc/kiosk.conf" | tail -n 1); b=$(sed -n "s/^$k=//p" "$KB" | tail -n 1)
 	eq "$b" "$a" "$k: the board file and kiosk.conf agree"
