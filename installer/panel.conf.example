@@ -114,6 +114,15 @@ KERNEL_FLAVOR=lts
 # vendor firmware uses the same value.
 #BT_MAC=
 
+# The camera for Home Assistant (docs/ha.md "Camera"): off, snapshot or live.
+# off (default): no camera entities, and nothing opens the camera.
+# snapshot: a Camera entity, a "Take snapshot" button and a "Last snapshot"
+# time. The camera opens only for one image at each press.
+# live: a Camera entity with a new image for each Home Assistant request.
+# on is the old name of live. Home Assistant cannot change this key.
+# A panel without a camera (government=1) keeps it off.
+#CAMERA=off
+
 # on = the backlight follows the ambient light sensor (tsx-als, the curve in
 # /etc/tsx/als.conf). Default on. Also the "Auto brightness" switch in Home
 # Assistant, which writes this key.

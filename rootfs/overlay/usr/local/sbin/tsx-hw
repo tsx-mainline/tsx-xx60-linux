@@ -15,7 +15,7 @@
 #                           androidboot.government=N.
 #   MIC=yes|no              a microphone is fitted
 #   BT=yes|no               a Bluetooth module (CSR8811) is fitted
-#   CAMERA=yes|no           a camera is fitted (mainline has no driver for it)
+#   CAMERA=yes|no           a camera is fitted (docs/hardware.md "Camera")
 #   PRESENCE=no             the xx60 has no presence sensor (always no). The
 #                           setup page of tsx-linux-common hides its fields.
 #   REASON=TEXT             why a part is missing (empty when none is)

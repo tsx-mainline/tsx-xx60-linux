@@ -39,6 +39,7 @@ pkg py3-tzlocal
 pkg py3-aiohappyeyeballs
 pkg py3-mpv
 pkg mpv-libs
+pkg libturbojpeg
 pkg sendspin-cli
 pkg tensorflow-lite-c
 
