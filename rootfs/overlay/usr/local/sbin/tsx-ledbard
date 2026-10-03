@@ -9,6 +9,15 @@
 # BOOT_COLOR of /etc/tsx/ledbar.conf the first time, the wanted color after
 # a plug-in. The STM32 starts with all colors off.
 #
+# Bootloader mode: a bar in the stock bootloader (USB 14be:001a) runs no
+# application and stays dark. When the daemon finds the bar in this mode, at
+# start or later, it loads an image with "tsx-ledbar-fw-install --recover":
+# the TSX-LEDBAR image when the panel is set up for it, else the stock image
+# in /data/tsx/vendor/. The tool comes with the package tsx-ledbar-fw. Without
+# the package, or without an image, the daemon logs one line and does nothing
+# else. It tries once for each start of the service, so a failed load does not
+# loop. It never sends TLCRESET and never cuts the power of the bar.
+#
 # The screen state never changes the bar. An old ledbar.conf with BLANK or
 # BLANK_DIM still works: the daemon ignores both keys and logs one line.
 #
@@ -17,6 +26,16 @@
 # the bar, and "tsx-ledbar apply" starts the recorded effect again. The
 # stock firmware has no effects, and the daemon works as before.
 #
+# LED map: TSX-LEDBAR 0.1.5 and later ("ledmap" in CAPS) has one LED map
+# for each tested LED bar model. The bar cannot tell its model. So after
+# each plug-in and each start of the bar, before the first color, the
+# daemon sends "LEDMAP NAME PANEL". The map is LEDMAP of ledbar.conf, else
+# the bar that fits the panel model: TSW-1060-LB on the TSW-1060, its
+# variants (for example TSW-1060-NC) and the TSS-10. The panel model comes from /run/tsx/model
+# (tsx-hostname writes it at boot), else from the device tree. A panel
+# model with no tested bar gets "LEDMAP DEFAULT": the firmware default map.
+# Older firmware and the stock firmware get no LEDMAP.
+#
 #   tsx-ledbard          run as the service
 #   tsx-ledbard check    check (and restart) the LED bar once, apply the
 #                        wanted color, then exit (1 if the bar stays dark)
@@ -24,21 +43,90 @@
 # Env overrides for tests: TSX_USB_SYSFS (USB devices dir),
 # TSX_LEDBAR_SYSFS (LED dir), TSX_LEDBAR_DRIVER (driver dir),
 # TSX_LEDBAR_TRIES, TSX_LEDBAR_WAIT (seconds for the STM32 to come back),
-# TSX_LEDBAR_CONF (the config file).
+# TSX_LEDBAR_CONF (the config file), TSX_RUN_DIR (the dir of the model
+# file), TSX_DT_COMPATIBLE (the compatible file of the device tree).
 CONF=${TSX_LEDBAR_CONF:-/etc/tsx/ledbar.conf}
 USB=${TSX_USB_SYSFS:-/sys/bus/usb/devices}
 LED=${TSX_LEDBAR_SYSFS:-/sys/class/leds/tsx:rgb:bar}
 DRIVER=${TSX_LEDBAR_DRIVER:-/sys/bus/usb/drivers/leds-crestron-stm32}
 TRIES=${TSX_LEDBAR_TRIES:-3}
 WAIT=${TSX_LEDBAR_WAIT:-20}
+MODEL_FILE=${TSX_RUN_DIR:-/run/tsx}/model
+DT_COMPAT=${TSX_DT_COMPATIBLE:-/proc/device-tree/compatible}
 log() { echo "$(date '+%F %T') tsx-ledbar: $*"; }
+# the tools of the package tsx-ledbar-fw are in /usr/local/sbin
+PATH=$PATH:/usr/local/sbin
 
 # conf_num KEY: the number of KEY in ledbar.conf, empty when not set
 conf_num() {
 	sed -n "s/^$1=[\"]*\([0-9]*\).*/\1/p" "$CONF" 2>/dev/null | tail -n 1
 }
 
-# Log the firmware of the bar. With TSX-LEDBAR, send the effect settings.
+# conf_word KEY: the value of KEY in ledbar.conf (letters, digits and "-"
+# only), empty when not set
+conf_word() {
+	sed -n "s/^$1=[\"']*\([A-Za-z0-9-]*\).*/\1/p" "$CONF" 2>/dev/null | tail -n 1
+}
+
+# panel_model: the model of this panel, empty when not known. tsx-hostname
+# writes product_name of the U-Boot env up to "_[" to /run/tsx/model at
+# boot. Without that file the device tree names the board, and the board
+# fits one LED bar.
+panel_model() {
+	pm_m=
+	[ -r "$MODEL_FILE" ] && read -r pm_m < "$MODEL_FILE"
+	if [ -z "$pm_m" ] && [ -r "$DT_COMPAT" ]; then
+		case $(tr '\0' ' ' < "$DT_COMPAT") in
+		*crestron,tsw1060*) pm_m=TSW-1060;;
+		*crestron,tsw760*) pm_m=TSW-760;;
+		esac
+	fi
+	echo "$pm_m"
+}
+
+# bar_map MODEL: the LED map of the LED bar for this panel model. Empty when
+# no LED bar is tested on the model.
+bar_map() {
+	case $1 in
+	TSW-1060|TSW-1060-*|TSS-10|TSS-10-*) echo TSW-1060-LB;;
+	esac
+}
+
+# Send the LED map to a bar with TSX-LEDBAR 0.1.5 or later ("ledmap" in
+# CAPS): the map of LEDMAP in ledbar.conf, else the map of the panel model.
+map_setup() {
+	map_want=$(conf_word LEDMAP) map_has=
+	for map_w in $(tsx-ledbar console CAPS 2>/dev/null); do
+		[ "$map_w" = ledmap ] && map_has=1
+	done
+	if [ -z "$map_has" ]; then
+		[ -z "$map_want" ] || log "LEDMAP=$map_want in ledbar.conf needs the LED bar firmware TSX-LEDBAR 0.1.5 or later"
+		return
+	fi
+	map_why="LEDMAP=$map_want in ledbar.conf"
+	if [ -z "$map_want" ]; then
+		map_model=$(panel_model)
+		map_want=$(bar_map "$map_model")
+		map_why="panel ${map_model:-model unknown}"
+	fi
+	case $map_want in
+	"") map_line="LEDMAP DEFAULT" map_why="$map_why, no tested LED bar";;
+	[Dd][Ee][Ff][Aa][Uu][Ll][Tt]) map_line="LEDMAP DEFAULT";;
+	*) map_line="LEDMAP $map_want PANEL";;
+	esac
+	map_ans=$(tsx-ledbar console "$map_line" 2>&1)
+	case $map_ans in
+	*"variant "*" map "*)
+		log "LED map: sent $map_line ($map_why). Bar: $(echo "$map_ans" | grep '^variant ' | head -n 1)";;
+	*"no LED map"*)
+		log "LED map: the bar has no map $map_want ($map_why). $(echo "$map_ans" | grep '^maps' | head -n 1). The bar keeps its map";;
+	*)
+		log "LED map: no answer to $map_line ($map_why)";;
+	esac
+}
+
+# Log the firmware of the bar. With TSX-LEDBAR, send the LED map and the
+# effect settings.
 fx_setup() {
 	fw_out=$(tsx-ledbar fw 2>/dev/null)
 	fw_name=$(echo "$fw_out" | sed -n 's/^firmware //p')
@@ -46,11 +134,13 @@ fx_setup() {
 	case $fw_out in
 	*"effects yes"*)
 		log "LED bar firmware $fw_name, effects on"
+		map_setup
 		if [ -n "$smooth" ]; then tsx-ledbar fx smooth "$smooth" >/dev/null || log "FX_SMOOTH=$smooth failed"; fi
 		if [ -n "$cap" ]; then tsx-ledbar fx cap "$cap" >/dev/null || log "FX_CAP=$cap failed"; fi;;
 	*)
 		log "LED bar firmware ${fw_name:-unknown}, no effects"
-		[ -z "$smooth$cap" ] || log "FX_SMOOTH and FX_CAP need the LED bar firmware TSX-LEDBAR";;
+		[ -z "$smooth$cap" ] || log "FX_SMOOTH and FX_CAP need the LED bar firmware TSX-LEDBAR"
+		[ -z "$(conf_word LEDMAP)" ] || log "LEDMAP in ledbar.conf needs the LED bar firmware TSX-LEDBAR 0.1.5 or later";;
 	esac
 }
 
@@ -61,8 +151,9 @@ old_keys() {
 	fi
 }
 
-# Set BAR to "bus-dev" of the bar (14be:001b). The number changes at each
-# USB enumeration, so a new value means a plug-in or a restart of the STM32.
+# Set BAR to "bus-dev" of the bar (14be:001b, or the USB product ID in $1,
+# 001a for the bootloader). The number changes at each USB enumeration, so a
+# new value means a plug-in or a restart of the STM32.
 bar_id() {
 	BAR=
 	for d in "$USB"/*; do
@@ -70,7 +161,7 @@ bar_id() {
 		read -r usb_v < "$d/idVendor" || continue
 		[ "$usb_v" = 14be ] || continue
 		read -r usb_p < "$d/idProduct" || continue
-		[ "$usb_p" = 001b ] || continue
+		[ "$usb_p" = "${1:-001b}" ] || continue
 		read -r usb_b < "$d/busnum" && read -r usb_n < "$d/devnum" || continue
 		BAR=$usb_b-$usb_n
 		return 0
@@ -145,9 +236,42 @@ recover() {
 	done
 }
 
+# The bar is in bootloader mode (14be:001a). Load the image that the panel
+# is set up for. The tool picks it and keeps this service running: the
+# tool must not stop the service, because the service calls it.
+btl_recover() {
+	if ! command -v tsx-ledbar-fw-install >/dev/null 2>&1; then
+		log "LED bar is in bootloader mode (USB 14be:001a) and no tool can load an image: the package tsx-ledbar-fw is not installed. Run apk add tsx-ledbar-fw, then restart the tsx-ledbar service"
+		return
+	fi
+	tsx-ledbar-fw-install --recover-image >/dev/null 2>&1
+	case $? in
+	0) ;;
+	3)
+		log "LED bar is in bootloader mode (USB 14be:001a) and there is no image to load: no tsx-ledbar-fw image and no stock image in /data/tsx/vendor/"
+		return;;
+	*)
+		log "LED bar is in bootloader mode (USB 14be:001a) and the installed tsx-ledbar-fw is too old to load an image. Run apk upgrade tsx-ledbar-fw, then restart the tsx-ledbar service"
+		return;;
+	esac
+	log "LED bar is in bootloader mode (USB 14be:001a). Loading the image of this panel"
+	if tsx-ledbar-fw-install --recover; then
+		log "LED bar load ended. Waiting for the application"
+	else
+		log "LED bar load failed. The bar stays in bootloader mode. No second try before the next start of the service. Restart it to try again, or run tsx-ledbar-fw-install by hand"
+	fi
+}
+
 case ${1:-} in
 check)
-	bar_id || { log "LED bar not found (USB 14be:001b)"; exit 1; }
+	if ! bar_id; then
+		if bar_id 001a; then
+			log "LED bar is in bootloader mode (USB 14be:001a). Start the tsx-ledbar service to load an image"
+		else
+			log "LED bar not found (USB 14be:001b)"
+		fi
+		exit 1
+	fi
 	wait_led
 	recover; rc=$?
 	fx_setup
@@ -158,10 +282,11 @@ check)
 esac
 
 old_keys
-cur= first=1 told=
+cur= first=1 told= tried= btl_told=
 while :; do
 	if bar_id; then
 		if [ "$BAR" != "$cur" ]; then
+			btl_told=
 			if [ -n "$first" ]; then log "LED bar found"; else log "LED bar plugged in"; fi
 			told=1
 			wait_led
@@ -181,6 +306,18 @@ while :; do
 			else
 				tsx-ledbar apply || log "apply failed"
 			fi
+		fi
+	elif bar_id 001a; then
+		# One try for each start of the service, also when the bar comes
+		# back to the bootloader later. The next pass finds the new
+		# application after a good load.
+		told=1 cur=
+		if [ -z "$tried" ]; then
+			tried=1 btl_told=1
+			btl_recover
+		elif [ -z "$btl_told" ]; then
+			btl_told=1
+			log "LED bar is in bootloader mode (USB 14be:001a). The one try of this start is used. Restart the tsx-ledbar service to try again"
 		fi
 	elif [ -n "$cur" ]; then
 		log "LED bar removed"

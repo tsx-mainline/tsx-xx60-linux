@@ -74,7 +74,7 @@ jobs:
         run: rootfs/tests/test-esphome.sh
       - name: rootfs/tests/ledbar-host-test.sh - LED bar packets, sysfs backend, state file
         run: sh rootfs/tests/ledbar-host-test.sh
-      - name: rootfs/tests/test-ledbard.sh - LED bar start check and restart of the STM32 (fake console)
+      - name: rootfs/tests/test-ledbard.sh - LED bar start check, restart of the STM32 and load from bootloader mode (fake console, fake package tool)
         run: sh rootfs/tests/test-ledbard.sh
       - name: rootfs/tests/test-initscripts.sh - init script start logic, eMMC state writer, weekly fstrim
         run: rootfs/tests/test-initscripts.sh
