@@ -19,7 +19,9 @@
 #                                     has no value (no sound card, no sensor).
 #   tsx-panelctl has NAME             exit 0 when the panel has that hardware:
 #                                     ledbar, ledbar-fx (the LED bar firmware
-#                                     TSX-LEDBAR, with effects), keypad, als
+#                                     TSX-LEDBAR, with effects), ledbar-leds
+#                                     (TSX-LEDBAR 0.1.3 and later, with the
+#                                     16 LEDs and the zone effects), keypad, als
 #                                     or sound
 #   tsx-panelctl events               print a line when a value changes, until it
 #                                     is stopped: "button NAME short|long|hold",
@@ -141,18 +143,47 @@ reject() { log "rejected: $(safe "$*")"; }
 
 # fx_ok NAME VALUE...: an effect of the LED bar firmware TSX-LEDBAR with
 # the right count of plain numbers. tsx-ledbar checks the exact ranges.
+# Spectrum may end with the word ring or rows (the layout of the hue circle).
 fx_ok() {
 	fx_name=$1; shift
+	fx_word=
+	if [ "$fx_name" = spectrum ] && [ $# -ge 2 ]; then
+		eval "fx_word=\${$#}"
+		case "$fx_word" in ring|rows) ;; *) fx_word=;; esac
+	fi
+	fx_num=$#; [ -n "$fx_word" ] && fx_num=$(($# - 1))
 	case "$fx_name" in
 	off) fx_n=0;;
 	fade|breathe) fx_n=4;;
 	blink) fx_n=5;;
-	rainbow) fx_n=1; [ $# = 2 ] && fx_n=2;;
+	rainbow|spectrum) fx_n=1; [ "$fx_num" = 2 ] && fx_n=2;;
 	smooth|cap) fx_n=1;;
+	chase|fill) fx_n=4;;
+	split) fx_n=6;;
 	*) return 1;;
 	esac
-	[ $# = "$fx_n" ] || return 1
-	for fx_v in "$@"; do in_range "$fx_v" 0 600000 || return 1; done
+	[ "$fx_num" = "$fx_n" ] || return 1
+	fx_i=0
+	for fx_v in "$@"; do
+		fx_i=$((fx_i + 1))
+		[ "$fx_i" -gt "$fx_num" ] && break
+		in_range "$fx_v" 0 600000 || return 1
+	done
+}
+
+# leds_ok SEL: a LED selection of the LED bar firmware, in the exact form
+# that tsx_panel/backend.py sends: R1 to R8, L1 to L8, 0 to 15, a range of
+# two of them (R1-R4), R, L or ALL. Upper case only.
+led_one() {
+	case "$1" in [RL][1-8]|[0-9]|1[0-5]) return 0;; esac
+	return 1
+}
+leds_ok() {
+	case "$1" in
+	ALL|R|L) return 0;;
+	*-*) led_one "${1%%-*}" && led_one "${1#*-}";;
+	*) led_one "$1";;
+	esac
 }
 
 # ---- the client side: send, get, has, events -------------------------------
@@ -186,6 +217,8 @@ has_hw() {
 	ledbar) command -v "$LEDBAR" >/dev/null 2>&1 && return 0 || return 1;;
 	# the LED bar runs the firmware TSX-LEDBAR, which has effects
 	ledbar-fx) "$LEDBAR" fw 2>/dev/null | grep -qx 'effects yes';;
+	# the LED bar firmware has the 16 LEDs (TSX-LEDBAR 0.1.3 and later)
+	ledbar-leds) "$LEDBAR" fw 2>/dev/null | grep -qx 'leds yes';;
 	keypad) [ -r "$BUTTONS_CONF" ];;
 	als) [ -r "$ALS_CONF" ] || [ -r "$R/als.state" ];;
 	sound) [ -e "$ASOUND/$CARD" ];;
@@ -236,7 +269,7 @@ get) [ $# = 2 ] || { echo "usage: tsx-panelctl get NAME" >&2; exit 2; }; get_val
 has) [ $# = 2 ] || { echo "usage: tsx-panelctl has NAME" >&2; exit 2; }; has_hw "$2"; exit $?;;
 events) cmd_events; exit $?;;
 '') ;;
-*) sed -n '2,32p' "$0" >&2; exit 2;;
+*) sed -n '2,34p' "$0" >&2; exit 2;;
 esac
 
 mkdir -p "$R"
@@ -262,6 +295,12 @@ handle() {
 		elif [ "$a1" = fx ] && fx_ok "$a2" $a3 $a4 $rest; then
 			# set -f is on: the split of the numbers cannot expand a glob
 			log "ledbar fx $a2 $a3 $a4 $rest"; "$LEDBAR" fx "$a2" $a3 $a4 $rest
+		elif [ "$a1" = led ] && leds_ok "$a2" && in_range "$a3" 0 100 && in_range "$a4" 0 100 && in_range "$rest" 0 100; then
+			log "ledbar led $a2 $a3 $a4 $rest"; "$LEDBAR" led "$a2" "$a3" "$a4" "$rest"
+		elif [ "$a1" = side ] && { [ "$a2" = R ] || [ "$a2" = L ]; } && in_range "$a3" 0 100 && in_range "$a4" 0 100 && in_range "$rest" 0 100; then
+			log "ledbar side $a2 $a3 $a4 $rest"; "$LEDBAR" side "$a2" "$a3" "$a4" "$rest"
+		elif [ "$a1" = clear ] && [ -z "$a2$a3$a4$rest" ]; then
+			log "ledbar clear"; "$LEDBAR" clear
 		else reject "ledbar $a1 $a2 $a3 $a4 $rest"; fi;;
 	keypad)
 		if [ "$a1" = led ] && [ "$a2" = off ] && [ -z "$a3$a4$rest" ]; then

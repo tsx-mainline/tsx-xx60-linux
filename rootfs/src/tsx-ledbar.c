@@ -37,9 +37,23 @@
  * the effect and clears the record. "apply" starts the recorded effect
  * again, for example after a restart of the bar.
  *
+ * The 16 LEDs: firmware TSX-LEDBAR 0.1.3 and later ("leds16" in the answer
+ * to CAPS) sets each LED on its own. "led", "side" and "clear" send
+ * LED SET, LED SIDE and LED CLEAR. The firmware copies the host color into
+ * all 16 LEDs at the first LED SET or LED SIDE, so the tool does the same
+ * with the wanted color and records the whole pattern in the state file
+ * ("pattern" and 48 levels). The zone effects chase, fill, spectrum and
+ * split also need 0.1.3. A LED command ends the effect on the bar and
+ * clears the effect record. An effect on top of the pattern keeps the
+ * pattern, and "fx off" shows the pattern again. A new wanted color ends
+ * the pattern and the effect. "apply" sends the wanted color, then the
+ * pattern, then the effect.
+ *
  * Env overrides for tests: TSX_LEDBAR_SYSFS (LED dir), TSX_RUN_DIR,
  * TSX_LEDBAR_CONF. A test build (-DNO_LIBUSB) writes
  * console lines to the file TSX_LEDBAR_CONSOLE and answers as the firmware.
+ * It answers CAPS with TSX_LEDBAR_CAPS (default: the words of 0.1.2) and
+ * does not write the CAPS line to the file.
  */
 #define _GNU_SOURCE
 #include <ctype.h>
@@ -50,6 +64,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -66,6 +81,9 @@
 #define JOIN_DIGITAL_RED 0
 #define FX_FIRMWARE "TSX-LEDBAR"	/* firmware name prefix of our bar firmware */
 #define FXLEN 96
+#define LEDS_CAP "leds16"	/* the CAPS word of the firmware with the 16 LEDs */
+#define NLEDS 16
+#define NROWS 8
 
 static const char *sysled = "/sys/class/leds/tsx:rgb:bar";
 static const char *rundir = "/run/tsx";
@@ -172,13 +190,26 @@ static void load_conf(void)
 }
 
 /* ---- state --------------------------------------------------------------- */
-struct state { int want[3], last[3], out[3]; char fx[FXLEN]; };
+struct state { int want[3], last[3], out[3]; char fx[FXLEN]; int pat_on, pat[NLEDS][3]; };
 
 static void state_path(char *p, size_t n) { snprintf(p, n, "%s/ledbar.state", rundir); }
 
+/* "pattern" and 48 levels (R G B of LED 0 to 15). A short or bad line is no pattern. */
+static void read_pattern(struct state *st, const char *s)
+{
+	int n = 0;
+	for (; n < NLEDS * 3; n++) {
+		char *e; long v = strtol(s, &e, 10);
+		if (e == s || v < 0 || v > 100) break;
+		st->pat[n / 3][n % 3] = (int)v;
+		s = e;
+	}
+	st->pat_on = n == NLEDS * 3;
+}
+
 static int read_state(struct state *st)
 {
-	char p[PATH_MAX], line[128]; FILE *f;
+	char p[PATH_MAX], line[512]; FILE *f;
 	memset(st, 0, sizeof *st);
 	st->last[0] = st->last[1] = st->last[2] = -1;
 	state_path(p, sizeof p);
@@ -193,6 +224,8 @@ static int read_state(struct state *st)
 			memcpy(st->fx, line + 3, l);
 			st->fx[l] = 0;
 		}
+		if (!strncmp(line, "pattern ", 8) && strncmp(line + 8, "none", 4))
+			read_pattern(st, line + 8);
 	}
 	fclose(f);
 	return 0;
@@ -204,10 +237,14 @@ static void write_state(const struct state *st, const char *backend)
 	mkdir(rundir, 0755);
 	state_path(p, sizeof p); snprintf(tmp, sizeof tmp, "%s.tmp", p);
 	if (!(f = fopen(tmp, "w"))) return;
-	fprintf(f, "want %d %d %d\nlast %d %d %d\nout %d %d %d\nbackend %s\nfx %s\n",
+	fprintf(f, "want %d %d %d\nlast %d %d %d\nout %d %d %d\nbackend %s\nfx %s\npattern",
 		st->want[0], st->want[1], st->want[2], st->last[0], st->last[1], st->last[2],
 		st->out[0], st->out[1], st->out[2], backend,
 		st->fx[0] ? st->fx : "none");
+	if (!st->pat_on) fputs(" none", f);
+	for (int i = 0; st->pat_on && i < NLEDS; i++)
+		fprintf(f, " %d %d %d", st->pat[i][0], st->pat[i][1], st->pat[i][2]);
+	fputc('\n', f);
 	fclose(f);
 	rename(tmp, p);
 }
@@ -409,11 +446,18 @@ static int usb_console(const char *line, int ms, char *ans, size_t ans_n)
 {
 	const char *p = getenv("TSX_LEDBAR_CONSOLE"), *a = getenv("TSX_LEDBAR_ANSWER"); FILE *f;
 	(void)ms;
-	if (!p || !(f = fopen(p, "a"))) return -ENOSYS;
-	fprintf(f, "%s\n", line);
-	fclose(f);
-	if (ans) snprintf(ans, ans_n, "%s\n", a ? a : "fx test");
-	else puts(a ? a : "fx test");
+	if (!p) return -ENOSYS;
+	if (!strcmp(line, "CAPS")) {
+		const char *c = getenv("TSX_LEDBAR_CAPS");
+		a = c ? c : "tsx-ledbar fade blink breathe rainbow smooth cap status";
+	} else {
+		if (!(f = fopen(p, "a"))) return -ENOSYS;
+		fprintf(f, "%s\n", line);
+		fclose(f);
+		if (!a) a = !strncmp(line, "LED ", 4) ? "ok" : "fx test";
+	}
+	if (ans) snprintf(ans, ans_n, "%s\n", a);
+	else puts(a);
 	return 0;
 }
 #endif
@@ -444,7 +488,7 @@ static int send_rgb(const int *rgb)
 	return 0;
 }
 
-/* ---- effects (bar firmware TSX-LEDBAR) ------------------------------------ */
+/* ---- effects and LEDs (bar firmware TSX-LEDBAR) --------------------------- */
 /* The firmware name: the "firmware" attribute of the kernel driver, else USB string 4. */
 static int bar_firmware(char *buf, size_t n)
 {
@@ -459,20 +503,38 @@ static int fx_capable(void)
 	return !bar_firmware(fw, sizeof fw) && !strncmp(fw, FX_FIRMWARE, strlen(FX_FIRMWARE));
 }
 
-/*
- * Send the effect REC ("breathe 100 0 0 4000") as the console line
- * "FX BREATHE 100 0 0 4000". The firmware answers "fx NAME". Any other
- * answer is a refusal. QUIET drops the error message.
- */
-static int fx_send(const char *rec, int quiet)
+/* The firmware has the 16 LEDs: TSX-LEDBAR, and "leds16" in the answer to CAPS. */
+static int leds_capable(void)
 {
-	char line[FXLEN + 8], ans[128] = "";
-	int n = snprintf(line, sizeof line, "FX %s", rec), e;
-	for (int i = 3; i < n; i++) line[i] = toupper((unsigned char)line[i]);
+	static int known = -1;
+	char ans[256] = "", *w;
+	if (known >= 0) return known;
+	known = 0;
+	if (!fx_capable() || usb_console("CAPS", 1500, ans, sizeof ans)) return known;
+	for (w = strtok(ans, " \r\n"); w; w = strtok(NULL, " \r\n"))
+		if (!strcmp(w, LEDS_CAP)) known = 1;
+	return known;
+}
+
+static void __attribute__((noreturn)) need_leds(const char *what)
+{
+	char fw[128];
+	if (bar_firmware(fw, sizeof fw)) fw[0] = 0;
+	die("%s needs the LED bar firmware %s 0.1.3 or later with %s in CAPS (this bar: %s)",
+	    what, FX_FIRMWARE, LEDS_CAP, fw[0] ? fw : "not found");
+}
+
+/*
+ * Send LINE on the console. An answer that does not start with OK is a
+ * refusal. QUIET drops the error message.
+ */
+static int bar_cmd(const char *line, const char *ok, int quiet)
+{
+	char ans[128] = "";
+	int e;
 	if (dry_run) { printf("console %s\n", line); return 0; }
 	e = usb_console(line, 1500, ans, sizeof ans);
-	usb_close();
-	if (!e && strncmp(ans, "fx ", 3)) {
+	if (!e && strncmp(ans, ok, strlen(ok))) {
 		ans[strcspn(ans, "\n")] = 0;
 		if (!quiet) fprintf(stderr, "tsx-ledbar: the LED bar refused '%s': '%s'\n", line, ans);
 		e = -EPROTO;
@@ -481,26 +543,111 @@ static int fx_send(const char *rec, int quiet)
 }
 
 /*
+ * Send the effect REC ("breathe 100 0 0 4000") as the console line
+ * "FX BREATHE 100 0 0 4000". The firmware answers "fx NAME".
+ */
+static int fx_send(const char *rec, int quiet)
+{
+	char line[FXLEN + 8];
+	int n = snprintf(line, sizeof line, "FX %s", rec);
+	for (int i = 3; i < n; i++) line[i] = toupper((unsigned char)line[i]);
+	return bar_cmd(line, "fx ", quiet);
+}
+
+/* ---- the 16 LEDs ---------------------------------------------------------- */
+static void led_name(int i, char *name)
+{
+	name[0] = i < NROWS ? 'R' : 'L';
+	name[1] = (char)('1' + i % NROWS);
+	name[2] = 0;
+}
+
+/* "R3", "l8" or "0".."15" to the LED index, -1 when bad (the rules of the firmware) */
+static int led_id(const char *s, size_t n)
+{
+	int v = 0;
+	if (n == 2 && strchr("RrLl", s[0]) && s[1] >= '1' && s[1] <= '8')
+		return (s[0] == 'L' || s[0] == 'l' ? NROWS : 0) + s[1] - '1';
+	if (n < 1 || n > 2) return -1;
+	for (size_t i = 0; i < n; i++) {
+		if (!isdigit((unsigned char)s[i])) return -1;
+		v = v * 10 + s[i] - '0';
+	}
+	return v < NLEDS ? v : -1;
+}
+
+/* A LED selection: one LED (R3, L1, 5), a range (R1-R4, 8-11), a side (R or L) or ALL. */
+static int leds_arg(const char *s, int *first, int *last)
+{
+	const char *dash = strchr(s, '-');
+	int a, b;
+	if (!strcasecmp(s, "ALL")) { *first = 0; *last = NLEDS - 1; return 0; }
+	if (!strcasecmp(s, "R") || !strcasecmp(s, "L")) {
+		*first = !strcasecmp(s, "L") ? NROWS : 0; *last = *first + NROWS - 1; return 0;
+	}
+	if (dash) { a = led_id(s, (size_t)(dash - s)); b = led_id(dash + 1, strlen(dash + 1)); }
+	else a = b = led_id(s, strlen(s));
+	if (a < 0 || b < 0) return -1;
+	*first = a < b ? a : b; *last = a < b ? b : a;
+	return 0;
+}
+
+/* The selection FIRST..LAST as the console names it: ALL, R1, R1-R4. */
+static void leds_name(int first, int last, char *buf, size_t n)
+{
+	char a[4], b[4];
+	led_name(first, a); led_name(last, b);
+	if (first == 0 && last == NLEDS - 1) snprintf(buf, n, "ALL");
+	else if (first == last) snprintf(buf, n, "%s", a);
+	else snprintf(buf, n, "%s-%s", a, b);
+}
+
+/* Send the whole pattern: one LED SET for each run of LEDs with the same color. */
+static int pattern_send(const struct state *st)
+{
+	char sel[16], line[64];
+	for (int i = 0, j; i < NLEDS; i = j + 1) {
+		for (j = i; j + 1 < NLEDS && !memcmp(st->pat[j + 1], st->pat[i], sizeof st->pat[i]); j++)
+			;
+		leds_name(i, j, sel, sizeof sel);
+		snprintf(line, sizeof line, "LED SET %s %d %d %d", sel, st->pat[i][0], st->pat[i][1], st->pat[i][2]);
+		int e = bar_cmd(line, "ok", 0);
+		if (e) return e;
+	}
+	return 0;
+}
+
+/*
  * Set the wanted color (NULL keeps the old one), compute the output, send it
- * and record it. A new color or STOP_FX ends the recorded effect. Without
- * them, the recorded effect starts again after the color. The joins end an effect. But after a fade, the bar
- * keeps the fade color when the joins do not change its host color. So
- * "FX OFF" follows the joins.
+ * and record it. A new color ends the recorded pattern and effect, STOP_FX
+ * ends the effect. Without them, the recorded pattern and effect start again
+ * after the color. The joins end an effect. But after a fade, the bar keeps
+ * the fade color when the joins do not change its host color. So "FX OFF"
+ * follows the joins. With a pattern, "FX OFF" alone goes back to it.
  */
 static int apply(const int *want, int stop_fx)
 {
 	struct state st; read_state(&st);
-	int had_fx = st.fx[0] != 0, e, e_fx = 0;
+	int had_fx = st.fx[0] != 0, had_pat = st.pat_on, e, e_fx = 0;
 	if (want) {
 		memcpy(st.want, want, sizeof st.want);
 		if (want[0] || want[1] || want[2]) memcpy(st.last, want, sizeof st.last);
+		st.pat_on = 0;
 	}
 	if (want || stop_fx) st.fx[0] = 0;
 	if (had_fx && !fx_capable()) st.fx[0] = had_fx = 0;	/* the bar runs another firmware now */
+	if (had_pat && !leds_capable()) st.pat_on = had_pat = 0;
 	output_for(st.want, st.out);
+	if (!want && stop_fx && st.pat_on) {	/* fx off: the firmware goes back to the pattern */
+		e = fx_send("off", 0);
+		if (!dry_run && !e) write_state(&st, backend_name());
+		return e;
+	}
 	e = send_rgb(st.out);
-	if (!e && st.fx[0]) e_fx = fx_send(st.fx, 0);
-	else if (!e && (had_fx || stop_fx)) {
+	if (!e && st.pat_on) e_fx = pattern_send(&st);
+	else if (!e && had_pat) e_fx = bar_cmd("LED CLEAR", "ok", 1);	/* ends the effect too */
+	if (!e && !e_fx && st.fx[0]) e_fx = fx_send(st.fx, 0);
+	else if (!e && !e_fx && !had_pat && (had_fx || stop_fx)) {
 		int e_off = fx_send("off", !stop_fx);
 		if (stop_fx) e_fx = e_off;
 	}
@@ -509,17 +656,24 @@ static int apply(const int *want, int stop_fx)
 	return e ? e : e_fx;
 }
 
-/* fx NAME ARGS: the value ranges of the firmware. COLOR: the first three values are R G B. */
+/*
+ * fx NAME ARGS: the value ranges of the firmware. COLOR: the first three
+ * values are R G B. LEDS: the effect needs the 16 LEDs (0.1.3).
+ */
 static const struct fxdef {
-	const char *name; int nmin, nmax, color; int lo[5], hi[5];
+	const char *name; int nmin, nmax, color, leds; int lo[6], hi[6];
 } fxdefs[] = {
-	{ "off", 0, 0, 0, { 0 }, { 0 } },
-	{ "fade", 4, 4, 1, { 0, 0, 0, 0 }, { 100, 100, 100, 600000 } },
-	{ "blink", 5, 5, 1, { 0, 0, 0, 1, 1 }, { 100, 100, 100, 600000, 600000 } },
-	{ "breathe", 4, 4, 1, { 0, 0, 0, 100 }, { 100, 100, 100, 600000 } },
-	{ "rainbow", 1, 2, 0, { 100, 0 }, { 600000, 100 } },
-	{ "smooth", 1, 1, 0, { 0 }, { 60000 } },
-	{ "cap", 1, 1, 0, { 10 }, { 150 } },
+	{ "off", 0, 0, 0, 0, { 0 }, { 0 } },
+	{ "fade", 4, 4, 1, 0, { 0, 0, 0, 0 }, { 100, 100, 100, 600000 } },
+	{ "blink", 5, 5, 1, 0, { 0, 0, 0, 1, 1 }, { 100, 100, 100, 600000, 600000 } },
+	{ "breathe", 4, 4, 1, 0, { 0, 0, 0, 100 }, { 100, 100, 100, 600000 } },
+	{ "rainbow", 1, 2, 0, 0, { 100, 0 }, { 600000, 100 } },
+	{ "smooth", 1, 1, 0, 0, { 0 }, { 60000 } },
+	{ "cap", 1, 1, 0, 0, { 10 }, { 150 } },
+	{ "chase", 4, 4, 1, 1, { 0, 0, 0, 100 }, { 100, 100, 100, 600000 } },
+	{ "fill", 4, 4, 1, 1, { 0, 0, 0, 0 }, { 100, 100, 100, 100 } },
+	{ "spectrum", 1, 2, 0, 1, { 100, 0 }, { 600000, 100 } },
+	{ "split", 6, 6, 1, 1, { 0, 0, 0, 0, 0, 0 }, { 100, 100, 100, 100, 100, 100 } },
 };
 
 static void __attribute__((noreturn)) usage(void);
@@ -528,10 +682,15 @@ static int to_int(const char *s, int lo, int hi, const char *what);
 static int cmd_fx(char **av, int n)
 {
 	const struct fxdef *d = NULL;
-	char rec[FXLEN], fw[128];
-	int v[5], len, e;
+	char rec[FXLEN], fw[128], what[32];
+	const char *mode = NULL;
+	int v[6], len, e;
 	for (size_t i = 0; n && i < sizeof fxdefs / sizeof fxdefs[0]; i++)
 		if (!strcmp(av[0], fxdefs[i].name)) d = &fxdefs[i];
+	/* spectrum MS [LEVEL] [ring|rows]: the layout of the hue circle (firmware default ring) */
+	if (d && !strcmp(d->name, "spectrum") && n >= 3 &&
+	    (!strcasecmp(av[n - 1], "ring") || !strcasecmp(av[n - 1], "rows")))
+		mode = av[--n];
 	if (n && (!d || n - 1 < d->nmin || n - 1 > d->nmax)) usage();
 	if (bar_firmware(fw, sizeof fw) || strncmp(fw, FX_FIRMWARE, strlen(FX_FIRMWARE)))
 		die("effects need the LED bar firmware %s (this bar: %s)", FX_FIRMWARE, fw[0] ? fw : "not found");
@@ -542,18 +701,60 @@ static int cmd_fx(char **av, int n)
 		if (!e) fputs(ans, stdout);
 		return e;
 	}
-	if (!strcmp(d->name, "off")) return apply(NULL, 1);
 	len = snprintf(rec, sizeof rec, "%s", d->name);
 	for (int i = 0; i < n - 1; i++) {
 		v[i] = to_int(av[i + 1], d->lo[i], d->hi[i], d->name);
 		len += snprintf(rec + len, sizeof rec - len, " %d", v[i]);
 	}
+	if (mode)	/* the level comes before the layout */
+		snprintf(rec + len, sizeof rec - len, "%s %s", n == 2 ? " 100" : "", tolower((unsigned char)mode[1]) == 'i' ? "ring" : "rows");
+	snprintf(what, sizeof what, "the effect %s", d->name);
+	if (d->leds && !leds_capable()) need_leds(what);
+	if (!strcmp(d->name, "off")) return apply(NULL, 1);
 	/* smooth and cap are settings, no effect */
 	if (!strcmp(d->name, "smooth") || !strcmp(d->name, "cap")) return fx_send(rec, 0);
-	/* The effect color stays with the effect. The wanted color is the color from before it. */
+	/* The effect color stays with the effect. The wanted color and the pattern are the base under it. */
 	struct state st; read_state(&st);
 	snprintf(st.fx, sizeof st.fx, "%s", rec);
 	e = fx_send(rec, 0);
+	if (!dry_run && !e) write_state(&st, backend_name());
+	return e;
+}
+
+/*
+ * led LEDS R G B, side R|L R G B, clear. The first LED command copies the
+ * wanted color (the host color of the bar) into all 16 LEDs, as the firmware
+ * does. A LED command ends the effect.
+ */
+static int cmd_leds(const char *cmd, char **av, int n)
+{
+	struct state st;
+	char line[64], sel[16];
+	int first = 0, last = -1, rgb[3], e;
+	if (!strcmp(cmd, "clear") ? n != 0 : n != 4) usage();
+	if (!strcmp(cmd, "led") && leds_arg(av[0], &first, &last))
+		die("led: '%s' is not a LED (R1..R8, L1..L8, 0..15), a range (R1-R4), a side (R, L) or ALL", av[0]);
+	if (!strcmp(cmd, "side")) {
+		if (strcasecmp(av[0], "R") && strcasecmp(av[0], "L")) die("side: '%s' is not R or L", av[0]);
+		leds_arg(av[0], &first, &last);
+	}
+	for (int i = 0; n && i < 3; i++) rgb[i] = to_int(av[i + 1], 0, 100, "color");
+	if (!leds_capable()) need_leds(!strcmp(cmd, "clear") ? "clear" : !strcmp(cmd, "led") ? "led" : "side");
+	read_state(&st);
+	if (!strcmp(cmd, "clear")) {
+		snprintf(line, sizeof line, "LED CLEAR");
+		st.pat_on = 0;
+	} else {
+		if (!st.pat_on)
+			for (int i = 0; i < NLEDS; i++) memcpy(st.pat[i], st.want, sizeof st.pat[i]);
+		st.pat_on = 1;
+		for (int i = first; i <= last; i++) memcpy(st.pat[i], rgb, sizeof st.pat[i]);
+		if (!strcmp(cmd, "side")) snprintf(sel, sizeof sel, "SIDE %c", first ? 'L' : 'R');
+		else { memcpy(sel, "SET ", 4); leds_name(first, last, sel + 4, sizeof sel - 4); }
+		snprintf(line, sizeof line, "LED %s %d %d %d", sel, rgb[0], rgb[1], rgb[2]);
+	}
+	st.fx[0] = 0;
+	e = bar_cmd(line, "ok", 0);
 	if (!dry_run && !e) write_state(&st, backend_name());
 	return e;
 }
@@ -564,8 +765,8 @@ static void __attribute__((noreturn)) usage(void)
 	      "  set R G B          color, each 0..100\n"
 	      "  on | off           last non-black color (else BOOT_COLOR) | black\n"
 	      "  boot               BOOT_COLOR of /etc/tsx/ledbar.conf\n"
-	      "  apply              re-send the wanted color and start the recorded effect again\n"
-	      "  get                print wanted/last/output color and the running effect\n"
+	      "  apply              send the wanted color, the recorded pattern and the recorded effect again\n"
+	      "  get                print wanted/last/output color, the running effect and the LED pattern\n"
 	      "  analog JOIN VALUE  one analog join packet (3/4/5 = red/green/blue level)\n"
 	      "  digital JOIN on|off  one digital join packet (0/1/2 = red/green/blue)\n"
 	      "  raw HEX...         any Cresnet packet, e.g. raw 00 05 14 00 03 00 64\n"
@@ -573,7 +774,8 @@ static void __attribute__((noreturn)) usage(void)
 	      "  console LINE [MS]  send LINE to the STM32 console (interface 0), print the answer\n"
 	      "                     (default 1500 ms), e.g. console 'tlcoutmode red 0'\n"
 	      "  info               backend and device details\n"
-	      "  fw                 firmware name of the bar, and \"effects yes\" for TSX-LEDBAR\n"
+	      "  fw                 firmware name of the bar, \"effects yes\" for TSX-LEDBAR,\n"
+	      "                     \"leds yes\" for TSX-LEDBAR 0.1.3 and later (the 16 LEDs)\n"
 	      "  fx                 print the running effect (firmware TSX-LEDBAR only)\n"
 	      "  fx fade R G B MS   fade to a color (MS 0..600000)\n"
 	      "  fx blink R G B ON OFF  blink a color (ms on, ms off)\n"
@@ -581,8 +783,18 @@ static void __attribute__((noreturn)) usage(void)
 	      "  fx rainbow MS [LEVEL]  hue cycle (period MS, LEVEL 0..100, default 100)\n"
 	      "  fx smooth MS       ramp each new color over MS (0..60000, 0 = at once)\n"
 	      "  fx cap PERCENT     power cap of the three colors (10..150)\n"
-	      "  fx off             end the effect, show the wanted color from before it\n"
-	      "                     A new color (set, on, off, boot) ends an effect, apply starts it again\n"
+	      "  fx chase R G B MS  a dot runs down both sides, MS for one run (100..600000) (0.1.3)\n"
+	      "  fx fill R G B PERCENT  a level bar from the bottom up, PERCENT 0..100 (0.1.3)\n"
+	      "  fx spectrum MS [LEVEL] [ring|rows]  the hue circle on the bar (MS 100..600000,\n"
+	      "                     ring: around the bar (default), rows: along each side) (0.1.3)\n"
+	      "  fx split R G B R G B  the first color on the right side, the second on the left (0.1.3)\n"
+	      "  fx off             end the effect, show the pattern or the wanted color from before it\n"
+	      "  led LEDS R G B     set LEDs of the pattern: R1..R8, L1..L8 (top to bottom), 0..15,\n"
+	      "                     a range (R1-R4), a side (R, L) or ALL (0.1.3)\n"
+	      "  side R|L R G B     set one side of the pattern (0.1.3)\n"
+	      "  clear              drop the pattern, show the wanted color (0.1.3)\n"
+	      "                     A new color (set, on, off, boot) ends the pattern and the effect.\n"
+	      "                     A LED command ends the effect. apply starts both again\n"
 	      "  -n = print the packets instead of sending; --usb = use libusb even with the kernel driver\n",
 	      stderr);
 	exit(2);
@@ -634,15 +846,22 @@ int main(int argc, char **argv)
 		e = apply(NULL, 0);
 	} else if (!strcmp(cmd, "fx")) {
 		e = cmd_fx(av, n);
+	} else if (!strcmp(cmd, "led") || !strcmp(cmd, "side") || !strcmp(cmd, "clear")) {
+		e = cmd_leds(cmd, av, n);
 	} else if (!strcmp(cmd, "fw")) {
 		char fw[128];
-		if (bar_firmware(fw, sizeof fw)) { puts("firmware unknown\neffects no"); e = -ENODEV; }
-		else printf("firmware %s\neffects %s\n", fw, fx_capable() ? "yes" : "no");
+		if (bar_firmware(fw, sizeof fw)) { puts("firmware unknown\neffects no\nleds no"); e = -ENODEV; }
+		else printf("firmware %s\neffects %s\nleds %s\n", fw, fx_capable() ? "yes" : "no", leds_capable() ? "yes" : "no");
 	} else if (!strcmp(cmd, "get")) {
 		struct state st;
 		if (read_state(&st)) { puts("unknown (no state yet)"); return 0; }
-		printf("want %d %d %d\nlast %d %d %d\nout %d %d %d\nfx %s\n", st.want[0], st.want[1], st.want[2],
-		       st.last[0], st.last[1], st.last[2], st.out[0], st.out[1], st.out[2], st.fx[0] ? st.fx : "none");
+		printf("want %d %d %d\nlast %d %d %d\nout %d %d %d\nfx %s\nleds %s\n", st.want[0], st.want[1], st.want[2],
+		       st.last[0], st.last[1], st.last[2], st.out[0], st.out[1], st.out[2], st.fx[0] ? st.fx : "none",
+		       st.pat_on ? "pattern" : "host");
+		for (int i = 0; st.pat_on && i < NLEDS; i++) {
+			char nm[4]; led_name(i, nm);
+			printf("led %s %d %d %d\n", nm, st.pat[i][0], st.pat[i][1], st.pat[i][2]);
+		}
 	} else if (!strcmp(cmd, "analog")) {
 		if (n != 2) usage();
 		unsigned char p[8];

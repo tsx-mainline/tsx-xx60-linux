@@ -177,6 +177,25 @@ done
 [ ! -s "$T/cmds.log" ] && [ "$(grep -c 'rejected:' "$T/panelctl.log")" = $((r0 + 12)) ] && ok "12 bad fx lines rejected" || bad "bad fx lines: $(cat "$T/cmds.log")"
 kill -0 "$PID" 2>/dev/null && ok "daemon is still alive after the bad fx lines" || bad "daemon died"
 
+echo "== ledbar led, side, clear and the zone effects: the 16 LEDs of TSX-LEDBAR 0.1.3 =="
+: > "$T/cmds.log"
+for l in "fx chase 100 0 0 2000" "fx fill 0 80 0 50" "fx spectrum 8000" "fx spectrum 8000 40" "fx spectrum 8000 40 rows" "fx spectrum 8000 ring" "fx split 100 0 0 0 0 100" \
+	"led R3 100 0 0" "led L8 0 0 0" "led 0 1 2 3" "led 15 1 2 3" "led R1-R4 1 2 3" "led 8-11 1 2 3" "led R7-L2 1 2 3" \
+	"led ALL 1 2 3" "led R 1 2 3" "led L 1 2 3" "side R 0 50 0" "side L 0 0 50" "clear"; do
+	send "ledbar $l"
+	grep -qxF "tsx-ledbar $l" "$T/cmds.log" && ok "ledbar $l -> tsx-ledbar $l" || bad "ledbar $l: $(cat "$T/cmds.log")"
+done
+: > "$T/cmds.log"; r0=$(grep -c 'rejected:' "$T/panelctl.log")
+for l in "led R9 1 2 3" "led 16 1 2 3" "led 01 1 2 3" "led r3 1 2 3" "led all 1 2 3" "led R1- 1 2 3" "led -R1 1 2 3" \
+	"led R1-R2-R3 1 2 3" "led * 1 2 3" "led R3 101 0 0" "led R3 1 2" "led R3 1 2 3 4" "led R3 1 2 -3" "led ../x 1 2 3" \
+	"led R1;reboot 1 2 3" "led" "side X 1 2 3" "side ALL 1 2 3" "side r 1 2 3" "side R 1 2" "side R 1 2 3 4" "clear now" \
+	"fx chase 1 2 3" "fx split 1 2 3 4 5" "fx split 1 2 3 4 5 6 7" "fx fill 1 2 3 4 5" "fx spectrum" "fx spectrum 1 2 3" \
+	"fx spectrum 8000 40 diagonal" "fx spectrum ring" "fx spectrum 8000 rows rows" "fx spectrum 8000 40 RING" "fx rainbow 8000 rows"; do
+	send "ledbar $l"
+done
+[ ! -s "$T/cmds.log" ] && [ "$(grep -c 'rejected:' "$T/panelctl.log")" = $((r0 + 33)) ] && ok "33 bad LED lines rejected" || bad "bad LED lines: $(cat "$T/cmds.log")"
+kill -0 "$PID" 2>/dev/null && ok "daemon is still alive after the bad LED lines" || bad "daemon died"
+
 echo "== the seam: tsx-panelctl send, get, has, events =="
 PCTL="env PATH=$T/bin:$PATH TSX_RUN_DIR=$T/run TSX_IDLED_STATE=$T/idled.state TSX_BUTTONS_CONF=$T/buttons.conf TSX_ALS_CONF=$T/als.conf TSX_ASOUND_DIR=$T/asound busybox sh $SCRIPT"
 : > "$T/cmds.log"
@@ -217,6 +236,15 @@ $PFX has ledbar-fx && ok "has ledbar-fx: yes with TSX-LEDBAR" || bad "has ledbar
 printf 'firmware TSW-XX60-LB [v1.3443.00018]\neffects no\n' > "$T/fw"
 $PFX has ledbar-fx >/dev/null 2>&1; [ $? = 1 ] && ok "has ledbar-fx: exit 1 with the stock firmware" || bad "has ledbar-fx: yes with the stock firmware"
 rm -f "$T/fw"; $PFX has ledbar-fx >/dev/null 2>&1; [ $? = 1 ] && ok "has ledbar-fx: exit 1 without a bar" || bad "has ledbar-fx: yes without a bar"
+# has ledbar-leds: the line "leds yes" of "tsx-ledbar fw" (0.1.3 and later)
+printf 'firmware TSX-LEDBAR [v0.1.3]\neffects yes\nleds yes\n' > "$T/fw"
+$PFX has ledbar-leds && ok "has ledbar-leds: yes with 0.1.3" || bad "has ledbar-leds: no with 0.1.3"
+printf 'firmware TSX-LEDBAR [v0.1.2]\neffects yes\nleds no\n' > "$T/fw"
+$PFX has ledbar-leds >/dev/null 2>&1; [ $? = 1 ] && ok "has ledbar-leds: exit 1 with 0.1.2" || bad "has ledbar-leds: yes with 0.1.2"
+$PFX has ledbar-fx && ok "has ledbar-fx: yes with 0.1.2" || bad "has ledbar-fx: no with 0.1.2"
+printf 'firmware TSW-XX60-LB [v1.3443.00018]\neffects no\nleds no\n' > "$T/fw"
+$PFX has ledbar-leds >/dev/null 2>&1; [ $? = 1 ] && ok "has ledbar-leds: exit 1 with the stock firmware" || bad "has ledbar-leds: yes with the stock firmware"
+rm -f "$T/fw"; $PFX has ledbar-leds >/dev/null 2>&1; [ $? = 1 ] && ok "has ledbar-leds: exit 1 without a bar" || bad "has ledbar-leds: yes without a bar"
 $PCTL has ledbar-fx >/dev/null 2>&1; [ $? = 1 ] && ok "has ledbar-fx: exit 1 when tsx-ledbar has no answer" || bad "has ledbar-fx: yes when tsx-ledbar has no answer"
 printf 'want 0 0 80\nfx breathe 0 0 80 4000\n' > "$T/run/ledbar.state"
 [ "$($PCTL get ledbar-fx)" = "breathe 0 0 80 4000" ] && ok "get ledbar-fx: the effect" || bad "get ledbar-fx: $($PCTL get ledbar-fx)"
