@@ -36,6 +36,17 @@
 # model with no tested bar gets "LEDMAP DEFAULT": the firmware default map.
 # Older firmware and the stock firmware get no LEDMAP.
 #
+# Firmware file: after each plug-in and each start of the bar, the daemon
+# writes /run/tsx/ledbar.fw (mode 644). It holds the lines of "tsx-ledbar
+# fw" (firmware, effects, leds) and "caps" with the words of the answer to
+# CAPS ("caps none" when the bar has no CAPS). Only root can open the USB
+# device of the bar, and the CAPS query needs it. With this file, a program
+# that does not run as root (tsx-panelctl has, for the voice satellite) can
+# tell what the bar can do. The daemon removes the file when the bar goes
+# away, when the bar is in bootloader mode and when the service stops. So
+# the file exists only while the service runs. "tsx-ledbard check" does not
+# change it.
+#
 #   tsx-ledbard          run as the service
 #   tsx-ledbard check    check (and restart) the LED bar once, apply the
 #                        wanted color, then exit (1 if the bar stays dark)
@@ -44,14 +55,18 @@
 # TSX_LEDBAR_SYSFS (LED dir), TSX_LEDBAR_DRIVER (driver dir),
 # TSX_LEDBAR_TRIES, TSX_LEDBAR_WAIT (seconds for the STM32 to come back),
 # TSX_LEDBAR_CONF (the config file), TSX_RUN_DIR (the dir of the model
-# file), TSX_DT_COMPATIBLE (the compatible file of the device tree).
+# file and the firmware file), TSX_DT_COMPATIBLE (the compatible file of the
+# device tree).
 CONF=${TSX_LEDBAR_CONF:-/etc/tsx/ledbar.conf}
 USB=${TSX_USB_SYSFS:-/sys/bus/usb/devices}
 LED=${TSX_LEDBAR_SYSFS:-/sys/class/leds/tsx:rgb:bar}
 DRIVER=${TSX_LEDBAR_DRIVER:-/sys/bus/usb/drivers/leds-crestron-stm32}
 TRIES=${TSX_LEDBAR_TRIES:-3}
 WAIT=${TSX_LEDBAR_WAIT:-20}
-MODEL_FILE=${TSX_RUN_DIR:-/run/tsx}/model
+RUN=${TSX_RUN_DIR:-/run/tsx}
+MODEL_FILE=$RUN/model
+FW_FILE=$RUN/ledbar.fw
+SERVICE=
 DT_COMPAT=${TSX_DT_COMPATIBLE:-/proc/device-tree/compatible}
 log() { echo "$(date '+%F %T') tsx-ledbar: $*"; }
 # the tools of the package tsx-ledbar-fw are in /usr/local/sbin
@@ -96,7 +111,7 @@ bar_map() {
 # CAPS): the map of LEDMAP in ledbar.conf, else the map of the panel model.
 map_setup() {
 	map_want=$(conf_word LEDMAP) map_has=
-	for map_w in $(tsx-ledbar console CAPS 2>/dev/null); do
+	for map_w in $fw_caps; do
 		[ "$map_w" = ledmap ] && map_has=1
 	done
 	if [ -z "$map_has" ]; then
@@ -125,11 +140,42 @@ map_setup() {
 	esac
 }
 
-# Log the firmware of the bar. With TSX-LEDBAR, send the LED map and the
-# effect settings.
+# bar_caps: the words of the answer to CAPS, or nothing. The answer of
+# TSX-LEDBAR starts with the word tsx-ledbar. Any other answer gives nothing.
+bar_caps() {
+	set -- $(tsx-ledbar console CAPS 2>/dev/null | head -n 1 | tr -cs 'A-Za-z0-9._-' ' ')
+	[ "${1:-}" = tsx-ledbar ] && echo "$*"
+}
+
+# fw_publish OUT CAPS: write the firmware file (only the service). OUT is
+# the output of "tsx-ledbar fw", CAPS the words of bar_caps. A new file
+# replaces the old one in one step, so a reader never sees half a file.
+fw_publish() {
+	[ -n "$SERVICE" ] || return 0
+	if { printf '%s\n' "$1"; echo "caps ${2:-none}"; } > "$FW_FILE.tmp" 2>/dev/null &&
+		chmod 644 "$FW_FILE.tmp" && mv -f "$FW_FILE.tmp" "$FW_FILE"; then
+		return 0
+	fi
+	rm -f "$FW_FILE.tmp" "$FW_FILE"
+	log "cannot write $FW_FILE"
+}
+
+# fw_drop: remove the firmware file (only the service). Then tsx-panelctl
+# asks tsx-ledbar.
+fw_drop() { [ -z "$SERVICE" ] || [ ! -e "$FW_FILE" ] || rm -f "$FW_FILE"; }
+
+# Log the firmware of the bar and write the firmware file. With TSX-LEDBAR,
+# send the LED map and the effect settings.
 fx_setup() {
-	fw_out=$(tsx-ledbar fw 2>/dev/null)
+	fw_out=$(tsx-ledbar fw 2>/dev/null); fw_rc=$?
 	fw_name=$(echo "$fw_out" | sed -n 's/^firmware //p')
+	fw_caps=
+	case $fw_out in *"effects yes"*) fw_caps=$(bar_caps);; esac
+	if [ "$fw_rc" = 0 ] && [ -n "$fw_name" ]; then
+		fw_publish "$fw_out" "$fw_caps"
+	else
+		fw_drop
+	fi
 	smooth=$(conf_num FX_SMOOTH) cap=$(conf_num FX_CAP)
 	case $fw_out in
 	*"effects yes"*)
@@ -282,11 +328,17 @@ check)
 esac
 
 old_keys
+# A firmware file from an earlier run can be old: the bar can have changed
+# since then. The file exists only while this service runs.
+SERVICE=1
+fw_drop
+trap 'fw_drop; exit 0' TERM INT HUP
 cur= first=1 told= tried= btl_told=
 while :; do
 	if bar_id; then
 		if [ "$BAR" != "$cur" ]; then
 			btl_told=
+			fw_drop
 			if [ -n "$first" ]; then log "LED bar found"; else log "LED bar plugged in"; fi
 			told=1
 			wait_led
@@ -312,6 +364,7 @@ while :; do
 		# back to the bootloader later. The next pass finds the new
 		# application after a good load.
 		told=1 cur=
+		fw_drop
 		if [ -z "$tried" ]; then
 			tried=1 btl_told=1
 			btl_recover
@@ -322,6 +375,7 @@ while :; do
 	elif [ -n "$cur" ]; then
 		log "LED bar removed"
 		cur=
+		fw_drop
 	elif [ -z "$told" ]; then
 		log "LED bar not found yet (USB 14be:001b). Waiting for it"
 		told=1

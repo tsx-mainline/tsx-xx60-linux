@@ -7,6 +7,7 @@
 # Fake console: the chips report "not initialized" until the bar had
 # OK_AFTER restarts (file $T/ok_after). "silent" gives no answer.
 # Fake firmware: "tsx-ledbar fw" prints the file $T/fw (stock by default).
+# With the file $T/fw_fail it exits with 1, as the tool does without a bar.
 # "console CAPS" prints the file $T/caps. "console LEDMAP ..." answers as
 # TSX-LEDBAR 0.1.5 with the maps TSW-1060-LB and outputs.
 # Panel model: the file $T/run/model, or the device tree file $T/dt.
@@ -64,7 +65,7 @@ console)
 		exit 0;;
 	esac;;
 get) echo "want 0 0 20";;
-fw) cat "\$T/fw";;
+fw) cat "\$T/fw"; [ -e "\$T/fw_fail" ] && exit 1;;
 esac
 exit 0
 EOF
@@ -425,6 +426,106 @@ sleep 2
 [ "$(mapcalls)" = "LEDMAP TSW-1060-LB PANEL|" ] && ok "service map: no LEDMAP while the bar stays" || bad "service map: LEDMAP repeats: $(mapcalls)"
 [ "$(grep -c "LED map: sent LEDMAP TSW-1060-LB PANEL" "$T/log")" = 2 ] && ok "service map: one log line for each plug-in" || bad "service map: log $(cat "$T/log")"
 kill "$DPID"; wait "$DPID" 2>/dev/null; DPID=
+
+# 11. the firmware file $T/run/ledbar.fw for the users without root
+# (tsx-panelctl has ledbar-fx and ledbar-leds): the lines of "tsx-ledbar
+# fw" and "caps". Only the service writes it. It goes away with the bar, in
+# bootloader mode and when the service stops.
+FWF=$T/run/ledbar.fw
+OWN15L="$OWN15
+leds yes"
+OWN12L="firmware TSX-LEDBAR [v0.1.2]
+effects yes
+leds no"
+STOCKL="$STOCK
+leds no"
+CAPS12="tsx-ledbar fade blink breathe rainbow smooth cap status"
+fwfile_is() { [ -f "$FWF" ] && [ "$(cat "$FWF")" = "$1" ]; }
+
+# 11a. TSX-LEDBAR 0.1.5: the fw lines and the CAPS words. One CAPS query
+# serves the file and the LED map. The file is mode 644, also with umask 077.
+unplug; reset 0; rm -f "$T/fw_fail"; model TSS-10
+echo "$OWN15L" > "$T/fw"; echo "$CAPS15" > "$T/caps"
+echo "stale" > "$FWF"
+umask 077
+$SH "$D" > "$T/log" 2>&1 &
+DPID=$!
+umask 022
+sleep 1
+[ ! -e "$FWF" ] && ok "fw file: a file of an earlier run is removed at the start" || bad "fw file: stale file kept: $(cat "$FWF")"
+plug 5
+waitfor 'grep -qx boot "$T/calls"' >/dev/null
+fwfile_is "$OWN15L
+caps $CAPS15" && ok "fw file: 0.1.5, fw lines and caps" || bad "fw file 0.1.5: $(cat "$FWF" 2>&1)"
+[ "$(ls -l "$FWF" | cut -c1-10)" = "-rw-r--r--" ] && ok "fw file: mode 644 (umask 077)" || bad "fw file: mode $(ls -l "$FWF")"
+[ "$(grep -c -x 'console CAPS' "$T/calls")" = 1 ] && ok "fw file: one CAPS query for the file and the LED map" || bad "fw file: CAPS queries: $(grep -c -x 'console CAPS' "$T/calls")"
+[ "$(mapcalls)" = "LEDMAP TSW-1060-LB PANEL|" ] && ok "fw file: the LED map still comes from the CAPS words" || bad "fw file: map calls $(mapcalls)"
+a=$(callno fw); b=$(callno boot)
+[ -n "$a" ] && [ "$a" -lt "$b" ] && ok "fw file: written before the boot color" || bad "fw file: order fw $a boot $b"
+ls "$T/run" | grep -q '\.tmp$' && bad "fw file: a temp file is left: $(ls "$T/run")" || ok "fw file: no temp file left"
+
+# 11b. the bar goes away: no file. A stock bar comes: no CAPS query, "caps none".
+unplug
+waitfor 'grep -q "LED bar removed" "$T/log"' >/dev/null
+[ ! -e "$FWF" ] && ok "fw file: removed with the bar" || bad "fw file: kept after the removal"
+: > "$T/calls"; echo "$STOCKL" > "$T/fw"
+plug 6
+waitfor 'grep -qx apply "$T/calls"' >/dev/null
+fwfile_is "$STOCKL
+caps none" && ok "fw file: stock firmware, caps none" || bad "fw file stock: $(cat "$FWF" 2>&1)"
+! grep -q '^console CAPS' "$T/calls" && ok "fw file: no CAPS query to the stock firmware" || bad "fw file: CAPS sent to the stock firmware"
+
+# 11c. 0.1.2 (no leds16) after a replug: the file follows the new bar
+unplug; waitfor '[ ! -e "$FWF" ]' >/dev/null
+: > "$T/calls"; echo "$OWN12L" > "$T/fw"; echo "$CAPS12" > "$T/caps"
+plug 7
+waitfor 'grep -qx apply "$T/calls"' >/dev/null
+fwfile_is "$OWN12L
+caps $CAPS12" && ok "fw file: 0.1.2 after a replug" || bad "fw file 0.1.2: $(cat "$FWF" 2>&1)"
+
+# 11d. a fast replug (a new USB number, no pass without the bar): the new file
+: > "$T/calls"; echo "$OWN15L" > "$T/fw"; echo "$CAPS15" > "$T/caps"
+echo 8 > "$T/usb/2-1/devnum"
+waitfor 'grep -qx apply "$T/calls"' >/dev/null
+fwfile_is "$OWN15L
+caps $CAPS15" && ok "fw file: a new USB number gives a new file" || bad "fw file fast replug: $(cat "$FWF" 2>&1)"
+
+# 11e. an answer to CAPS that is not from TSX-LEDBAR: caps none
+unplug; waitfor '[ ! -e "$FWF" ]' >/dev/null
+: > "$T/calls"; echo "$OWN" > "$T/fw"; echo "unknown command: CAPS" > "$T/caps"
+plug 9
+waitfor 'grep -qx apply "$T/calls"' >/dev/null
+fwfile_is "$OWN
+caps none" && ok "fw file: an answer that is not CAPS gives caps none" || bad "fw file junk caps: $(cat "$FWF" 2>&1)"
+
+# 11f. bootloader mode: no file
+fwi_off
+plug_btl
+waitfor 'grep -q "package tsx-ledbar-fw is not installed" "$T/log"' >/dev/null
+[ ! -e "$FWF" ] && ok "fw file: removed in bootloader mode" || bad "fw file: kept in bootloader mode"
+
+# 11g. "tsx-ledbar fw" fails (no bar on the tool side): no file
+unplug; sleep 1; touch "$T/fw_fail"; : > "$T/calls"
+plug 10
+waitfor 'grep -qx apply "$T/calls"' >/dev/null
+[ ! -e "$FWF" ] && ok "fw file: no file when tsx-ledbar fw fails" || bad "fw file: written after a failed fw: $(cat "$FWF")"
+rm -f "$T/fw_fail"
+
+# 11h. the service stops: no file
+: > "$T/calls"; echo "$OWN15L" > "$T/fw"
+echo 11 > "$T/usb/2-1/devnum"
+waitfor '[ -e "$FWF" ]' >/dev/null
+kill "$DPID"; wait "$DPID" 2>/dev/null; DPID=
+[ ! -e "$FWF" ] && ok "fw file: removed when the service stops" || bad "fw file: kept after the stop"
+
+# 11i. "tsx-ledbard check" does not write or remove the file
+reset 0; echo "$OWN15L" > "$T/fw"; echo "$CAPS15" > "$T/caps"
+$SH "$D" check >/dev/null 2>&1
+[ ! -e "$FWF" ] && ok "fw file: check writes no file" || bad "fw file: check wrote $(cat "$FWF")"
+echo "kept" > "$FWF"; unplug
+$SH "$D" check >/dev/null 2>&1
+[ "$(cat "$FWF")" = kept ] && ok "fw file: check without a bar keeps the file of the service" || bad "fw file: check changed the file"
+rm -f "$FWF"
 
 [ $fail = 0 ] && echo "PASS tsx-ledbard host test"
 exit $fail
