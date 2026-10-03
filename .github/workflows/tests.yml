@@ -108,6 +108,8 @@ jobs:
         run: rootfs/tests/test-install.sh
       - name: installer/tests/check-android-tools.sh
         run: installer/tests/check-android-tools.sh
+      - name: provision/tests/test-panel-provision-login.sh
+        run: provision/tests/test-panel-provision-login.sh
       - name: installer/tests/test-mkpayload.sh
         run: installer/tests/test-mkpayload.sh
       - name: installer/tests/test-install-mainline-config.sh
