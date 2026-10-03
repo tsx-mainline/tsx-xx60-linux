@@ -133,7 +133,7 @@ apk add --root $R --initdb --no-cache -q --keys-dir /etc/apk/keys \
 cp -a /etc/apk/keys $R/etc/apk/
 # The panel list has the two repositories of this project first. That way
 # tsx-xx60-chromium wins the tie with the Alpine chromium (tsx-aports README
-# "Which chromium wins"). tsx-config apply writes this block, marker line
+# "Use the repositories on a panel"). tsx-config apply writes this block, marker line
 # included.
 {
 	echo "# tsx-aports (tsx-config apply. panel.conf APK_URL)"

@@ -387,7 +387,7 @@ seed_promote() {
 # APK_URL: the two apk repositories of this project (tsx-aports common +
 # xx60). They are always listed FIRST in /etc/apk/repositories, because
 # tsx-xx60-chromium must win the tie with the own chromium of Alpine (see
-# "Which chromium wins" in the tsx-aports README). The script rewrites only
+# "Use the repositories on a panel" in the tsx-aports README). The script rewrites only
 # the marked block, and only when it changes. The Alpine lines and anything
 # else that a user added stay as they are.
 APK_MARK="# tsx-aports (tsx-config apply; panel.conf APK_URL)"
