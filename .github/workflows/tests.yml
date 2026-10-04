@@ -153,6 +153,27 @@ jobs:
       - name: installer/factory/tests/test-emmc-restore.sh - skips without CAPTURES_DIR
         run: installer/factory/tests/test-emmc-restore.sh
 
+  # These tests run the shared software of tsx-linux-common with the xx60 board
+  # files of this repository. TSX_COMMON names the checkout of tsx-linux-common.
+  common-tests:
+    name: tsx-linux-common with the xx60 board files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check out tsx-linux-common
+        uses: actions/checkout@v4
+        with:
+          repository: tsx-mainline/tsx-linux-common
+          path: tsx-linux-common
+      - name: install the tools of the tests
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends busybox jq
+      - name: rootfs/tests/common/run.sh - the shared software with the xx60 board files
+        run: rootfs/tests/common/run.sh
+        env:
+          TSX_COMMON: ${{ github.workspace }}/tsx-linux-common
+
   # rootfs/tests/qemu-virt.sh and rootfs/tests/qemu/run.sh boot a full kernel +
   # rootfs image under qemu-system-arm. They need kernel.yml's and rootfs.yml's
   # artifacts first and take several minutes, so they are not run on every
