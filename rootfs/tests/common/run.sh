@@ -10,7 +10,7 @@
 # The lists are explicit. A new test goes into the list.
 set -u
 cd "$(dirname "$0")"
-TESTS="mqtt-dry test-board-xx60 test-ledbar-xx60 test-panel-board test-rescue-backlight test-rescue-screen test-tsx-config-apply test-tsx-setup-mac"
+TESTS="mqtt-dry test-board-xx60 test-buttons-xx60 test-ledbar-xx60 test-panel-board test-rescue-backlight test-rescue-screen test-tsx-config-apply test-tsx-setup-mac"
 if [ -n "${TSX_TEST_LOGDIR:-}" ]; then LOG=$TSX_TEST_LOGDIR; else LOG=$(mktemp -d); trap 'rm -rf "$LOG"' EXIT; fi
 pass=0 failed=
 for t in $TESTS; do

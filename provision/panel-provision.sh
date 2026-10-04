@@ -3,7 +3,7 @@
 # verify them. Run it from a workstation that reaches the panel over ssh. It
 # needs the secrets from ./ha-provision.py mint.
 #
-#   ./panel-provision.sh --panel <panel-ip> --ha-url <https://ha.example> --light <light.entity>
+#   ./panel-provision.sh --panel <panel-ip> --ha-url <https://ha.example>
 #                        [--key FILE | --password-file FILE] [--broker <host>]
 #                        [--user NAME] [--dashboard PATH] [--check] [--no-verify]
 #
@@ -21,7 +21,7 @@
 #
 # Over ssh, with every secret sent on stdin (never in argv), it does:
 #   1. /etc/tsx/ha-token      <- secrets/ha-token (0600)            tsx-buttons
-#   2. /etc/tsx/buttons.conf  HA_URL=$HA, light.CHANGE_ME -> $LIGHT
+#   2. /etc/tsx/buttons.conf  HA_URL=$HA (the front keys have no local action)
 #   3. tsx-config set MQTT_HOST/MQTT_USER/MQTT_PASSWORD + apply (panel.conf,
 #      docs/rootfs.md "Panel configuration"). This creates /run/tsx/mqtt.conf.
 #      tsx-mqtt reads it after its own defaults in /etc/tsx/mqtt.conf.
@@ -30,11 +30,11 @@
 #      kiosk-session reads /run/tsx/kiosk.conf after /etc/kiosk.conf.
 #   6. kiosk-set-token --file <secrets/kiosk-token>  (restarts the kiosk)
 # Then it verifies:
-#   a. tsx-keypad press lights toggles $LIGHT in HA (then toggles it back)
-#   b. the tsx_button event reaches HA. The script subscribes as the panel user.
+#   a. the tsx_button event reaches HA when "tsx-keypad press lights short" runs.
+#      The script subscribes as the panel user.
 #      If a non-admin cannot subscribe, /var/log/tsx-buttons.log has no curl error.
-#   c. MQTT discovery entities appear in HA (entity ids containing "tsx")
-#   d. the kiosk shows the dashboard, logged in (CDP via ssh -L 9222)
+#   b. MQTT discovery entities appear in HA (entity ids containing "tsx")
+#   c. the kiosk shows the dashboard, logged in (CDP via ssh -L 9222)
 # Backups of the edited files: /etc/tsx/*.pre-provision, /etc/kiosk.conf.pre-provision.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -42,20 +42,18 @@ S=$HERE/secrets
 PANEL=${PANEL_IP:-}
 HA=${HA_URL:-}
 DASH=tsw-1060/home   # path of the example dashboard in dashboard-tsw1060.yaml
-LIGHT=${LIGHT:-}
 BROKER=${BROKER:-}
 MQTT_USER=tsw1060    # the Home Assistant user of the panel (ha-provision.py --user)
 KEY=
 PWFILE=${PANEL_PASSWORD_FILE:-}
 VERIFY=1
 CHECK=0
-usage() { sed -n '2,36p' "$0"; }
+usage() { sed -n '2,38p' "$0"; }
 die() { echo "ERROR: $*" >&2; exit 2; }
 while [ $# -gt 0 ]; do
 	case $1 in
 	--no-verify) VERIFY=0;;
 	--check) CHECK=1;;
-	--light) [ $# -ge 2 ] || die "--light needs a value"; LIGHT=$2; shift;;
 	--panel) [ $# -ge 2 ] || die "--panel needs a value"; PANEL=$2; shift;;
 	--broker) [ $# -ge 2 ] || die "--broker needs a value"; BROKER=$2; shift;;
 	--ha-url) [ $# -ge 2 ] || die "--ha-url needs a value"; HA=$2; shift;;
@@ -69,8 +67,6 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$PANEL" ] || die "no panel. Give --panel <panel-ip> or set PANEL_IP."
 [ -n "$HA" ] || die "no Home Assistant URL. Give --ha-url https://ha.example.org or set HA_URL."
-[ -n "$LIGHT" ] || die "no light. Give --light <light.entity>, the light that the Lights key toggles."
-case $LIGHT in light.*) ;; *) die "bad --light $LIGHT (it must start with light.)";; esac
 case $HA in http://*|https://*) ;; *) die "bad --ha-url $HA (it must start with http:// or https://)";; esac
 HA=${HA%/}
 [ -z "$KEY" ] || [ -z "$PWFILE" ] || die "give --key or --password-file, not both."
@@ -124,7 +120,6 @@ echo "panel:       $PANEL"
 echo "login:       root, $METHOD"
 echo "HA URL:      $HA"
 echo "dashboard:   $HA/$DASH"
-echo "light:       $LIGHT"
 echo "MQTT:        host ${BROKER:-(none)}, user $MQTT_USER"
 echo "verify:      $([ $VERIFY = 1 ] && echo yes || echo no)"
 for f in ha-token kiosk-token tsw1060.password; do
@@ -147,10 +142,10 @@ p 'uname -r; for s in tsx-buttons tsx-mqtt kiosk; do [ -x /etc/init.d/$s ] && ec
 say "1. /etc/tsx/ha-token"
 p 'umask 077; mkdir -p /etc/tsx; cat > /etc/tsx/ha-token.new && chmod 600 /etc/tsx/ha-token.new && mv /etc/tsx/ha-token.new /etc/tsx/ha-token && ls -l /etc/tsx/ha-token | cut -c1-10,24-' < "$S/ha-token"
 
-say "2. /etc/tsx/buttons.conf: HA_URL=$HA, lights key -> $LIGHT"
+say "2. /etc/tsx/buttons.conf: HA_URL=$HA"
 p "set -e; f=/etc/tsx/buttons.conf; [ -e \$f.pre-provision ] || cp -p \$f \$f.pre-provision
-sed -i -e 's#^HA_URL=.*#HA_URL=$HA#' -e 's#light\\.CHANGE_ME#$LIGHT#' \$f
-grep -n '^HA_URL=\\|^HA_TOKEN_FILE=\\|^HA_EVENT=\\|^on lights' \$f"
+sed -i -e 's#^HA_URL=.*#HA_URL=$HA#' \$f
+grep -n '^HA_URL=\\|^HA_TOKEN_FILE=\\|^HA_EVENT=' \$f"
 
 say "3. panel.conf: MQTT_HOST=$BROKER MQTT_USER=$MQTT_USER MQTT_PASSWORD=(from stdin)"
 p "set -e
@@ -176,15 +171,10 @@ p 'umask 077; t=$(mktemp); cat > "$t"; kiosk-set-token --file "$t"; rc=$?; rm -f
 
 [ $VERIFY = 1 ] || { echo "done (no verification)"; exit 0; }
 
-say "a+b. lights key -> $LIGHT, tsx_button event"
-before=$("$HP" light-state --url "$HA" --light "$LIGHT")
-echo "$LIGHT before: $before"
+say "a. tsx_button event (a press of the lights key)"
 "$HP" wait-event --url "$HA" --timeout 25 > /tmp/provision-event.$$ 2>&1 & WPID=$!
 sleep 3
 p 'n=$(wc -l < /var/log/tsx-buttons.log); tsx-keypad press lights short; sleep 4; tail -n +$((n + 1)) /var/log/tsx-buttons.log' | tee /tmp/provision-blog.$$
-after=$("$HP" light-state --url "$HA" --light "$LIGHT")
-echo "$LIGHT after press: $after"
-[ "$before" != "$after" ] || bad "light did not change ($before -> $after)"
 wait $WPID && ev=1 || ev=0
 cat /tmp/provision-event.$$
 if [ $ev = 0 ]; then
@@ -192,17 +182,12 @@ if [ $ev = 0 ]; then
 	else echo "event: a non-admin cannot observe it. tsx-buttons logged no HA error (POST /api/events/tsx_button accepted)"; fi
 fi
 rm -f /tmp/provision-event.$$ /tmp/provision-blog.$$
-if [ "$before" != "$after" ]; then
-	echo "toggling back"; p 'tsx-keypad press lights short'; sleep 4
-	back=$("$HP" light-state --url "$HA" --light "$LIGHT"); echo "$LIGHT now: $back"
-	[ "$back" = "$before" ] || bad "light not restored ($back, want $before)"
-fi
 
-say "c. MQTT discovery entities (visible to the panel user)"
+say "b. MQTT discovery entities (visible to the panel user)"
 sleep 5
 "$HP" states-grep --url "$HA" --pattern tsx || bad "no tsx entities in HA (tsx-mqtt log above)"
 
-say "d. kiosk dashboard logged in (CDP through ssh -L 9222)"
+say "c. kiosk dashboard logged in (CDP through ssh -L 9222)"
 sleep 30   # the kiosk restarts and loads the dashboard (about 40 s after kiosk-set-token)
 sshx -o ExitOnForwardFailure=yes -N -L 19222:127.0.0.1:9222 \
 	root@$PANEL & TPID=$!

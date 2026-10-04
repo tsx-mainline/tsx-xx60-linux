@@ -152,7 +152,7 @@ printf 'NODE_ID=tsx-kiosk\nDEVICE_NAME=TSX test\n' > "$T/mq/mqtt.conf"
 # tsx-mqtt asks tsx-panelctl whether the sound card of the board is there
 printf '#!/bin/sh\nexec sh "%s" "$@"\n' "$(P usr/local/sbin/tsx-panelctl)" > "$T/mq/bin/tsx-panelctl"; chmod +x "$T/mq/bin/tsx-panelctl"
 mq() { echo | PATH=$T/mq/bin:$PATH TSX_MQTT_DRY=1 TSX_MQTT_CONF=$T/mq/mqtt.conf TSX_RUN_DIR=$T/mq/run TSX_ASOUND_DIR=$1 \
-	TSX_BUTTONS_CONF=$T/none TSX_KIOSK_CONF=$(P etc/kiosk.conf) TSX_PANEL_BOARD_CONF=$XX60_PANEL_BOARD sh "$(P usr/local/sbin/tsx-mqtt)" 2>&1; }
+	TSX_BUTTONS_CONF=$T/none TSX_BUTTONS_BOARD_CONF=$T/none TSX_KIOSK_CONF=$(P etc/kiosk.conf) TSX_PANEL_BOARD_CONF=$XX60_PANEL_BOARD sh "$(P usr/local/sbin/tsx-mqtt)" 2>&1; }
 out=$(mq "$T/mq/asound")
 echo "$out" | grep -q '"mdl":"xx60 (mainline Linux)"' && ok "the device model comes from the board file" || bad "mdl: $(echo "$out" | grep -m1 mdl | cut -c1-120)"
 echo "$out" | grep -q 'number/tsx-kiosk/volume/config' && ok "the volume entity follows the sound card of the board (TSW1060)" || bad "no volume entity with the card TSW1060"
@@ -163,7 +163,8 @@ echo "== the ESPHome shim =="
 export PYTHONDONTWRITEBYTECODE=1
 mkdir -p "$T/shim/run" "$T/shim/bl/x"
 env -i PATH="$PATH" TSX_BOARD_CONF="$BOARD" TSX_BOARD_BIN="$TSX_BOARD_BIN" TSX_RUN_DIR="$T/shim/run" TSX_BACKLIGHT_DIR="$T/shim/bl" \
-	TSX_BUTTONS_CONF="$XX60_BUTTONS" TSX_KIOSK_CONF="$(P etc/kiosk.conf)" TSX_PANEL_BOARD_CONF="$XX60_PANEL_BOARD" TSX_PANELCTL_BIN=/nonexistent \
+	TSX_BUTTONS_CONF="$(P etc/tsx/buttons.conf)" TSX_BUTTONS_BOARD_CONF="$XX60_BUTTONS" TSX_KIOSK_CONF="$(P etc/kiosk.conf)" \
+	TSX_PANEL_BOARD_CONF="$XX60_PANEL_BOARD" TSX_PANELCTL_BIN=/nonexistent \
 	python3 - "$COMMON/ha/voice/shim" <<'PY' 2>&1 | sed 's/^/  /'
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -172,7 +173,6 @@ b = PanelBackend()
 model = esphome_model(board_call("tsx_board_ha_model"), board_value("TSX_HA_MODEL"))
 assert model == "xx60 panel", model
 print("ok: the ESPHome model is", model)
-assert b.keypad_present()
 assert b.key_names() == ["power", "home", "lights", "up", "down"], b.key_names()
 print("ok: the five keys of the xx60:", " ".join(b.key_names()))
 assert b.get_backlight_max() == 23, b.get_backlight_max()

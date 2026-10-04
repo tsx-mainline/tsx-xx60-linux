@@ -37,7 +37,7 @@ echo secret-root-pw > "$W/pw"; : > "$W/emptypw"; echo key > "$W/key"
 export W_LOG=$W/log
 run() { PATH="$W/bin:$PATH" HOME="$W/home" env -u SSH_AUTH_SOCK -u PANEL_IP -u HA_URL -u PANEL_PASSWORD_FILE "$@"; }
 P=$W/prov/panel-provision.sh
-BASE=(--panel 192.0.2.9 --ha-url https://ha.test --light light.t)
+BASE=(--panel 192.0.2.9 --ha-url https://ha.test)
 
 echo "== missing login: stops before any ssh =="
 : > "$W_LOG"
@@ -48,7 +48,7 @@ echo "$OUT" | grep -q 'changed nothing' && ok "the message says that nothing cha
 [ ! -s "$W_LOG" ] && ok "no ssh call" || bad "ssh called: $(cat "$W_LOG")"
 
 echo "== required arguments =="
-for miss in --panel --ha-url --light; do
+for miss in --panel --ha-url; do
 	args=(); set -- "${BASE[@]}"
 	while [ $# -gt 0 ]; do [ "$1" = "$miss" ] && { shift 2; continue; }; args+=("$1"); shift; done
 	OUT=$(run "$P" "${args[@]}" --key "$W/key" 2>&1); RC=$?
@@ -87,7 +87,7 @@ grep -q "sshpass -f $W/pw" "$W_LOG" && ok "PANEL_PASSWORD_FILE works" || bad "en
 
 echo "== preflight =="
 OUT=$(run "$P" "${BASE[@]}" --key "$W/key" --broker mq.test --check 2>&1)
-for want in 'panel:       192.0.2.9' "login:       root, ssh key $W/key" 'HA URL:      https://ha.test' 'dashboard:   https://ha.test/tsw-1060/home' 'light:       light.t' 'host mq.test' 'login test:  ok' 'nothing written'; do
+for want in 'panel:       192.0.2.9' "login:       root, ssh key $W/key" 'HA URL:      https://ha.test' 'dashboard:   https://ha.test/tsw-1060/home' 'host mq.test' 'login test:  ok' 'nothing written'; do
 	echo "$OUT" | grep -qF "$want" && ok "preflight shows: $want" || bad "preflight lacks '$want': $OUT"
 done
 : > "$W_LOG"

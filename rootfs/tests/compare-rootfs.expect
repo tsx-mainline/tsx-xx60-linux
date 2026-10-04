@@ -8,6 +8,7 @@
 ^opt/lva/lib/micro_features_cpp\.abi3\.so$  extension compiled again in each image build
 ^(etc/init\.d/(kiosk|tsx-bt|tsx-config|tsx-data|tsx-hostname|tsx-idled|tsx-setup)|etc/kiosk\.conf|etc/local\.d/tsx-ip\.start|etc/securetty|usr/local/bin/(kiosk-session|tsx-orientation)|usr/local/sbin/(tsx-autoupdate|tsx-banner|tsx-config|tsx-mqtt|tsx-panelctl|tsx-setupd)|opt/lva/shim/.*)$  file of tsx-linux-common v0.1.1, newer than the copy in rootfs/overlay
 ^usr/sbin/tsx-orientation$  file of tsx-linux-common v0.1.1, newer than the copy in rootfs/overlay
+^(etc/tsx/buttons\.conf|usr/local/bin/(tsx-keypad|tsx-kiosk-page))$  file of tsx-linux-common 0.2.0 (the buttons.conf template, the tool tsx-kiosk-page), newer than the copy in rootfs/overlay. The keys are in buttons-board.conf
 ^usr/local/lib/tsx/serial\.sh$  new in tsx-base
 ^(etc/local\.d/tsx-banner\.start|etc/tsx/banner\.art|etc/tsx/boot-verbose|etc/udhcpc/post-bound/tsx-banner|usr/local/sbin/tsx-banner)$  banner files: tsx-base gives them to every profile (the old path gave them to the console profile only)
 ^usr/share/tsx/install-lva\.sh$  tsx-ha ships the script for the image build

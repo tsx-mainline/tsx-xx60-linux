@@ -50,6 +50,7 @@ overlay etc/sysctl.d/tsx.conf
 overlay etc/tsx/als.conf
 overlay etc/tsx/audio.conf
 overlay etc/tsx/autoupdate.conf
+overlay etc/tsx/buttons-board.conf
 overlay etc/tsx/buttons.conf
 overlay etc/tsx/ledbar.conf
 overlay etc/tsx/motd.board

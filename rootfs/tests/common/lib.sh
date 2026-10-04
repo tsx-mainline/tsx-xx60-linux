@@ -15,7 +15,9 @@
 #   TSX_BOARD_CONF  the xx60 board file (rootfs/overlay/usr/local/lib/tsx/board.sh)
 #   TSX_BOARD_BIN   tsx-board of tsx-linux-common
 #   XX60_PANEL_BOARD  the xx60 panel-board.conf
-#   XX60_BUTTONS    the xx60 key definitions (buttons.conf of the xx60 overlay)
+#   XX60_BUTTONS    the xx60 key definitions (buttons-board.conf of the xx60 overlay, the
+#                   board layer of tsx-buttons. buttons.conf is the template of
+#                   tsx-linux-common, and P etc/tsx/buttons.conf finds it)
 #   XX60_HW         tsx-hw of the xx60, the writer of /run/tsx/hw.conf
 #   XX60_LIB        tsx-lib.sh of the rescue system, which the board file needs there
 #   P PATH          prints the path of a file of tsx-linux-common by the path
@@ -34,7 +36,7 @@ export TSX_ROOT
 TSX_BOARD_CONF=$XX60/rootfs/overlay/usr/local/lib/tsx/board.sh
 TSX_BOARD_BIN=$COMMON/base/usr/local/bin/tsx-board
 XX60_PANEL_BOARD=$XX60/rootfs/overlay/etc/tsx/panel-board.conf
-XX60_BUTTONS=$XX60/rootfs/overlay/etc/tsx/buttons.conf
+XX60_BUTTONS=$XX60/rootfs/overlay/etc/tsx/buttons-board.conf
 XX60_HW=$XX60/rootfs/overlay/usr/local/sbin/tsx-hw
 XX60_LIB=$XX60/rootfs/initramfs/overlay/usr/share/tsx/tsx-lib.sh
 export TSX_BOARD_CONF TSX_BOARD_BIN
