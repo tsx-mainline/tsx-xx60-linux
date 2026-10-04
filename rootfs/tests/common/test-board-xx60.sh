@@ -196,7 +196,7 @@ mkdir -p "$T/bt/run"
 hw "console=tty0 androidboot.government=1"
 out=$(btup up 2>&1); rc=$?
 [ "$rc" = 0 ] && grep -qx 'state=absent' "$T/bt/run/bt.state" && ok "government=1: tsx-bt up ends with state=absent and exit 0" || bad "government=1: exit $rc, $(cat "$T/bt/run/bt.state" 2>/dev/null)"
-grep -qx 'reason=no Bluetooth module on this panel (government=1)' "$T/bt/run/bt.state" && ok "government=1: the reason comes from the chip file" || bad "government=1 reason: $(grep reason "$T/bt/run/bt.state")"
+grep -qx 'reason=government=1 (TSW-760-NC): no microphone, no camera, no Bluetooth module' "$T/bt/run/bt.state" && ok "government=1: the reason is the REASON text of hw.conf" || bad "government=1 reason: $(grep reason "$T/bt/run/bt.state")"
 # a panel with the module: the chip file runs. A host has no /dev/ttyAML1, so chip_up stops at once.
 hw "console=tty0 androidboot.government=0"
 rm -f "$T/bt/run/bt.state"

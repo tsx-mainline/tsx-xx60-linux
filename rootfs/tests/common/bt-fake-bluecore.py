@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """A fake CSR BlueCore on a pseudo terminal, for the host test of the PSR
-loader (rootfs/overlay/usr/local/lib/tsx/csr_psload.py).
+loader (rootfs/overlay/usr/local/lib/tsx/csr_psload.py). The tests
+test-bt-csr8811.sh and rootfs/tests/test-bt.sh run it.
 
   bt-fake-bluecore.py MODE RESULT -- COMMAND...
 
@@ -35,7 +36,7 @@ import subprocess
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "overlay", "usr", "local", "lib", "tsx"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "overlay", "usr", "local", "lib", "tsx"))
 import csr_psload as c  # noqa: E402
 
 

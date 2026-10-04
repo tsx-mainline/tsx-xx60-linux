@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # The chip part of tsx-bt for the CSR8811 Bluetooth controller of the xx60
 # panel (docs/hardware.md "Bluetooth (CSR8811)"). /usr/local/sbin/tsx-bt
-# reads this file with ". " and calls the functions below. It is not a
-# program. A board with another controller sets TSX_BT_CHIP to its own file
-# with the same functions. A board whose kernel driver registers hciN with no
-# help from user space sets TSX_BT_CHIP=none.
+# (tsx-linux-common) reads this file with ". " and calls the functions below.
+# It is not a program. The xx60 board.sh names this file in TSX_BT_CHIP.
+# csr_psload.py is the PSR loader that it runs. The file docs/layout.md
+# "Bluetooth chip file" of tsx-linux-common describes the interface.
 #
 # The functions of a chip file:
 #
@@ -40,7 +40,11 @@ BAUD=115200
 # installer/lib/tsx-psr.sh.
 PSR_PINNED=96709f6ca529efb0dc8cf48165ba0c1c1934236794424aa539810376676aa8be
 
-chip_absent_reason() { echo "no Bluetooth module on this panel (government=$(hw_get GOVERNMENT))"; }
+# Why this panel has no module: the REASON text of hw.conf (tsx-hw).
+chip_absent_reason() {
+	_r=$(hw_get REASON)
+	echo "${_r:-no Bluetooth module on this panel}"
+}
 
 # bdaddr_line MAC: PSKEY_BDADDR (&0001) as the vendor bt_getprop_mac.sh
 # writes it: "&0001 = 00m4 m5m6 00m3 m1m2".

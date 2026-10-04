@@ -63,7 +63,7 @@ EOF
 echo "== csr_psload.py: upload to a fake BlueCore =="
 fake() {  # fake MODE [loader args...]
 	local mode=$1; shift
-	python3 "$HERE/bt-fake-bluecore.py" "$mode" "$W/res-$mode.json" -- \
+	python3 "$HERE/common/bt-fake-bluecore.py" "$mode" "$W/res-$mode.json" -- \
 		python3 "$LIB/csr_psload.py" --device @TTY@ "$@" > "$W/fake-$mode.log" 2>&1
 }
 fake ok "$W/base.psr" "$W/mac.psr"
@@ -251,10 +251,10 @@ rm -rf "$S/class/bluetooth/hci0" "$R/bt.state" "$R/bt-bdaddr.psr"; : > "$LOG"
 echo 0 > "$S/class/rfkill/rfkill1/soft"
 printf 'GOVERNMENT=1\nMIC=no\nBT=no\nCAMERA=no\nREASON=government=1 (TSW-760-NC): no microphone, no camera, no Bluetooth module\n' > "$R/hw.conf"
 btsh status > "$W/abs0.log" 2>&1; rc=$?
-[ $rc = 0 ] && grep -q '^state=absent' "$W/abs0.log" && grep -q '^reason=no Bluetooth module on this panel (government=1)$' "$W/abs0.log" \
+[ $rc = 0 ] && grep -q '^state=absent' "$W/abs0.log" && grep -qx 'reason=government=1 (TSW-760-NC): no microphone, no camera, no Bluetooth module' "$W/abs0.log" \
 	&& ok "status before any run: state=absent with the reason, exit 0" || bad "status (absent, no state file): exit $rc, $(cat "$W/abs0.log")"
 btsh up > "$W/abs.log" 2>&1; rc=$?
-[ $rc = 0 ] && [ "$(st state)" = absent ] && st reason | grep -q 'no Bluetooth module on this panel (government=1)' \
+[ $rc = 0 ] && [ "$(st state)" = absent ] && [ "$(st reason)" = "government=1 (TSW-760-NC): no microphone, no camera, no Bluetooth module" ] \
 	&& ok "up: exit 0, state=absent, reason '$(st reason)'" || { bad "up (absent): exit $rc, $(cat "$R/bt.state" 2>/dev/null)"; cat "$W/abs.log"; }
 [ ! -s "$LOG" ] && [ "$(cat "$S/class/rfkill/rfkill1/soft")" = 0 ] && [ ! -e "$R/bt-bdaddr.psr" ] \
 	&& ok "up: no rfkill pulse, no PSR upload, no hciattach" || bad "up (absent) touched the chip: $(cat "$LOG"), soft=$(cat "$S/class/rfkill/rfkill1/soft")"

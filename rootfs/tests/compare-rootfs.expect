@@ -12,7 +12,7 @@
 ^usr/local/lib/tsx/serial\.sh$  new in tsx-base
 ^(etc/local\.d/tsx-banner\.start|etc/tsx/banner\.art|etc/tsx/boot-verbose|etc/udhcpc/post-bound/tsx-banner|usr/local/sbin/tsx-banner)$  banner files: tsx-base gives them to every profile (the old path gave them to the console profile only)
 ^usr/share/tsx/install-lva\.sh$  tsx-ha ships the script for the image build
-^(usr/local/lib/tsx/(bt-chip-csr8811\.sh|btgatt\.py|btscan\.py|csr_psload\.py)|usr/local/sbin/tsx-bt)$  Bluetooth tools: tsx-ha owns them, so the console and kiosk images no longer have them
+^(usr/local/lib/tsx/(btgatt\.py|btscan\.py)|usr/local/sbin/tsx-bt)$  Bluetooth tools: tsx-ha owns them, so the console and kiosk images do not have them. The chip file and csr_psload.py belong to the board package, so every image has them
 ^etc/motd$  motd of alpine-baselayout (the old path deleted it in the console image). tsx-banner writes it at boot
 # initramfs
 ^usr/local/bin/tsx-splash$  compiled in the package build (other flags), same source, other bytes
