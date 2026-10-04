@@ -94,6 +94,12 @@ KERNEL_FLAVOR=lts
 # timeout" number in Home Assistant, which writes this key.
 #BLANK_TIMEOUT=
 
+# The level of the key LEDs while the screen is blank (the screen-off level),
+# 0 to 255. 0 makes the keys dark. Unset = LED_BLANK of /etc/tsx/buttons.conf
+# (24). This is also the "Key LEDs screen-off level" number in Home Assistant,
+# which writes this key.
+#KEY_LED_BLANK=
+
 # 1 = show kernel and boot text on the LCD instead of the boot splash, from the
 # next boot on (for debugging a boot). The serial console always has the text.
 # Unset or 0 = the splash. See docs/boot.md "Boot splash".
