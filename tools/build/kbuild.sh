@@ -19,8 +19,8 @@
 #   (default steps: kernel image)
 #
 # Flavor: -f, --flavor or $FLAVOR selects one of the two kernel flavors.
-# lts is the default. It tracks kernel/KERNEL_REV.lts, branch tsx-xx60-6.18.
-# stable uses kernel/KERNEL_REV.stable, branch tsx-xx60-7.2. Both branches
+# lts is the default. It tracks kernel/KERNEL_REV.lts, branch tsx-xx60-lts.
+# stable uses kernel/KERNEL_REV.stable, branch tsx-xx60-stable. Both branches
 # use the same config fragment name, arch/arm/configs/tsx-xx60.config.
 #
 # Kernel source: LINUX_DIR (default: ../linux-<flavor>, a sibling checkout of

@@ -41,7 +41,7 @@ git checkout -q -b master; echo up > b; git add b; git commit -q -m base
 cd "$W"
 git clone -q "$W/upstream" linux
 cd "$W/linux"; git remote rename origin torvalds
-git checkout -q -b tsx-xx60-6.18 torvalds/master
+git checkout -q -b tsx-xx60-lts torvalds/master
 echo f > feature; git add feature; git commit -q -m "feature: fine"
 # built from split words so this line never spells the AI-attribution/leak
 # patterns it exists to exercise (see leak-patterns.txt / REPO-RULES.md)
@@ -54,7 +54,7 @@ dd if=/dev/zero of=big.bin bs=1M count=3 status=none 2>/dev/null
 git add big.bin; git commit -q -m "oops big blob"
 : > sshShell.sh; git add sshShell.sh; git commit -q -m "oops proprietary"
 git tag local/scratch; git tag pre-scrub-v1
-git checkout -q -b tsx-xx60-7.2 torvalds/master
+git checkout -q -b tsx-xx60-stable torvalds/master
 echo f > feature72; git add feature72; git commit -q -m "feature: clean flavor"
 cd "$W"
 
@@ -68,7 +68,7 @@ run() { "$SCRIPT" --leak-patterns "$W/fixture-patterns.txt" --repo xx60-linux="$
 
 # --- squash: a clean single commit, no trace of the removed-but-still- ----
 # -in-history leak, correct author -----------------------------------------
-out=$(run --squash-branch squashed --linux-branch tsx-xx60-7.2 2>&1); rc=$?
+out=$(run --squash-branch squashed --linux-branch tsx-xx60-stable 2>&1); rc=$?
 echo "$out" | grep -q 'squash: refs/heads/squashed' && ok "squash branch created" || bad "no squash message in output"
 [ "$(git -C "$W/xxl" rev-list --count squashed)" = 1 ] && ok "squash branch has exactly one commit" || bad "squash branch commit count wrong"
 git -C "$W/xxl" log -1 --format='%an <%ae>' squashed | grep -qF 'unex <7575866+unex@users.noreply.github.com>' \
@@ -79,7 +79,7 @@ echo "$out" | grep -q '^-- tsx-xx60-linux:squashed' && echo "$out" | sed -n '/^-
 [ "$rc" = 0 ] && ok "clean-only run (7.2 branch, which is clean) exits 0" || bad "expected exit 0 for the clean-only run, got $rc"
 
 # --- dirty linux branch: every category must be caught --------------------
-out=$(run --squash-branch squashed2 --linux-branch tsx-xx60-6.18 2>&1); rc=$?
+out=$(run --squash-branch squashed2 --linux-branch tsx-xx60-lts 2>&1); rc=$?
 [ "$rc" = 1 ] && ok "dirty run exits 1" || bad "expected exit 1 for the dirty run, got $rc"
 echo "$out" | grep -q 'AI ATTRIBUTION hits' && echo "$out" | grep -qi 'claude' && ok "AI-attribution trailer caught" || bad "AI-attribution trailer missed"
 echo "$out" | grep -q 'PRIVATE KEY hits' && echo "$out" | grep -q 'BEGIN RSA PRIVATE KEY' && echo "$out" | grep -q 'id.rsa (no matching .pub)' \
@@ -93,7 +93,7 @@ echo "$out" | grep -q 'local/pre-scrub-\* tags present\|local-only tags present'
 # history walk (a pathspec on git log/rev-list prunes TREESAME commits.
 # This is what the AI-attribution assertion above already exercises, but
 # assert directly that the commit is not just accidentally absent upstream) -
-git -C "$W/linux" log --oneline tsx-xx60-6.18 | grep -q '^[0-9a-f]* oops$' && ok "fixture's empty commit exists on the branch" || bad "test fixture itself is wrong"
+git -C "$W/linux" log --oneline tsx-xx60-lts | grep -q '^[0-9a-f]* oops$' && ok "fixture's empty commit exists on the branch" || bad "test fixture itself is wrong"
 
 # --- never pushes, never adds a remote -------------------------------------
 echo "$out" | grep -q '^git push ' && ok "prints push commands" || bad "no push commands printed"
@@ -140,7 +140,7 @@ fixup $(h import~1)
 pick $(h import)
 TODO
 cd "$W"
-out=$(run --repo xx60-linux="$W/tdl" --squash-branch todo1 --todo "$W/todo.txt" --msg-dir "$W/msgs" --linux-branch tsx-xx60-7.2 2>&1); rc=$?
+out=$(run --repo xx60-linux="$W/tdl" --squash-branch todo1 --todo "$W/todo.txt" --msg-dir "$W/msgs" --linux-branch tsx-xx60-stable 2>&1); rc=$?
 [ "$(git -C "$W/tdl" rev-list --count todo1)" = 3 ] && ok "todo: three commits" || { bad "todo: wrong commit count"; echo "$out" | head -20; }
 git -C "$W/tdl" diff --quiet import todo1 && ok "todo: final tree equals import" || bad "todo: final tree differs from import"
 echo "$out" | grep -q 'tree check: todo1 has the tree of import' && ok "todo: tree check reported" || bad "todo: no tree check line"
@@ -165,17 +165,17 @@ fixup $(git -C "$W/tdl" rev-parse --short side2)
 fixup $(git -C "$W/tdl" rev-parse --short import~1)
 fixup $(git -C "$W/tdl" rev-parse --short import)
 TODO
-out=$(run --repo xx60-linux="$W/tdl" --squash-branch todo2 --todo "$W/todo-bad.txt" --msg-dir "$W/msgs" --linux-branch tsx-xx60-7.2 2>&1); rc=$?
+out=$(run --repo xx60-linux="$W/tdl" --squash-branch todo2 --todo "$W/todo-bad.txt" --msg-dir "$W/msgs" --linux-branch tsx-xx60-stable 2>&1); rc=$?
 [ "$rc" = 1 ] && echo "$out" | grep -q 'does not close at a first-parent commit' && ok "todo: a group that cuts a merge is refused" || bad "todo: bad group not refused"
 
 # a missing message file must fail
 printf '# G09 [x] only\npick %s\n' "$(git -C "$W/tdl" rev-parse --short import~4)" > "$W/todo-nomsg.txt"
-out=$(run --repo xx60-linux="$W/tdl" --squash-branch todo3 --todo "$W/todo-nomsg.txt" --msg-dir "$W/msgs" --linux-branch tsx-xx60-7.2 2>&1); rc=$?
+out=$(run --repo xx60-linux="$W/tdl" --squash-branch todo3 --todo "$W/todo-nomsg.txt" --msg-dir "$W/msgs" --linux-branch tsx-xx60-stable 2>&1); rc=$?
 [ "$rc" = 1 ] && echo "$out" | grep -q 'missing message file' && ok "todo: a missing message file is refused" || bad "todo: missing message not refused"
 
 # a todo that stops before the end of import fails the tree check
 printf '# G01 [x] one\npick %s\nfixup %s\nfixup %s\n' "$(git -C "$W/tdl" rev-parse --short import~4)" "$(git -C "$W/tdl" rev-parse --short side1)" "$(git -C "$W/tdl" rev-parse --short import~3)" > "$W/todo-short.txt"
-out=$(run --repo xx60-linux="$W/tdl" --squash-branch todo4 --todo "$W/todo-short.txt" --msg-dir "$W/msgs" --linux-branch tsx-xx60-7.2 2>&1); rc=$?
+out=$(run --repo xx60-linux="$W/tdl" --squash-branch todo4 --todo "$W/todo-short.txt" --msg-dir "$W/msgs" --linux-branch tsx-xx60-stable 2>&1); rc=$?
 [ "$rc" = 1 ] && echo "$out" | grep -q 'tree check FAILED' && ok "todo: a final tree that differs from import is refused" || bad "todo: tree check did not fail"
 
 # --- --leak-patterns is required -------------------------------------------

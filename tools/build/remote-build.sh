@@ -11,8 +11,8 @@
 #
 #   kernel [--flavor lts|stable | BRANCH]  push the worktree that has BRANCH checked
 #                    out. The default branch comes from --flavor or $FLAVOR:
-#                    lts (the default) gives tsx-xx60-6.18, stable gives
-#                    tsx-xx60-7.2. A literal BRANCH argument overrides both.
+#                    lts (the default) gives tsx-xx60-lts, stable gives
+#                    tsx-xx60-stable. A literal BRANCH argument overrides both.
 #                    The worktree is in the kernel fork checkout LINUX_DIR
 #                    (default ../linux next to this repo, one git worktree per
 #                    branch). The script also pushes the shared .git. It runs
@@ -88,7 +88,7 @@ set -- "${ARGS[@]}"
 CMD=${1:-}; ARG=${2:-}
 say() { echo "[remote-build] $*"; }
 case $FLAVOR in lts|stable) ;; *) echo "remote-build: --flavor/\$FLAVOR must be lts or stable (got $FLAVOR)"; exit 1;; esac
-flavor_branch() { case $1 in lts) echo tsx-xx60-6.18;; stable) echo tsx-xx60-7.2;; esac; }
+flavor_branch() { case $1 in lts) echo tsx-xx60-lts;; stable) echo tsx-xx60-stable;; esac; }
 
 # --- send guard: refuse to send ignored files, or untracked proprietary-looking
 # files, to the build host. A git-ignored folder (vendor-local, vendor-cache,

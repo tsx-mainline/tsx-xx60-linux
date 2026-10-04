@@ -33,7 +33,7 @@
 #                          ../tsx-aports, ../linux (the sibling layout that
 #                          tools/build/remote-build.sh uses)
 #   --linux-branch BRANCH  a branch of the "linux" repo to scan (repeatable).
-#                          Default: tsx-xx60-6.18 tsx-xx60-7.2 tsx-xx60.
+#                          Default: tsx-xx60-lts tsx-xx60-stable tsx-xx60.
 #                          The script skips branches that do not exist,
 #                          without a message.
 #   --linux-upstream-remote NAME  a remote of the "linux" repo whose history
@@ -73,7 +73,7 @@ declare -A REPOPATH=( [xx60-linux]="$REPO" [aports]="$TOP/tsx-aports" [linux]="$
 declare -A PUSHURL=( [xx60-linux]="https://github.com/tsx-mainline/tsx-xx60-linux" \
                      [aports]="https://github.com/tsx-mainline/tsx-aports" \
                      [linux]="https://github.com/tsx-mainline/linux" )
-LINUX_BRANCHES=(tsx-xx60-6.18 tsx-xx60-7.2 tsx-xx60)
+LINUX_BRANCHES=(tsx-xx60-lts tsx-xx60-stable tsx-xx60)
 UPSTREAM_REMOTES=(torvalds stable linux-next xdarklight)
 LINUX_BRANCHES_SET=0 UPSTREAM_REMOTES_SET=0
 
