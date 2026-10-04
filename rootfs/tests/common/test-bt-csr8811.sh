@@ -238,6 +238,13 @@ btsh down > "$W/abs2.log" 2>&1; rc=$?
 [ $rc = 0 ] && [ "$(st state)" = absent ] && [ "$(cat "$S/class/rfkill/rfkill1/soft")" = 0 ] && [ ! -s "$LOG" ] \
 	&& ok "down: exit 0, state stays absent, the rfkill is not touched" || bad "down (absent): exit $rc, $(cat "$R/bt.state"), soft=$(cat "$S/class/rfkill/rfkill1/soft")"
 btsh status | grep -q '^state=absent' && ok "status: state=absent" || bad "status (absent): $(btsh status)"
+# A hw.conf with an empty REASON, or with no REASON line: the chip file gives the short text
+for variant in 'BT=no\nREASON=\n' 'BT=no\n'; do
+	printf "$variant" > "$R/hw.conf"; rm -f "$R/bt.state"
+	btsh status > "$W/abs4.log" 2>&1; rc=$?
+	[ $rc = 0 ] && grep -qx 'reason=no Bluetooth module on this panel' "$W/abs4.log" \
+		&& ok "BT=no with no REASON text: the reason is the short text, no brackets" || bad "no REASON: exit $rc, $(cat "$W/abs4.log")"
+done
 # The script reads hw.conf, not the command line
 rm -f "$R/hw.conf" "$R/bt.state"; echo 'console=ttyAML0 androidboot.government=1' > "$W/proc/cmdline"
 btsh up > "$W/abs3.log" 2>&1

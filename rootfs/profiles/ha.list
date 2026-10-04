@@ -2,6 +2,8 @@
 # device, MQTT, the voice satellite, the Bluetooth proxy, Sendspin and
 # kiosk-set-token. Format: see console.list.
 
+overlay etc/conf.d/tsx-esphome
+overlay etc/conf.d/tsx-mqtt
 overlay etc/init.d/tsx-bt
 overlay etc/init.d/tsx-esphome
 overlay etc/init.d/tsx-mqtt

@@ -2,8 +2,8 @@
 # Host test for the rescue screen of tsx-linux-common
 # (rescue/usr/sbin/tsx-rescue-status) with the xx60 board file of this
 # repository. The xx60 keeps the data of the unit in the U-Boot env. The board
-# file reads it through tsx-lib.sh of the rescue system. The test uses the
-# real board.sh and the real tsx_env of tsx-lib.sh. Only the disk search and
+# file loads tsx-lib.sh of the rescue system and reads it through tsx_env. The
+# test uses the real board.sh and the real tsx_env of tsx-lib.sh. Only the disk search and
 # fw_printenv are fake. The test checks the model line, the firmware, the unit
 # id, the MAC from the env and the line widths. It needs no panel and no
 # compiler.
@@ -95,10 +95,14 @@ want '^model        : unknown   unit 00107f000003$' "no product name: the model 
 render
 want '^model        : unknown   unit unknown$' "an empty env: no model, no firmware, unit unknown"
 
+echo "== the screen sources only the board file =="
+# The shared screen names no helper file. The xx60 board file loads tsx-lib.sh by itself (TSX_LIB is its path here).
+grep -q 'tsx-lib\|TSX_LIB' "$RS" && bad "tsx-rescue-status of tsx-linux-common names tsx-lib.sh" || ok "tsx-rescue-status names no helper file"
+grep -q 'tsx-lib.sh' "$TSX_BOARD_CONF" && ok "the xx60 board file loads tsx-lib.sh" || bad "board.sh does not load tsx-lib.sh"
+
 echo "== no tsx-lib.sh =="
-# The xx60 board file needs tsx-lib.sh. A rescue image can come without it.
-# busybox ash stops a script when "." cannot read its file, so the screen must
-# test the file first.
+# A rescue image can come without tsx-lib.sh. busybox ash stops a script when
+# "." cannot read its file, so board.sh must test the file first.
 : > "$T/frame.raw"
 rc=0; TSX_LIB=$T/no-such-lib.sh $SH "$T/rs.sh" once || rc=$?
 sed 's/\x1b\[[0-9?;]*[A-Za-z]//g' "$T/frame.raw" > "$T/frame"

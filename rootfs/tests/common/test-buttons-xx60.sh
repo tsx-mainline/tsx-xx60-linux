@@ -126,4 +126,28 @@ printf 'LED_BLANK=9\n' >> $T/run/buttons.conf; kill -HUP $BPID; sleep 0.5
 echo blank > $T/idled.state; sleep 1.0
 [ "$(led keypad)" = 9 ] && [ "$(led key3)" = 1 ] || fail "blank screen: level $(led keypad), key3 $(led key3), want the screen-off level 9"
 ok "led 40, off and auto reach tsx:keypad. LED_BLANK=9 is the level of a blank screen"
+echo "== the top backlight level comes from the board file =="
+# The xx60 keys have no local action. A second daemon gets one binding for this
+# check (power short = brightness 99) on top of the real board layer. It runs
+# without brightness.state, so the top level is BACKLIGHT_MAX of the real
+# panel-board.conf (23), and not the limit of the device (31).
+T2=$T/ceiling; mkdir -p $T2/bl/x $T2/input $T2/run $T2/leds $T2/bin
+for l in tsx:keypad tsx:key1 tsx:key2 tsx:key3 tsx:key4 tsx:key5; do mkdir -p "$T2/leds/$l"; echo 0 > "$T2/leds/$l/brightness"; done
+echo 31 > $T2/bl/x/max_brightness; echo 17 > $T2/bl/x/brightness
+mkfifo $T2/input/event0
+printf 'on power short brightness 99\n' > $T2/buttons.conf
+printf '#!/bin/sh\nexit 0\n' > $T2/bin/pkill; chmod +x $T2/bin/pkill
+env PATH=$T2/bin:$PATH TSX_INPUT_DIR=$T2/input TSX_LED_DIR=$T2/leds TSX_BACKLIGHT_DIR=$T2/bl TSX_RUN_DIR=$T2/run \
+	TSX_IDLED_STATE=$T2/idled.state TSX_HOSTNAME=testpanel TSX_ORIENTATION_FILE=$T2/orientation \
+	TSX_BUTTONS_BOARD_CONF="$XX60_BUTTONS" TSX_PANEL_BOARD_CONF="$XX60_PANEL_BOARD" \
+	$T/tsx-buttons -c $T2/buttons.conf -v 2>$T2/buttons.log & CPID=$!; PIDS="$PIDS $CPID"
+exec 6<>$T2/input/event0
+sleep 0.6
+python3 -c 'import struct,sys,time; t=time.time(); sys.stdout.buffer.write(struct.pack("llHHi",int(t),0,1,183,1)+struct.pack("llHHi",int(t),0,0,0,0))' >&6
+sleep 0.1
+python3 -c 'import struct,sys,time; t=time.time(); sys.stdout.buffer.write(struct.pack("llHHi",int(t),0,1,183,0)+struct.pack("llHHi",int(t),0,0,0,0))' >&6
+sleep 0.8
+[ "$(cat $T2/bl/x/brightness)" = 23 ] && [ "$(cat $T2/run/brightness 2>/dev/null)" = 23 ] \
+	|| { cat $T2/buttons.log; fail "brightness 99: device $(cat $T2/bl/x/brightness), override '$(cat $T2/run/brightness 2>/dev/null)', want 23 (BACKLIGHT_MAX of panel-board.conf)"; }
+ok "brightness 99 stops at 23: BACKLIGHT_MAX of the xx60 panel-board.conf, not the device limit 31"
 echo "ALL OK"

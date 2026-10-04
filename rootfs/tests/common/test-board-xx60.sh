@@ -13,7 +13,9 @@
 #   - the Home Assistant model, the keys and the backlight range in the ESPHome shim
 #   - tsx-bt with the CSR8811 chip file, on a panel with and without the module
 #   - the kernel package name in tsx-autoupdate
-#   - the serial console
+#   - the serial console, and its line in securetty (the step of the tsx-config service)
+#   - the service order that the board gives in /etc/conf.d
+#   - the helper file of the rescue system that board.sh loads
 # The test needs no panel and no compiler.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -216,7 +218,46 @@ TSX_BOARD_CONF=$BOARD busybox sh "$BIN" __needs_reboot "tsx-base"; eq $? 1 "tsx-
 
 echo "== the serial console =="
 eq "$(env -i PATH="$PATH" sh -c ". '$BOARD'; . '$(P usr/local/lib/tsx/serial.sh)'; echo \"\$TSX_SERIAL_CONSOLE\"")" ttyAML0 "the board gives the serial console to serial.sh"
-grep -qx ttyAML0 "$XX60/rootfs/overlay/etc/securetty" && ok "securetty of the xx60 lists ttyAML0 (root login on the serial console)" || bad "securetty of the xx60 has no ttyAML0"
+# tsx-linux-common lists no board console in /etc/securetty. The start of the
+# tsx-config service adds the console of the board file (serial.sh). Run the
+# step of the service with the real board file on the securetty file of the
+# common package.
+PKG_TTY=$(P etc/securetty)
+grep -qx ttyAML0 "$PKG_TTY" && bad "the securetty of tsx-linux-common names the console of the xx60" || ok "the securetty of tsx-linux-common names no board console"
+cp "$PKG_TTY" "$T/securetty"
+env -i PATH="$PATH" TSX_BOARD_CONF="$BOARD" TSX_SECURETTY="$T/securetty" busybox sh -c ". '$BOARD'; . '$(P usr/local/lib/tsx/serial.sh)'; tsx_serial_allow_root"
+eq "$(tail -n 1 "$T/securetty")" ttyAML0 "the step adds the console of the xx60 board file to securetty (root login on the serial console)"
+env -i PATH="$PATH" TSX_BOARD_CONF="$BOARD" TSX_SECURETTY="$T/securetty" busybox sh -c ". '$BOARD'; . '$(P usr/local/lib/tsx/serial.sh)'; tsx_serial_allow_root"
+eq "$(grep -cx ttyAML0 "$T/securetty")" 1 "a second run adds no duplicate line"
+# The init script of the service runs the step. A copy with the tool paths moved and the OpenRC helpers stubbed runs start().
+mkdir -p "$T/svc-bin"
+for tool in tsx-hw tsx-emmc-state tsx-config; do printf '#!/bin/sh\nexit 0\n' > "$T/svc-bin/$tool"; chmod 755 "$T/svc-bin/$tool"; done
+sed -e "s|/usr/local/sbin/|$T/svc-bin/|g" -e "s|/usr/local/lib/tsx/serial.sh|$(P usr/local/lib/tsx/serial.sh)|g" "$(P etc/init.d/tsx-config)" > "$T/tsx-config.init"
+cp "$PKG_TTY" "$T/securetty.init"
+out=$(env -i PATH="$PATH" TSX_BOARD_CONF="$BOARD" TSX_SECURETTY="$T/securetty.init" busybox sh -c '. "$1"; checkpath() { :; }; ebegin() { :; }; eend() { :; }; ewarn() { echo "ewarn: $*"; }; start' sh "$T/tsx-config.init" 2>&1)
+[ -z "$out" ] && [ "$(tail -n 1 "$T/securetty.init")" = ttyAML0 ] && ok "start() of the tsx-config service gives ttyAML0 to securetty" || bad "tsx-config start(): '$out', $(tail -n 1 "$T/securetty.init")"
+
+echo "== the service order of the board =="
+# tsx-linux-common names no service of a board. The board package gives the
+# order of its light service in /etc/conf.d (rc_after).
+for svc in tsx-panelctl tsx-esphome tsx-mqtt; do
+	f=$XX60/rootfs/overlay/etc/conf.d/$svc
+	grep -qx 'rc_after="tsx-als"' "$f" 2>/dev/null && ok "conf.d/$svc: rc_after=\"tsx-als\"" || bad "conf.d/$svc has no rc_after for tsx-als"
+	busybox sh -n "$f" && ok "conf.d/$svc passes busybox sh -n" || bad "conf.d/$svc: busybox sh -n"
+done
+for init in base/etc/init.d/tsx-panelctl ha/etc/init.d/tsx-esphome ha/etc/init.d/tsx-mqtt; do
+	grep -q 'tsx-als' "$COMMON/$init" && bad "$init of tsx-linux-common names tsx-als" || ok "$init of tsx-linux-common names no service of the xx60"
+done
+
+echo "== board.sh loads the helper file of the rescue system =="
+# The shared scripts source only board.sh. On the rescue system, board.sh loads
+# tsx-lib.sh by itself (TSX_LIB is the path). Without the file, it loads nothing and does not fail.
+printf 'tsx_env() { echo from-helper-$1; }\n' > "$T/lib-stub.sh"
+eq "$(env -i PATH="$PATH" TSX_LIB="$T/lib-stub.sh" busybox sh -c ". '$BOARD'; type tsx_env >/dev/null 2>&1 && tsx_env x")" "from-helper-x" "board.sh sources the helper file: tsx_env is defined"
+eq "$(env -i PATH="$PATH" TSX_LIB="$T/lib-stub.sh" TSX_BOARD_ENV=product_name=wrong busybox sh -c ". '$BOARD'; tsx_board_model")" "from-helper-product_name" "with the helper file, the board functions read through tsx_env"
+out=$(env -i PATH="$PATH" TSX_LIB="$T/no-such-lib.sh" busybox sh -c "set -eu; . '$BOARD'; echo loaded; type tsx_env >/dev/null 2>&1 && echo has-helper" 2>&1)
+eq "$out" "loaded" "no helper file: board.sh loads, defines no tsx_env and does not stop the script (set -eu)"
+eq "$(env -i PATH="$PATH" TSX_LIB="$T/lib-stub.sh" busybox sh -c ". '$BOARD'; echo \"\${_tb_lib:-unset}\"")" "unset" "board.sh leaves no scratch variable"
 
 echo "== $N ok, $F failed =="
 [ "$F" = 0 ] && echo "PASS common/test-board-xx60" || { echo "FAIL common/test-board-xx60"; exit 1; }

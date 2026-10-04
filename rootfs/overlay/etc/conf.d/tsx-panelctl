@@ -1,0 +1,3 @@
+# /etc/conf.d/tsx-panelctl of the xx60 board: start after the light service tsx-als.
+# tsx-linux-common names no service of a board, so the board adds it here.
+rc_after="tsx-als"

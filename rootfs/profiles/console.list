@@ -18,6 +18,7 @@ overlay etc/asound.conf
 overlay etc/chrony/chrony.conf
 overlay etc/conf.d/chronyd
 overlay etc/conf.d/syslog
+overlay etc/conf.d/tsx-panelctl
 overlay etc/conf.d/watchdog
 overlay etc/fstab
 overlay etc/init.d/tsx-als

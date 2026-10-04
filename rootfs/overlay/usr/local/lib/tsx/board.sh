@@ -68,7 +68,18 @@
 #                          rescue system. DIR takes one scratch file. Fails
 #                          when the board data is not there.
 # Test hooks: TSX_ENV_CONF, TSX_RUN, TSX_FWENV_TIMEOUT, TSX_MMCBLK0,
-# TSX_BT_LIB, TSX_DT_COMPATIBLE (the compatible file of the device tree).
+# TSX_BT_LIB, TSX_DT_COMPATIBLE (the compatible file of the device tree),
+# TSX_LIB (the helper file below).
+
+# The helper file of the rescue system and the installers. It defines tsx_env,
+# tsx_find_disk and tsx_pick_fwenv, which the functions below use there. The
+# shared scripts of tsx-linux-common source only this file, so this file loads
+# the helper file. A running system and a rescue image can come without the
+# helper file. busybox ash stops a script when "." cannot read its file, so
+# the test comes first.
+_tb_lib=${TSX_LIB:-/usr/share/tsx/tsx-lib.sh}
+if [ -r "$_tb_lib" ]; then . "$_tb_lib"; fi
+unset _tb_lib
 
 TSX_FAMILY=${TSX_FAMILY:-xx60}
 TSX_APK_CATEGORY=${TSX_APK_CATEGORY:-xx60}

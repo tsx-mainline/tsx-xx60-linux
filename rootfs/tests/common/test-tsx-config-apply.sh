@@ -146,21 +146,23 @@ hw_detect() {  # hw_detect CMDLINE: write hw.conf with the real tsx-hw
 }
 cfg3() { env PATH="$W/bin:$PATH" TSX_CONF="$CFG3" TSX_RUN="$FX3/run" TSX_STATE_DIR="$FX3/var/lib/tsx" TSX_APPLY_PREFIX="$FX3" TSX_APPLY_ALLOW_NONROOT=1 busybox sh "$SCRIPT" "$@"; }
 hw_detect "console=tty0 androidboot.government=1"
-grep -qx 'REASON=government=1 (TSW-760-NC): no microphone, no camera, no Bluetooth module' "$FX3/run/tsx/hw.conf" \
+# The texts of tsx-config name the REASON line of hw.conf, as the tsx-hw of the xx60 writes it.
+REASON='government=1 (TSW-760-NC): no microphone, no camera, no Bluetooth module'
+grep -qxF "REASON=$REASON" "$FX3/run/tsx/hw.conf" \
 	&& ok "tsx-hw of the xx60: hw.conf names the missing parts" || bad "hw.conf: $(cat "$FX3/run/tsx/hw.conf")"
 for k in VOICE BT_PROXY BT_ACTIVE CAMERA; do
 	out=$(cfg3 set "$k" on 2>&1); rc=$?
-	[ $rc = 0 ] && [ "$(cfg3 get "$k")" = on ] && case "$out" in *"WARNING: $k=on is saved, but this panel has no "*"(government=1). apply leaves it out"*) true;; *) false;; esac \
+	[ $rc = 0 ] && [ "$(cfg3 get "$k")" = on ] && case "$out" in *"WARNING: $k=on is saved, but this panel has no "*"($REASON). apply leaves it out"*) true;; *) false;; esac \
 		&& ok "set $k on: saved (a panel.conf from another panel loads), with a warning" || bad "set $k on: exit $rc, '$out'"
 done
 out=$(cfg3 set CAMERA snapshot 2>&1)
-case "$out" in *"WARNING: CAMERA=snapshot is saved, but this panel has no camera (government=1)"*) ok "set CAMERA snapshot: saved, with a warning";; *) bad "set CAMERA snapshot (government=1): '$out'";; esac
+case "$out" in *"WARNING: CAMERA=snapshot is saved, but this panel has no camera ($REASON)"*) ok "set CAMERA snapshot: saved, with a warning";; *) bad "set CAMERA snapshot (government=1): '$out'";; esac
 out=$(cfg3 set CAMERA off 2>&1); [ -z "$out" ] && ok "set CAMERA off: no warning" || bad "set CAMERA off warns: $out"
 cfg3 set CAMERA on >/dev/null 2>&1
 out=$(cfg3 set VOICE off 2>&1); [ -z "$out" ] && ok "set VOICE off: no warning" || bad "set VOICE off warns: $out"
 cfg3 set VOICE on >/dev/null 2>&1
 out=$(cfg3 show 2>&1 >/dev/null)
-case "$out" in *"# WARNING: VOICE=on is set, but this panel has no microphone (government=1)"*"# WARNING: BT_PROXY=on is set"*"# WARNING: BT_ACTIVE=on is set"*) ok "show: a warning for each of the three keys";; *) bad "show warnings: $out";; esac
+case "$out" in *"# WARNING: VOICE=on is set, but this panel has no microphone ($REASON)"*"# WARNING: BT_PROXY=on is set"*"# WARNING: BT_ACTIVE=on is set"*) ok "show: a warning for each of the three keys";; *) bad "show warnings: $out";; esac
 rm -f "$W/audio.log" "$W/rc.log"
 out=$(cfg3 apply 2>&1); rc=$?
 [ $rc = 0 ] && grep -qx 'PROXY="off"' "$FX3/run/tsx/bt.conf" && grep -qx 'ACTIVE="off"' "$FX3/run/tsx/bt.conf" \
