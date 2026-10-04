@@ -6,7 +6,9 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # An arm64 runner. The Debian cross compiler (ci/Dockerfile.mainline) is
+    # available for arm64 hosts, so the cross build runs there without change.
+    runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
       matrix:
@@ -31,15 +33,16 @@ jobs:
           cat ../out-${{ matrix.flavor }}/kernel.commit
           cat ../out-${{ matrix.flavor }}/sha256sums.txt
 
+      # upload-artifact refuses a path with "..", so the files of the build
+      # (../out-<flavor>) are copied into the workspace first.
+      - name: collect the files to upload
+        run: |
+          mkdir -p upload
+          cp ../out-${{ matrix.flavor }}/* upload/
+          ls -l upload
+
       - uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ matrix.flavor }}-${{ steps.info.outputs.release }}
-          path: |
-            ../out-${{ matrix.flavor }}/zImage
-            ../out-${{ matrix.flavor }}/meson8m2-crestron-tsw1060.dtb
-            ../out-${{ matrix.flavor }}/meson8m2-crestron-tsw760.dtb
-            ../out-${{ matrix.flavor }}/test.img
-            ../out-${{ matrix.flavor }}/kernel.release
-            ../out-${{ matrix.flavor }}/kernel.commit
-            ../out-${{ matrix.flavor }}/sha256sums.txt
+          path: upload
           if-no-files-found: error

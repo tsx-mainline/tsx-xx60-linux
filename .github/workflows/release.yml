@@ -10,20 +10,25 @@ on:
 # fetched by the PANEL itself at install time over the network, never bundled
 # into a release asset).
 #
-# Job graph (each job runs on a plain ubuntu-latest runner, no --privileged
-# and no loop-device mounts anywhere -- mk-tsxroot-emmc.sh builds its ext4
-# with `mke2fs -d` straight from a directory tree, never a loopback mount):
+# Job graph (no job needs --privileged, and no job mounts a loop device to
+# build an image -- mk-tsxroot-emmc.sh builds its ext4 with `mke2fs -d` straight
+# from a directory tree, never a loopback mount):
 #   kernel (matrix lts/stable) -> rescue -----\
 #                               \-> rootfs ---> payload (matrix lts/stable) -> bundle -> publish
-# rootfs and the armv7 initramfs steps need the qemu-user armv7 binfmt
-# (docker/setup-qemu-action). The kernel build is a plain x86 cross-compile
-# and needs no qemu. NOTE: GitHub's arm64 hosted runners (Azure Cobalt 100,
-# an Armv9 core) most likely cannot execute armv7 (AArch32) code natively, so
-# the armv7 steps would still need qemu there and would gain little. The x86
-# runners are used for everything.
+#
+# Runners. The jobs that compile or run ARM code (kernel, rootfs, rescue) run
+# on the hosted arm64 runner ubuntu-24.04-arm. This runner runs armv7 (32-bit
+# ARM) containers natively. A job that uses docker --platform linux/arm/v7
+# needs no qemu-user binfmt (docker/setup-qemu-action) there, and it runs at
+# native speed. The kernel build is a cross compile. The Debian cross compiler
+# of ci/Dockerfile.mainline is available for arm64 hosts, so it runs there too.
+# The payload, kbundle, bundle and publish jobs only pack files. They compile
+# nothing and run no ARM code, so they stay on ubuntu-latest. The payload job
+# also needs x86: installer/emmc/mk-tsxroot-emmc.sh runs a linux/amd64 container,
+# and an arm64 runner has no x86 emulation.
 jobs:
   kernel:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
       matrix:
@@ -58,16 +63,20 @@ jobs:
       - name: this flavor's kernel modules tree (rootfs/build-rootfs.sh modules)
         run: KBUILD=../build-${{ matrix.flavor }} rootfs/build-rootfs.sh modules
 
+      # upload-artifact refuses a path with "..", so the small files of the
+      # build (../out-<flavor>) are copied into the workspace first. test.img
+      # stays out.
+      - name: collect the kernel files to upload
+        run: |
+          mkdir -p upload
+          cd ../out-${{ matrix.flavor }}
+          cp zImage meson8m2-crestron-*.dtb kernel.release kernel.commit sha256sums.txt "$GITHUB_WORKSPACE/upload/"
+          ls -l "$GITHUB_WORKSPACE/upload"
+
       - uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ matrix.flavor }}
-          path: |
-            ../out-${{ matrix.flavor }}/zImage
-            ../out-${{ matrix.flavor }}/meson8m2-crestron-tsw1060.dtb
-            ../out-${{ matrix.flavor }}/meson8m2-crestron-tsw760.dtb
-            ../out-${{ matrix.flavor }}/kernel.release
-            ../out-${{ matrix.flavor }}/kernel.commit
-            ../out-${{ matrix.flavor }}/sha256sums.txt
+          path: upload
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
@@ -81,7 +90,7 @@ jobs:
   # ci/build-rescue.sh's NOTE on why the flavor choice there is cosmetic).
   rescue:
     needs: [kernel, rootfs]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -91,10 +100,6 @@ jobs:
         with:
           path: rescue-out
           key: rescue-${{ hashFiles('installer/rescue/**', 'installer/rescue-v2/**', 'installer/initramfs/**', 'rootfs/initramfs/**', 'rootfs/overlay/**', 'kernel/KERNEL_REV.lts') }}
-
-      - name: register the armv7 qemu-user binfmt (docker --platform linux/arm/v7)
-        if: steps.cache.outputs.cache-hit != 'true'
-        uses: docker/setup-qemu-action@v3
 
       - uses: actions/download-artifact@v4
         if: steps.cache.outputs.cache-hit != 'true'
@@ -122,7 +127,7 @@ jobs:
 
   rootfs:
     needs: kernel
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -132,10 +137,6 @@ jobs:
         with:
           path: rootfs/out
           key: rootfs-${{ hashFiles('rootfs/**', 'kernel/KERNEL_REV.lts', 'kernel/KERNEL_REV.stable') }}
-
-      - name: register the armv7 qemu-user binfmt (docker --platform linux/arm/v7)
-        if: steps.cache.outputs.cache-hit != 'true'
-        uses: docker/setup-qemu-action@v3
 
       - uses: actions/download-artifact@v4
         if: steps.cache.outputs.cache-hit != 'true'

@@ -1,6 +1,8 @@
 #!/bin/bash
 # Build the xx60 kiosk rootfs (Alpine armv7) and the switch_root
-# initramfs. The build runs in docker with qemu-user binfmt.
+# initramfs. The build runs in docker. A host of another architecture needs
+# qemu-user binfmt for the armv7 containers. An arm64 host with 32-bit support
+# runs them natively.
 #
 #   ./build-rootfs.sh [modules|rootfs|initramfs|all]
 #
@@ -77,8 +79,23 @@ MODULES=$HERE/modules
 KVER=${KVER:-$(ls "$MODULES/lib/modules" 2>/dev/null | tr '\n' ' ' || true)}
 IMG_MB=${IMG_MB:-1492}
 UIDGID="$(id -u):$(id -g)"
-# The armv7 containers (rootfs, initramfs) need qemu-user. "modules" does not.
-need_binfmt() { [ -e /proc/sys/fs/binfmt_misc/qemu-arm ] || { echo "need qemu-arm binfmt (qemu-user-static)"; exit 1; }; }
+# The armv7 containers (rootfs, initramfs) must run on this host. This is true
+# with qemu-user binfmt (qemu-user-static), or natively on an arm64 host that
+# runs 32-bit code. A trial run of the build image tells both cases apart, and
+# the line that it prints shows which case this host is. "modules" does not
+# need it.
+need_armv7() {
+	local a
+	a=$(docker run --rm --platform linux/arm/v7 "$IMAGE" apk --print-arch) || {
+		echo "this host cannot run armv7 containers: it needs qemu-arm binfmt (qemu-user-static) or an arm64 host with 32-bit support"; exit 1; }
+	echo "armv7 container check: host $(uname -m), qemu-arm binfmt $([ -e /proc/sys/fs/binfmt_misc/qemu-arm ] && echo registered || echo absent), container $a"
+}
+
+# On a native arm64 host, uname -m of an armv7 container says aarch64 (the
+# kernel is 64-bit), and build tools would pick the 64-bit code. linux32 makes
+# it say armv8l, like a 32-bit ARM machine. Under qemu-user it says armv7l
+# already, and this prints nothing.
+arm32() { if [ "$(uname -m)" = aarch64 ]; then echo linux32; fi; }
 
 modules() {
 	# This step only reads the build dir of another agent. It runs no make and
@@ -118,7 +135,7 @@ modules() {
 }
 
 rootfs() {
-	need_binfmt
+	need_armv7
 	local mnt=() apk=()
 	[ -d "$MODULES" ] && mnt=(-v "$MODULES:/modules:ro")
 	if [ -n "${TSX_APK_LOCAL:-}" ]; then
@@ -131,11 +148,11 @@ rootfs() {
 		-e TSX_APK_URL="${TSX_APK_URL:-https://tsx-aports.unexceptional.net}" \
 		-e TFA_VENDOR_FETCH="${TFA_VENDOR_FETCH:-yes}" \
 		-e TSX_FROM_PACKAGES="${TSX_FROM_PACKAGES:-0}" -e TSX_SKIP_BOOT_CHECK="${TSX_SKIP_BOOT_CHECK:-0}" \
-		"$IMAGE" /w/mkrootfs.sh
+		"$IMAGE" $(arm32) /w/mkrootfs.sh
 }
 
 initramfs() {
-	need_binfmt
+	need_armv7
 	local mnt=() apk=()
 	if [ "${TSX_FROM_PACKAGES:-0}" = 1 ]; then
 		[ -n "${TSX_APK_LOCAL:-}" ] && [ -d "$TSX_APK_LOCAL/$ALPINE" ] || { echo "TSX_FROM_PACKAGES=1 needs TSX_APK_LOCAL (a tsx-aports published tree with $ALPINE/)"; exit 1; }

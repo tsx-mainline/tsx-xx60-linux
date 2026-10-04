@@ -2,8 +2,8 @@
 # Build the rootfs switch_root initramfs (with installer stage 2 integrated) into
 # installer/out instead of rootfs/out, so nobody's default artifact changes.
 # The recipe is the same as rootfs/build-rootfs.sh initramfs (armv7 alpine:3.24
-# under qemu-user, Alpine v3.24 packages). The rootfs is mounted read-only. It
-# takes ~1-2 min.
+# container, Alpine v3.24 packages). A host of another architecture runs the
+# container under qemu-user. The rootfs is mounted read-only. It takes ~1-2 min.
 #   initramfs/build-initramfs.sh [OUT.cpio.gz]
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)

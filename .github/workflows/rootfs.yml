@@ -6,12 +6,11 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # An arm64 runner. It runs the armv7 containers (docker --platform
+    # linux/arm/v7) natively, so the job needs no qemu-user binfmt.
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
-
-      - name: register the armv7 qemu-user binfmt (docker --platform linux/arm/v7)
-        uses: docker/setup-qemu-action@v3
 
       - name: build sendspin-cli from source (rootfs/src/sendspin/build.sh)
         run: rootfs/src/sendspin/build.sh

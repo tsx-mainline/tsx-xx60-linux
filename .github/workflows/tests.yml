@@ -6,7 +6,9 @@ on:
 jobs:
   lint:
     name: syntax + smoke
-    runs-on: ubuntu-latest
+    # An arm64 runner. The test image is Alpine (busybox, bash, python3), and
+    # Alpine has all of them for arm64.
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
       - name: build the test-runner image (busybox + bash + python3)
@@ -21,6 +23,11 @@ jobs:
   # unit's captured backup, or Crestron's proprietary firmware SKIPS itself
   # (it checks CAPTURES_DIR / PUF_FILE / SYSIMG and prints "SKIPPED ..."). No
   # such input is provided here, so those tests report skipped, not failed.
+  #
+  # This job stays on x86. The tools it installs (gcc, libmpv2, busybox, cpio)
+  # all exist for arm64. But installer/tests/test-tsx-data.sh and
+  # installer/emmc/tests/test-root-fallback.sh run linux/amd64 containers,
+  # and an arm64 runner has no x86 emulation.
   host-tests:
     name: host tests (no hardware)
     runs-on: ubuntu-latest
@@ -157,7 +164,10 @@ jobs:
   # files of this repository. TSX_COMMON names the checkout of tsx-linux-common.
   common-tests:
     name: tsx-linux-common with the xx60 board files
-    runs-on: ubuntu-latest
+    # An arm64 runner. The tests are shell scripts, plus one small C program
+    # that they compile with the gcc of the runner. busybox and jq exist for
+    # arm64.
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
       - name: check out tsx-linux-common

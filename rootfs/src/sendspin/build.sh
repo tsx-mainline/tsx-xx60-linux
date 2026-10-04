@@ -1,14 +1,15 @@
 #!/bin/bash
 # Build sendspin-cli (Sendspin/sendspin-cpp-cli, C++20) for Alpine 3.24 armv7
-# (musl) in an armv7 container (qemu-user, local by default). The upstream
-# armv7 release binaries are glibc (Debian trixie) and do not run on Alpine.
+# (musl) in an armv7 container (local by default). A host of another
+# architecture runs the container under qemu-user. The upstream armv7 release
+# binaries are glibc (Debian trixie) and do not run on Alpine.
 #   rootfs/src/sendspin/build.sh             -> rootfs/src/sendspin/out/sendspin-cli
 # Deps (Alpine): build-base cmake git linux-headers alsa-lib-dev avahi-compat-libdns_sd avahi-dev
 # Runtime on the panel: alsa-lib, avahi, avahi-compat-libdns_sd, dbus (avahi-daemon).
 # CMake FetchContent fetches everything else (ArduinoJson, micro-flac,
 # micro-opus, IXWebSocket) at pinned tags and links it statically.
 #
-# BUILD_HOST (optional, no default): run the qemu-user build over ssh on that
+# BUILD_HOST (optional, no default): run the build over ssh on that
 # host instead of here (for example a faster machine). If unset, build locally.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -21,7 +22,11 @@ if [ -n "${BUILD_HOST:-}" ] && [ -z "${ON_HOST:-}" ]; then
 	ls -l "$HERE/out"; exit 0
 fi
 mkdir -p "$HERE/out" "$HERE/cache"
-docker run --rm --platform linux/arm/v7 -v "$HERE:/w" -w /w alpine:3.24 sh -euc "
+# On a native arm64 host, uname -m of an armv7 container says aarch64 (the
+# kernel is 64-bit), and CMake would pick the 64-bit code. linux32 makes it say
+# armv8l, like a 32-bit ARM machine. Under qemu-user it says armv7l already.
+A32=; if [ "$(uname -m)" = aarch64 ]; then A32=linux32; fi
+docker run --rm --platform linux/arm/v7 -v "$HERE:/w" -w /w alpine:3.24 $A32 sh -euc "
 	apk add --no-cache build-base cmake samurai git linux-headers alsa-lib-dev avahi-compat-libdns_sd avahi-dev >/dev/null
 	[ -d cache/src/.git ] || git clone -q https://github.com/Sendspin/sendspin-cpp-cli cache/src
 	cd cache/src && git fetch -q --tags && git checkout -q $TAG && cd /w
