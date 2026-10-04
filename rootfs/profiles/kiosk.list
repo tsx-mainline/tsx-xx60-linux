@@ -16,6 +16,7 @@ overlay usr/local/bin/tsx-kiosk-reveal
 overlay usr/local/bin/tsx-kiosk-url
 overlay usr/local/bin/tsx-orientation
 overlay usr/local/bin/tsx-osk
+overlay usr/local/lib/tsx/kiosk.d/es2.sh
 overlay usr/local/sbin/tsx-chromium-es2
 overlay usr/local/sbin/tsx-setupd
 overlay usr/local/sbin/tsx-setup-helper

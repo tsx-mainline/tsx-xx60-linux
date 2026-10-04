@@ -6,7 +6,9 @@
 # scripts of tsx-linux-common against these files. It checks what each script
 # takes from the board:
 #   - the values of the board file, read with tsx-board
-#   - the kiosk renderer selection, with a fake sysfs, and the browser flags
+#   - the kiosk renderer selection, with a fake sysfs, and the kiosk hook
+#     kiosk.d/es2.sh (the ES2 browser mode of the Mali-450)
+#   - the browser flags that the hook gives to kiosk-session
 #   - the model name and the volume entity in tsx-mqtt (dry run)
 #   - the Home Assistant model, the keys and the backlight range in the ESPHome shim
 #   - tsx-bt with the CSR8811 chip file, on a panel with and without the module
@@ -42,7 +44,12 @@ echo "== kiosk renderer selection (fake sysfs) =="
 KS=$(P usr/local/bin/kiosk-session)
 sed -n '/^# --- renderer selection/,/^log "display=/p' "$KS" > "$T/sel.sh"
 [ "$(wc -l < "$T/sel.sh")" -gt 20 ] && ok "the renderer selection is in kiosk-session" || bad "cannot find the renderer selection"
-mkdir -p "$T/drivers/lima" "$T/drivers/meson" "$T/drivers/simple-framebuffer"
+# The hook of the xx60. The copy has the modes that the image gives it (root owns it, nobody else writes it).
+HOOK_SRC=$XX60/rootfs/overlay/usr/local/lib/tsx/kiosk.d/es2.sh
+[ -r "$HOOK_SRC" ] && ok "the xx60 overlay has the kiosk hook kiosk.d/es2.sh" || bad "no kiosk hook at $HOOK_SRC"
+busybox sh -n "$HOOK_SRC" && ok "the hook passes busybox sh -n" || bad "es2.sh: busybox sh -n"
+mkdir -p "$T/kiosk.d"; cp "$HOOK_SRC" "$T/kiosk.d/es2.sh"; chmod 755 "$T/kiosk.d"; chmod 644 "$T/kiosk.d/es2.sh"
+mkdir -p "$T/drivers/lima" "$T/drivers/panfrost" "$T/drivers/meson" "$T/drivers/simple-framebuffer"
 # mkdrm DIR [CARD:DRIVER...] render:DRIVER
 mkdrm() { d=$1; shift; rm -rf "$d"; mkdir -p "$d"
 	for a in "$@"; do
@@ -50,31 +57,53 @@ mkdrm() { d=$1; shift; rm -rf "$d"; mkdir -p "$d"
 		render:*) drv=${a#render:}; mkdir -p "$d/renderD128/device"; ln -s "$T/drivers/$drv" "$d/renderD128/device/driver";;
 		*) c=${a%%:*}; drv=${a#*:}; mkdir -p "$d/$c/device"; ln -s "$T/drivers/$drv" "$d/$c/device/driver"
 			# a display driver has a connector inside its card. A GPU with no display (lima) has none.
-			case "$drv" in lima) ;; *) mkdir -p "$d/$c/$c-LVDS-1";; esac;;
+			case "$drv" in lima|panfrost) ;; *) mkdir -p "$d/$c/$c-LVDS-1";; esac;;
 		esac
 	done; }
-# sel DRMDIR [KIOSK_GPU] [ES2_CHECK]: ES2_CHECK is the exit status of "tsx-chromium-es2 check" (default 0)
+# sel DRMDIR [KIOSK_GPU] [ES2_CHECK] [HOOKDIR]: ES2_CHECK is the exit status of "tsx-chromium-es2 check" (default 0).
+# HOOKDIR is the kiosk.d folder (default: the hook of the xx60). KIOSK_DISABLE_FEATURES in the environment is the starting value.
 sel() {
 	printf '#!/bin/sh\nexit %s\n' "${3:-0}" > "$T/es2-check"; chmod +x "$T/es2-check"
-	sed "s|/usr/local/sbin/tsx-chromium-es2|$T/es2-check|" "$T/sel.sh" > "$T/sel2.sh"
-	env -i PATH="$PATH" TSX_BOARD_CONF="$BOARD" TSX_DRM_SYS="$1" KIOSK_GPU="${2:-auto}" KIOSK_RENDER_ENV=auto sh -c '
+	env -i PATH="$PATH" TSX_BOARD_CONF="$BOARD" TSX_DRM_SYS="$1" KIOSK_GPU="${2:-auto}" KIOSK_RENDER_ENV=auto \
+		TSX_KIOSK_HOOK_DIR="${4:-$T/kiosk.d}" TSX_KIOSK_HOOK_UID="$(id -u)" TSX_ES2_TOOL="$T/es2-check" KIOSK_DISABLE_FEATURES="${KIOSK_DISABLE_FEATURES:-}" sh -c '
+		set -u   # as in kiosk-session
 		KIOSK_OSK=off KIOSK_URL=u ROLE=session
 		log() { echo "log: $*"; }
 		. "$TSX_BOARD_CONF"
-		. '"$T"'/sel2.sh
+		. '"$T"'/sel.sh
 		echo "WLR_RENDERER=$WLR_RENDERER WLR_DRM_DEVICES=${WLR_DRM_DEVICES:-} NOMOD=${WLR_DRM_NO_MODIFIERS:-} FMT=${CAGE_RENDER_FORMAT:-}"
-		echo "comp_gl=$comp_gl browser_gl=$browser_gl es2=$es2"' 2>&1; }
+		echo "comp_gl=$comp_gl browser_gl=$browser_gl flags=$KIOSK_BROWSER_GL_FLAGS features=$KIOSK_DISABLE_FEATURES"' 2>&1; }
 # on the xx60, lima is card0 and meson is card2
 mkdrm "$T/drm" card0:lima card2:meson render:lima
 out=$(sel "$T/drm")
 echo "$out" | grep -q "^log: display=/dev/dri/card2 (meson) render=/dev/dri/renderD128 renderer=gles2 browser_gpu=0" && ok "auto: meson display (card2), lima render node, GLES in the compositor, software browser" || bad "auto: $out"
 echo "$out" | grep -q "WLR_DRM_DEVICES=/dev/dri/card2 NOMOD=1 FMT=argb8888" && ok "auto: the display variables of the board are exported (no modifiers, ARGB8888)" || bad "auto, variables: $out"
-echo "$out" | grep -q "log: GPU is lima (GLES 2.0)" && ok "auto: the GLES 2.0 note names lima" || bad "auto, note: $out"
+echo "$out" | grep -q "log: GPU is lima (GLES 2.0)" && ok "auto: the hook notes that lima has GLES 2.0 only" || bad "auto, note: $out"
+echo "$out" | grep -q "^comp_gl=1 browser_gl=0 flags= features=$" && ok "auto: the hook changes nothing but the browser mode" || bad "auto, names: $out"
+out=$(sel "$T/drm" auto 0 "$T/no-kiosk.d")
+echo "$out" | grep -q "browser_gpu=1" && ok "auto without the hook: stock Chromium would get the GPU (the rule is in the hook)" || bad "auto without the hook: $out"
 out=$(sel "$T/drm" browser 0)
-echo "$out" | grep -q "^log: display=/dev/dri/card2 (meson) render=/dev/dri/renderD128 renderer=gles2 browser_gpu=1 es2=1" && ok "browser: GPU browser on lima through the ES2 path" || bad "browser: $out"
-echo "$out" | grep -q "comp_gl=1 browser_gl=1 es2=1" && ok "browser: GLES compositor, GPU browser, ES2" || bad "browser, flags: $out"
+echo "$out" | grep -q "^log: display=/dev/dri/card2 (meson) render=/dev/dri/renderD128 renderer=gles2 browser_gpu=1" && ok "browser: GPU browser on lima through the ES2 path" || bad "browser: $out"
+echo "$out" | grep -q "^log: es2 hook: KIOSK_GPU=browser, the Chromium ES2 patch is present" && ok "browser: the hook logs one line" || bad "browser, hook line: $out"
+echo "$out" | grep -q "^comp_gl=1 browser_gl=1 flags=--use-gl=angle --use-angle=gles --disable-webgl2 features=AllowANGLEPassthroughShaders$" && ok "browser: GLES compositor, GPU browser, ANGLE on GLES, WebGL2 off, passthrough shaders off" || bad "browser, names: $out"
+out=$(KIOSK_DISABLE_FEATURES=Prerender2,BackForwardCache sel "$T/drm" browser 0)
+echo "$out" | grep -q "features=AllowANGLEPassthroughShaders,Prerender2,BackForwardCache$" && ok "browser: the passthrough shaders go first, the features of kiosk.conf stay" || bad "browser, features: $out"
+out=$(KIOSK_DISABLE_FEATURES=Prerender2,AllowANGLEPassthroughShaders sel "$T/drm" browser 0)
+echo "$out" | grep -q "features=Prerender2,AllowANGLEPassthroughShaders$" && ok "browser: the passthrough shaders are not listed twice" || bad "browser, double feature: $out"
 out=$(sel "$T/drm" browser 1)
-echo "$out" | grep -q "browser_gpu=0 es2=0" && echo "$out" | grep -q "Chromium ES2 patch is not present" && ok "browser, no ES2 patch: software browser, with a log line" || bad "browser without the patch: $out"
+echo "$out" | grep -q "browser_gpu=0" && echo "$out" | grep -q "Chromium ES2 patch is not present" && ok "browser, no ES2 patch: software browser, with a log line" || bad "browser without the patch: $out"
+echo "$out" | grep -q "^comp_gl=1 browser_gl=0 flags= features=$" && ok "browser, no ES2 patch: GLES compositor, no GPU flags, features as they were" || bad "browser without the patch, names: $out"
+out=$(sel "$T/drm" browser 0 "$T/no-kiosk.d")
+echo "$out" | grep -q "browser_gpu=1" && echo "$out" | grep -q "^comp_gl=1 browser_gl=1 flags= features=$" && ok "browser without the hook: the value counts as auto (no ES2 flags)" || bad "browser without the hook: $out"
+mkdrm "$T/drm3" card2:meson
+out=$(sel "$T/drm3" browser 0)
+echo "$out" | grep -q "browser_gpu=0" && echo "$out" | grep -q "^comp_gl=1 " && ok "browser with no render node: GLES compositor, software browser" || bad "browser, no render node: $out"
+out=$(sel "$T/drm" on)
+echo "$out" | grep -q "browser_gpu=1" && ok "on: forces the GPU browser on lima (stock flags)" || bad "on: $out"
+echo "$out" | grep -q "GLES 2.0\|es2 hook" && bad "on: the hook speaks" || ok "on: the hook stays silent"
+mkdrm "$T/drmp" card0:panfrost card2:meson render:panfrost
+out=$(sel "$T/drmp")
+echo "$out" | grep -q "browser_gpu=1" && ok "auto on panfrost: the GPU browser stays (only lima has GLES 2.0 only)" || bad "auto on panfrost: $out"
 out=$(sel "$T/drm" off)
 echo "$out" | grep -q "renderer=pixman" && ok "off: pixman" || bad "off: $out"
 mkdrm "$T/drm1" card0:simple-framebuffer
@@ -88,18 +117,34 @@ echo "== the browser flags of the ES2 path =="
 # The browser part of kiosk-session, from the top of the browser section to the memory check.
 sed -n '/^# --- browser ---/,/^mem=\$(awk/p' "$KS" | sed '$d' > "$T/browser.sh"
 [ "$(wc -l < "$T/browser.sh")" -gt 30 ] && ok "the browser section is in kiosk-session" || bad "cannot find the browser section"
-flags() { # ES2 BROWSER_GL
-	env -i PATH="$PATH" sh -c '
+# flags DRMDIR KIOSK_GPU ES2_CHECK: the selection (with the hook of the xx60) and the browser section in one shell
+flags() {
+	printf '#!/bin/sh\nexit %s\n' "${3:-0}" > "$T/es2-check"; chmod +x "$T/es2-check"
+	env -i PATH="$PATH" TSX_BOARD_CONF="$BOARD" TSX_DRM_SYS="$1" KIOSK_GPU="${2:-auto}" KIOSK_RENDER_ENV=auto \
+		TSX_KIOSK_HOOK_DIR="$T/kiosk.d" TSX_KIOSK_HOOK_UID="$(id -u)" TSX_ES2_TOOL="$T/es2-check" KIOSK_DISABLE_FEATURES="${KIOSK_DISABLE_FEATURES:-}" sh -c '
+		set -u   # as in kiosk-session
+		KIOSK_OSK=off KIOSK_URL=u ROLE=browser
 		log() { :; }
-		KIOSK_PROFILE='"$T"'/profile KIOSK_SCALE=1 KIOSK_NO_SANDBOX=1 es2='"$1"' browser_gl='"$2"' TSX_BROWSER_GL_FLAGS=
+		. "$TSX_BOARD_CONF"
+		. '"$T"'/sel.sh
+		KIOSK_PROFILE='"$T"'/profile KIOSK_SCALE=1 KIOSK_NO_SANDBOX=1
 		. '"$T"'/browser.sh
 		echo "$@"' 2>&1; }
-f=$(flags 1 1)
-case " $f " in *" --use-gl=angle --use-angle=gles --ignore-gpu-blocklist --disable-webgl2 "*) ok "ES2: ANGLE on GLES, WebGL2 off";; *) bad "ES2 flags: $f";; esac
-case "$f" in *--disable-features=*AllowANGLEPassthroughShaders*) ok "ES2: ANGLE passthrough shaders off (the Mali-450 has no vertex texture units)";; *) bad "ES2 passthrough shaders: $f";; esac
-f=$(flags 0 0)
+# count FLAG LIST: how often the word FLAG is in LIST
+count() { printf '%s\n' "$2" | tr ' ' '\n' | grep -cx -- "$1"; }
+f=$(flags "$T/drm" browser 0)
+for w in --use-gl=angle --use-angle=gles --ignore-gpu-blocklist --disable-webgl2; do
+	eq "$(count "$w" "$f")" 1 "ES2: the flag $w is on the command line once"
+done
+case "$f" in *--disable-features=*,AllowANGLEPassthroughShaders*) ok "ES2: ANGLE passthrough shaders off (the Mali-450 has no vertex texture units)";; *) bad "ES2 passthrough shaders: $f";; esac
+case "$f" in *--disable-gpu-compositing*) bad "ES2: software flags: $f";; *) ok "ES2: GPU compositing stays on";; esac
+f=$(KIOSK_DISABLE_FEATURES=Prerender2 flags "$T/drm" browser 0)
+case "$f" in *--disable-features=*PasswordManagerOnboarding,AllowANGLEPassthroughShaders,Prerender2*) ok "ES2: --disable-features lists the passthrough shaders, then the features of kiosk.conf";; *) bad "ES2 feature list: $f";; esac
+f=$(flags "$T/drm" auto 0)
 case "$f" in *--disable-gpu-compositing*) ok "software browser: GPU compositing off";; *) bad "software flags: $f";; esac
-case "$f" in *AllowANGLEPassthroughShaders*) bad "software browser: passthrough shaders turned off";; *) ok "software browser: the passthrough shaders stay as they are";; esac
+case "$f" in *AllowANGLEPassthroughShaders*|*--use-angle=gles*) bad "software browser: ES2 flags: $f";; *) ok "software browser: the passthrough shaders stay as they are, no ANGLE flags";; esac
+f=$(flags "$T/drm" browser 1)
+case "$f" in *--disable-gpu-compositing*) ok "browser without the patch: software flags";; *) bad "browser without the patch, flags: $f";; esac
 
 echo "== tsx-mqtt (dry run) =="
 mkdir -p "$T/mq/run" "$T/mq/bin" "$T/mq/asound/TSW1060" "$T/mq/asound-other/Other"

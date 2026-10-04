@@ -23,7 +23,9 @@
 #                          spaces) of the display that gets GPU compositing
 #   TSX_RENDER_DRM         DRM driver names of GPUs without a display. The
 #                          kiosk uses their render node.
-#   TSX_RENDER_ES2_DRM     the render drivers that offer OpenGL ES 2.0 only
+#   TSX_RENDER_ES2_DRM     the render drivers that offer OpenGL ES 2.0 only.
+#                          Only the kiosk hook kiosk.d/es2.sh reads it
+#                          (and the old kiosk-session of the overlay build).
 #   TSX_DISPLAY_ENV        NAME=value words that the kiosk exports when the
 #                          display driver is in TSX_DISPLAY_DRM
 #   TSX_BT_CHIP            the chip file of tsx-bt, or "none" (the chip needs
@@ -36,7 +38,7 @@
 #   TSX_RENDER_ENV         NAME=value words for the GPU driver, exported by the
 #                          kiosk when a render node exists (none here)
 #   TSX_BROWSER_GL_FLAGS   extra Chromium flags for GPU rendering (none here:
-#                          kiosk-session sets the ES2 flags itself)
+#                          the kiosk hook kiosk.d/es2.sh sets the ES2 flags)
 #   TSX_VOLUME_CMD         a command that prints and sets the volume (none
 #                          here: the volume is the Master control of the card)
 #   TSX_RESCUE_BACKLIGHT   percent of max_brightness that the rescue system
