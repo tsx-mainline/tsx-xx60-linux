@@ -34,19 +34,19 @@ showmore() {
 
 cp "$KCONF" "$T/etc/kiosk.conf"
 rm -f "$T/etc/tsx/panel-board.conf" "$T/run/kiosk.conf"
-eq "$(show)" "gpu=auto max= day= gov=off ovl=off" "no board file: the neutral values of kiosk.conf"
+eq "$(show)" "gpu=auto max= day= gov=off ovl=fivefinger" "no board file: the neutral values of kiosk.conf"
 
 [ -r "$XX60_PANEL_BOARD" ] && ok "the xx60 panel-board.conf exists" || bad "no $XX60_PANEL_BOARD"
 cp "$XX60_PANEL_BOARD" "$T/etc/tsx/panel-board.conf"
-eq "$(show)" "gpu=browser max=23 day=17 gov=performance ovl=off" "the xx60 board file sets GPU, backlight range and governor"
+eq "$(show)" "gpu=browser max=23 day=17 gov=performance ovl=fivefinger" "the xx60 board file sets GPU, backlight range and governor"
 eq "$(showmore)" "night=8 min=1 blank=schedutil" "the xx60 board file sets the night level, the lowest level and the blank governor"
 
 printf 'KIOSK_GPU="off"\nBRIGHTNESS_DAY=5\n' > "$T/run/kiosk.conf"
-eq "$(show)" "gpu=off max=23 day=5 gov=performance ovl=off" "panel.conf (/run/tsx/kiosk.conf) wins over the xx60 board file"
+eq "$(show)" "gpu=off max=23 day=5 gov=performance ovl=fivefinger" "panel.conf (/run/tsx/kiosk.conf) wins over the xx60 board file"
 rm -f "$T/run/kiosk.conf"
 
 printf 'KIOSK_GPU=on\n' > "$T/etc/tsx/panel-board.conf"
-eq "$(show)" "gpu=on max= day= gov=off ovl=off" "a board file wins over kiosk.conf"
+eq "$(show)" "gpu=on max= day= gov=off ovl=fivefinger" "a board file wins over kiosk.conf"
 
 # The kiosk service reads the same layers in the same order.
 l1=$(grep -n '^[[:space:]]*\. /etc/kiosk.conf' "$KSVC" | head -n 1 | cut -d: -f1)
