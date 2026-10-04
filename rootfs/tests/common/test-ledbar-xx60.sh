@@ -9,6 +9,9 @@
 #   - the real tsx-ledbard with the real board file, a fake bar and a fake
 #     tsx-ledbar: the LEDMAP line that the daemon sends for each model
 #   - LEDMAP in ledbar.conf wins over the board file
+#   - the key LEDBAR: the real tsx-hw writes LEDBAR=yes on every panel model,
+#     and the real tsx-panelctl says "has ledbar" for that hw.conf (with a
+#     fake tsx-ledbar tool). LEDBAR=no in hw.conf says no.
 # The test needs no panel and no compiler.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -88,6 +91,28 @@ echo "LEDMAP=outputs" > "$T/map.conf"
 eq "$(daemon TSS-10 '' "$T/map.conf")" "LEDMAP outputs PANEL|" "LEDMAP=outputs in ledbar.conf wins over the board file"
 echo "LEDMAP=default" > "$T/map.conf"
 eq "$(daemon TSS-10 '' "$T/map.conf")" "LEDMAP DEFAULT|" "LEDMAP=default in ledbar.conf wins over the board file"
+
+echo "== tsx-hw writes LEDBAR=yes, tsx-panelctl has ledbar reads it (real tsx-hw, real tsx-panelctl) =="
+H=$T/hw; mkdir -p "$H/bin" "$H/proc" "$H/run"
+printf '#!/bin/sh\nexit 0\n' > "$H/bin/tsx-ledbar"; printf '#!/bin/sh\nexit 0\n' > "$H/bin/logger"
+chmod +x "$H/bin/tsx-ledbar" "$H/bin/logger"
+PCTL=$(P usr/local/sbin/tsx-panelctl)
+# detect CMDLINE: tsx-hw detect for a kernel command line
+detect() { echo "$1" > "$H/proc/cmdline"; rm -f "$H/run/hw.conf"; env -i PATH="$H/bin:$PATH" TSX_RUN_DIR="$H/run" TSX_PROC="$H/proc" busybox sh "$XX60_HW" detect > "$H/detect.out" 2>&1; }
+# has_ledbar [TOOLDIR]: the exit code of "tsx-panelctl has ledbar" with the hw.conf of $H/run
+has_ledbar() { env -i PATH="${1:-$H/bin}:$PATH" TSX_RUN_DIR="$H/run" TSX_BOARD_CONF="$BOARD" busybox sh "$PCTL" has ledbar >/dev/null 2>&1; echo $?; }
+for c in 'console=tty0 androidboot.government=0' 'console=tty0 androidboot.government=1' 'console=tty0'; do
+	detect "$c"
+	eq "$(grep -c '^LEDBAR=' "$H/run/hw.conf")" 1 "tsx-hw ($c): one LEDBAR line"
+	eq "$(sed -n 's/^LEDBAR=//p' "$H/run/hw.conf")" yes "tsx-hw ($c): LEDBAR=yes"
+	eq "$(env -i PATH="$H/bin:$PATH" TSX_RUN_DIR="$H/run" TSX_PROC="$H/proc" busybox sh "$XX60_HW" get LEDBAR)" yes "tsx-hw get LEDBAR ($c)"
+	eq "$(has_ledbar)" 0 "has ledbar with that hw.conf and the tool: yes ($c)"
+done
+eq "$(has_ledbar "$H/none")" 1 "has ledbar without the tool: no, also with LEDBAR=yes"
+sed -i 's/^LEDBAR=yes$/LEDBAR=no/' "$H/run/hw.conf"
+eq "$(has_ledbar)" 1 "has ledbar with LEDBAR=no in hw.conf: no, also with the tool"
+rm -f "$H/run/hw.conf"
+eq "$(has_ledbar)" 0 "has ledbar with no hw.conf and the tool: yes (a missing file means present)"
 
 echo "== $N ok, $F failed =="
 [ "$F" = 0 ]

@@ -18,6 +18,9 @@
 #   CAMERA=yes|no           a camera is fitted (docs/hardware.md "Camera")
 #   PRESENCE=no             the xx60 has no presence sensor (always no). The
 #                           setup page of tsx-linux-common hides its fields.
+#   LEDBAR=yes              the panel can have the USB LED bar (always yes).
+#                           tsx-panelctl has ledbar is true when the tool
+#                           tsx-ledbar is installed and this key is not no.
 #   REASON=TEXT             why a part is missing (empty when none is)
 # A panel with government=1 (the TSW-760-NC) has no microphone, no camera
 # and no Bluetooth module. Any other value, or no value, means that the
@@ -51,12 +54,14 @@ facts() {
 		echo "BT=no"
 		echo "CAMERA=no"
 		echo "PRESENCE=no"
+		echo "LEDBAR=yes"
 		echo "REASON=government=1 (TSW-760-NC): no microphone, no camera, no Bluetooth module"
 	else
 		echo "MIC=yes"
 		echo "BT=yes"
 		echo "CAMERA=yes"
 		echo "PRESENCE=no"
+		echo "LEDBAR=yes"
 		echo "REASON="
 	fi
 }
@@ -80,5 +85,5 @@ get)
 show)
 	cat "$CONF" 2>/dev/null || { echo "tsx-hw: no $CONF (run tsx-hw detect as root)" >&2; exit 1; }
 	;;
-*) sed -n '2,35p' "$0" >&2; exit 2;;
+*) sed -n '2,38p' "$0" >&2; exit 2;;
 esac
