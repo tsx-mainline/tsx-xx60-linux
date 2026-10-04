@@ -71,6 +71,7 @@ overlay usr/local/lib/tsx/board.sh
 overlay usr/local/lib/tsx/bt-chip-csr8811.sh
 overlay usr/local/lib/tsx/btgatt.py
 overlay usr/local/lib/tsx/btscan.py
+overlay usr/local/lib/tsx/config.d/camera.sh
 overlay usr/local/lib/tsx/csr_psload.py
 overlay usr/local/lib/tsx/tfa_dsp.py
 overlay usr/local/lib/tsx/tsx_brightness.py

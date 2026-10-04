@@ -120,7 +120,7 @@ KERNEL_FLAVOR=lts
 # vendor firmware uses the same value.
 #BT_MAC=
 
-# The camera for Home Assistant (docs/ha.md "Camera"): off, snapshot or live.
+# The camera for Home Assistant (docs/camera.md): off, snapshot or live.
 # off (default): no camera entities, and nothing opens the camera.
 # snapshot: a Camera entity, a "Take snapshot" button and a "Last snapshot"
 # time. The camera opens only for one image at each press.

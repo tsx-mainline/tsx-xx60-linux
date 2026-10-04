@@ -20,6 +20,11 @@
 #                   tsx-linux-common, and P etc/tsx/buttons.conf finds it)
 #   XX60_HW         tsx-hw of the xx60, the writer of /run/tsx/hw.conf
 #   XX60_LIB        tsx-lib.sh of the rescue system, which the board file needs there
+#   XX60_ESPHOME_D, XX60_CONFIG_D, XX60_SETUP_D
+#                   the plugin folders of the xx60 overlay (esphome.d, config.d and
+#                   setup.d). A test that uses them sets the test hook of the
+#                   folder (TSX_ESPHOME_PLUGIN_DIR, TSX_CONFIG_PLUGIN_DIR or
+#                   TSX_SETUP_PLUGIN_DIR) and TSX_PLUGIN_OWNER_UID to its own user id
 #   P PATH          prints the path of a file of tsx-linux-common by the path
 #                   that the file has on the panel (from tests/lib/paths.sh)
 XX60=$(cd "$(dirname "$0")/../../.." && pwd)
@@ -39,4 +44,7 @@ XX60_PANEL_BOARD=$XX60/rootfs/overlay/etc/tsx/panel-board.conf
 XX60_BUTTONS=$XX60/rootfs/overlay/etc/tsx/buttons-board.conf
 XX60_HW=$XX60/rootfs/overlay/usr/local/sbin/tsx-hw
 XX60_LIB=$XX60/rootfs/initramfs/overlay/usr/share/tsx/tsx-lib.sh
+XX60_ESPHOME_D=$XX60/rootfs/overlay/usr/local/share/tsx/esphome.d
+XX60_CONFIG_D=$XX60/rootfs/overlay/usr/local/lib/tsx/config.d
+XX60_SETUP_D=$XX60/rootfs/overlay/usr/local/share/tsx/setup.d
 export TSX_BOARD_CONF TSX_BOARD_BIN

@@ -22,6 +22,8 @@ overlay usr/local/bin/tsx-voice
 overlay usr/local/bin/tsx-voice-hook
 overlay usr/local/bin/tsx-voice-run
 overlay usr/local/sbin/tsx-mqtt
+overlay usr/local/share/tsx/esphome.d/camera.py
+overlay usr/local/share/tsx/setup.d/camera.py
 overlay usr/local/share/tsx/setup.d/ha.py
 
 tree /opt/lva

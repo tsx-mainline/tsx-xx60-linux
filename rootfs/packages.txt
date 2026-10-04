@@ -95,7 +95,7 @@ py3-tzlocal
 py3-aiohappyeyeballs
 py3-mpv
 mpv-libs
-# camera entity (CAMERA=snapshot or live): JPEG encoder of tsx_panel/camera.py
+# camera entity (CAMERA=snapshot or live): JPEG encoder of esphome.d/camera.py
 libturbojpeg
 # ha-esphome : the panel as one Home Assistant device over the ESPHome
 # native API (docs/ha.md "One Home Assistant device").
