@@ -57,12 +57,18 @@
 #   tsx_board_mac_source   TSX_MAC_SOURCE
 #   tsx_board_hostname_hint  the host name that the board suggests
 #   tsx_board_rescue_extra extra lines for the rescue screen (none here)
+#   tsx_board_ledbar_map MODEL  the name of the LED map for the USB LED bar of
+#                          the panel model, or nothing for the firmware default
+#                          map. tsx-ledbard sends it to the bar (docs/ledbar.md
+#                          of tsx-linux-common). MODEL is the model in
+#                          /run/tsx/model. It can be empty: the device tree
+#                          then names the board.
 #   tsx_board_load         read the board data once, on a running system
 #   tsx_board_probe DIR    point the data reader at the board data from the
 #                          rescue system. DIR takes one scratch file. Fails
 #                          when the board data is not there.
 # Test hooks: TSX_ENV_CONF, TSX_RUN, TSX_FWENV_TIMEOUT, TSX_MMCBLK0,
-# TSX_BT_LIB.
+# TSX_BT_LIB, TSX_DT_COMPATIBLE (the compatible file of the device tree).
 
 TSX_FAMILY=${TSX_FAMILY:-xx60}
 TSX_APK_CATEGORY=${TSX_APK_CATEGORY:-xx60}
@@ -185,3 +191,23 @@ tsx_board_mac_early() {
 tsx_board_mac_source() { echo "$TSX_MAC_SOURCE"; }
 tsx_board_ha_model() { echo "$TSX_HA_MODEL"; }
 tsx_board_rescue_extra() { :; }
+
+# tsx_board_ledbar_map [MODEL]: the LED map for the LED bar of the panel model.
+# The TSW-1060-LB bar is the only bar that is tested. It fits the TSW-1060, its
+# variants (for example TSW-1060-NC) and the TSS-10. No bar is tested on the
+# other models, and they get no map (the firmware default map). Without MODEL,
+# the compatible string of the device tree names the board.
+tsx_board_ledbar_map() {
+	_tb_m=${1:-}
+	_tb_dt=${TSX_DT_COMPATIBLE:-/proc/device-tree/compatible}
+	if [ -z "$_tb_m" ] && [ -r "$_tb_dt" ]; then
+		case $(tr '\0' ' ' < "$_tb_dt") in
+		*crestron,tsw1060*) _tb_m=TSW-1060;;
+		*crestron,tsw760*) _tb_m=TSW-760;;
+		esac
+	fi
+	case $_tb_m in
+	TSW-1060|TSW-1060-*|TSS-10|TSS-10-*) echo TSW-1060-LB;;
+	esac
+	return 0
+}
