@@ -94,6 +94,8 @@ eq "$(daemon TSS-10 '' "$T/map.conf")" "LEDMAP DEFAULT|" "LEDMAP=default in ledb
 
 echo "== tsx-hw writes LEDBAR=yes, tsx-panelctl has ledbar reads it (real tsx-hw, real tsx-panelctl) =="
 H=$T/hw; mkdir -p "$H/bin" "$H/proc" "$H/run"
+# tsx-ledbard writes this file while a bar runs its application. has ledbar needs it.
+echo app > "$H/run/ledbar.usb"
 printf '#!/bin/sh\nexit 0\n' > "$H/bin/tsx-ledbar"; printf '#!/bin/sh\nexit 0\n' > "$H/bin/logger"
 chmod +x "$H/bin/tsx-ledbar" "$H/bin/logger"
 PCTL=$(P usr/local/sbin/tsx-panelctl)
