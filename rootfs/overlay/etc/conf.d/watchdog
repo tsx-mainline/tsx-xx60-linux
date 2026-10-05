@@ -1,3 +1,4 @@
-# busybox watchdog on the Meson8m2 SoC watchdog (max timeout ~8 s on meson8m2)
+# busybox watchdog on /dev/watchdog, the watchdog of the RN5T618 PMIC (rn5t618-wdt,
+# timeout up to about 8 s). The SoC watchdog (meson_wdt) is not used.
 WATCHDOG_OPTS="-T 8 -t 2"
 WATCHDOG_DEV="/dev/watchdog"
