@@ -33,9 +33,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: install build deps (gcc for the fake-sysfs tests, libmpv for test-esphome.sh, busybox + cpio for test-tsx-tfa.sh)
-        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends gcc libmpv2 busybox cpio
-      - name: kernel/tests/test-aml-dt.sh
+      # gawk: test-tsx-tfa.sh checks the CRC with the awk of the host, and mawk (the
+      # awk of the runner) cannot. u-boot-tools: mkimage for test-aml-dt.sh.
+      - name: install build deps (gcc for the fake-sysfs tests, libmpv for test-esphome.sh, busybox + cpio + gawk for test-tsx-tfa.sh, u-boot-tools for test-aml-dt.sh)
+        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends gcc libmpv2 busybox cpio gawk u-boot-tools
+      # The panels run busybox ash. The sh of the runner is dash. It has no
+      # read -t and other parts that the panel scripts use. The steps below that
+      # run "sh TEST", and the tests that start sh, need the same sh as the
+      # panel. This step puts an sh that runs busybox sh at the front of PATH
+      # for the steps after it.
+      - name: use busybox sh as sh
+        run: |
+          mkdir -p "$RUNNER_TEMP/sh-busybox"
+          printf '#!/bin/sh\nexec busybox sh "$@"\n' > "$RUNNER_TEMP/sh-busybox/sh"
+          chmod 755 "$RUNNER_TEMP/sh-busybox/sh"
+          echo "$RUNNER_TEMP/sh-busybox" >> "$GITHUB_PATH"
+      - name: check that sh is busybox sh
+        run: |
+          echo "sh is $(command -v sh)"
+          [ "$(command -v sh)" = "$RUNNER_TEMP/sh-busybox/sh" ]
+      - name: kernel/tests/test-aml-dt.sh - SKIP lines for the vendor files that the public tree does not have
         run: kernel/tests/test-aml-dt.sh
       - name: rootfs/tests/test-idled.sh
         run: rootfs/tests/test-idled.sh
@@ -141,10 +158,22 @@ jobs:
         run: installer/tests/test-tsx-data.sh
       - name: installer/emmc/tests/test-root-fallback.sh - docker --privileged, loop device
         run: installer/emmc/tests/test-root-fallback.sh
-      - name: installer/emmc/tests/test-usb-recovery.sh
-        run: installer/emmc/tests/test-usb-recovery.sh
-      - name: installer/lib/tests/test-tsx-rescue.sh - env writes, MBR fold and the tsx_once one-shot (plain-file fixtures)
-        run: installer/lib/tests/test-tsx-rescue.sh
+      # The next two tests need the fw_printenv and fw_setenv of U-Boot. Ubuntu
+      # has only the tools of libubootenv, which behave in another way. So the
+      # tests run in an Alpine container that has the tools of U-Boot. The
+      # container gets the checkout read-only and writes only to its /tmp.
+      - name: installer/emmc/tests/test-usb-recovery.sh - in Alpine, with the U-Boot env tools
+        run: |
+          docker run --rm -v "$PWD:$PWD:ro" -w "$PWD" alpine:3.24 sh -euc '
+            apk add -q --no-cache bash python3 u-boot-tools e2fsprogs util-linux coreutils
+            fw_printenv --version | head -n 1
+            bash installer/emmc/tests/test-usb-recovery.sh'
+      - name: installer/lib/tests/test-tsx-rescue.sh - env writes, MBR fold and the tsx_once one-shot (plain-file fixtures, in Alpine, with the U-Boot env tools)
+        run: |
+          docker run --rm -v "$PWD:$PWD:ro" -w "$PWD" alpine:3.24 sh -euc '
+            apk add -q --no-cache bash python3 u-boot-tools e2fsprogs util-linux coreutils
+            fw_printenv --version | head -n 1
+            bash installer/lib/tests/test-tsx-rescue.sh'
       - name: installer/tests/test-arm-from-mainline.sh - arm one rescue boot from a running kiosk (PATH shims)
         run: installer/tests/test-arm-from-mainline.sh
       - name: tools/release/tests/test-prepare-publish.sh - the publish scan on throwaway repos

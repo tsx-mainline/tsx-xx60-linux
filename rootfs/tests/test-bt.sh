@@ -423,6 +423,19 @@ python3 - "$HERE/../voice/shim" "$W" <<'PYEOF' && ok "bluetooth.py: advertisemen
 import os, sys
 sys.path.insert(0, sys.argv[1])
 w = sys.argv[2]
+# BtProxy imports aioesphomeapi when it builds a message. This check sends no
+# message, and the test needs no pip package. A host without aioesphomeapi
+# (a plain CI runner) gets a stub. A host with it uses the real module.
+try:
+    import aioesphomeapi.api_pb2  # noqa: F401
+except ImportError:
+    import types
+    stub_pb = types.ModuleType("aioesphomeapi.api_pb2")
+    stub_pb.BluetoothScannerStateResponse = lambda **fields: fields
+    stub_pkg = types.ModuleType("aioesphomeapi")
+    stub_pkg.api_pb2 = stub_pb
+    sys.modules["aioesphomeapi"] = stub_pkg
+    sys.modules["aioesphomeapi.api_pb2"] = stub_pb
 from tsx_panel import bluetooth as bt
 # the queue holds at most QUEUE_MAX and drops the oldest
 q = bt.AdvQueue()

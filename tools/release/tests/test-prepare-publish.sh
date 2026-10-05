@@ -40,6 +40,8 @@ mkrepo upstream; cd "$W/upstream"
 git checkout -q -b master; echo up > b; git add b; git commit -q -m base
 cd "$W"
 git clone -q "$W/upstream" linux
+# a clone has no identity of its own, and a CI runner has no global one
+git -C linux config user.name t; git -C linux config user.email t@example.com
 cd "$W/linux"; git remote rename origin torvalds
 git checkout -q -b tsx-xx60-lts torvalds/master
 echo f > feature; git add feature; git commit -q -m "feature: fine"
@@ -145,7 +147,8 @@ out=$(run --repo xx60-linux="$W/tdl" --squash-branch todo1 --todo "$W/todo.txt" 
 git -C "$W/tdl" diff --quiet import todo1 && ok "todo: final tree equals import" || bad "todo: final tree differs from import"
 echo "$out" | grep -q 'tree check: todo1 has the tree of import' && ok "todo: tree check reported" || bad "todo: no tree check line"
 [ "$(git -C "$W/tdl" rev-parse 'todo1~2^{tree}')" = "$(git -C "$W/tdl" rev-parse 'import~3^{tree}')" ] && ok "todo: group one has the tree of its merge" || bad "todo: group one tree wrong"
-[ "$(git -C "$W/tdl" log -1 --format=%cI todo1~1)" = "2026-01-06T10:00:00Z" ] && [ "$(git -C "$W/tdl" log -1 --format=%aI todo1~2)" = "2026-01-03T10:00:00Z" ] \
+# compare seconds: an older git writes a UTC date as +00:00 and a newer one as Z
+[ "$(git -C "$W/tdl" log -1 --format=%ct todo1~1)" = "$(date -u -d 2026-01-06T10:00:00Z +%s)" ] && [ "$(git -C "$W/tdl" log -1 --format=%at todo1~2)" = "$(date -u -d 2026-01-03T10:00:00Z +%s)" ] \
 	&& ok "todo: commit dates come from the last old commit of each group" || bad "todo: commit dates wrong"
 [ "$(git -C "$W/tdl" log -1 --format='%an <%ae> %cn <%ce>' todo1~1)" = 'unex <7575866+unex@users.noreply.github.com> unex <7575866+unex@users.noreply.github.com>' ] \
 	&& ok "todo: author and committer are unex" || bad "todo: identity wrong"

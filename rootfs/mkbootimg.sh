@@ -11,6 +11,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 TOP=$(cd "$HERE/../../.." && pwd)
 KDIR=${KDIR:-$(cd "$REPO/.." && pwd)/out}
+# A relative KDIR counts from the folder of the caller. The container below
+# starts in $HERE, so it needs the full path (release.yml gives ../out-lts).
+KDIR=$(cd "$KDIR" 2>/dev/null && pwd) || { echo "mkbootimg.sh: KDIR is not a folder: $KDIR" >&2; exit 1; }
 docker image inspect tsx-mainline >/dev/null 2>&1 || docker build -q -t tsx-mainline -f "$REPO/ci/Dockerfile.mainline" "$REPO/ci"
 docker run --rm -u "$(id -u):$(id -g)" -v "$TOP:$TOP" -w "$HERE" tsx-mainline \
 	"$REPO/kernel/mkimage.sh" --kernel "$KDIR/zImage" --board-dtbs "$KDIR" \

@@ -164,7 +164,7 @@ p.add_argument("--source", default=None)
 p.add_argument("--cookie", default=None)
 p.add_argument("--data", default=None)
 a = p.parse_args()
-kwargs = {"timeout": 3}
+kwargs = {"timeout": 15}   # a save runs the helper; a busy CI runner needs more than 3 s
 if a.source:
 	kwargs["source_address"] = (a.source, 0)
 conn = http.client.HTTPConnection(a.source or "127.0.0.1", a.port, **kwargs)

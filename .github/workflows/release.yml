@@ -145,6 +145,31 @@ jobs:
           path: rootfs/modules
           merge-multiple: true
 
+      # The rootfs build needs two programs that are not in the repo:
+      # sendspin-cli (rootfs/src/sendspin/build.sh) and libtensorflowlite_c.so
+      # (rootfs/voice/build-tflite.sh). Both build in armv7 containers,
+      # natively on this runner. TFLITE_CHECK=1 compares the library with the
+      # pin in rootfs/voice/tflite/SHA256SUMS and stops when the sums differ.
+      # The cache keeps the library between runs. install-lva.sh checks the
+      # pin again.
+      - name: build sendspin-cli from source (rootfs/src/sendspin/build.sh)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: rootfs/src/sendspin/build.sh
+
+      - name: cache libtensorflowlite_c.so
+        id: tflite
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: rootfs/voice/tflite/libtensorflowlite_c.so
+          key: tflite-${{ hashFiles('rootfs/voice/build-tflite.sh', 'rootfs/voice/tflite/SHA256SUMS') }}
+
+      - name: build libtensorflowlite_c.so (rootfs/voice/build-tflite.sh)
+        if: steps.cache.outputs.cache-hit != 'true' && steps.tflite.outputs.cache-hit != 'true'
+        env:
+          TFLITE_CHECK: "1"
+        run: rootfs/voice/build-tflite.sh
+
       # No Crestron file is ever fetched or bundled here: TFA_VENDOR_FETCH=no
       # and TFA_VENDOR_SRC unset means mkrootfs.sh leaves the TFA9890 DSP
       # tuning containers out of the image entirely (a local build run by a
