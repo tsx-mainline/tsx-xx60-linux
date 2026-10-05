@@ -161,6 +161,10 @@ wait_listening() {  # wait_listening LOG...
 }
 
 rc=0
+# fail WHAT: name a failed check and set the exit status. Each check that
+# has no FAIL line of its own goes through this, so a failure always prints a
+# "FAIL:" line.
+fail() { echo "FAIL: $*"; rc=1; }
 echo "== ESPHome device name rules (tsx_panel/naming.py) =="
 PYTHONPATH="$SHIM" TSX_PANEL_NAME_FILE=/nonexistent "$T/venv/bin/python3" -c '
 import os
@@ -173,7 +177,7 @@ assert n.resolve("02:aa:bb:cc:dd:ee", "TSW-1060-HOST") == ("tsx-02aabbccddee", "
 os.environ["TSX_PANEL_NAME"] = "TSS-10-ABCDEF"
 assert n.resolve("02:aa:bb:cc:dd:ee", "TSW-1060-HOST") == ("tss-10-abcdef", "TSS-10-ABCDEF")
 print("OK: PANEL_NAME -> lowercase name + PANEL_NAME friendly name, with the fallback tsx-<mac> and --name")
-' || rc=1
+' || fail "the device name rules (tsx_panel/naming.py)"
 
 # full_check TITLE PORT [esphome-check.py args...]: the whole entity check
 # (list, LED bar, kiosk URL, backlight, a front-key event) plus the backend
@@ -189,8 +193,12 @@ full_check() {
 	# (which polls for it for up to 10 s)
 	( sleep 3; printf 'led 128 unknown\nlast home long\n' > "$F/run/tsx/buttons.state" ) &
 	PIDS="$PIDS $!"
-	"$T/venv/bin/python3" "$HERE/esphome-check.py" "$port" "$@" || rc=1
-	sleep 0.5   # tsx-panelctl runs the commands a moment after the backend sent them
+	"$T/venv/bin/python3" "$HERE/esphome-check.py" "$port" "$@" || fail "esphome-check.py ($title)"
+	# tsx-panelctl runs the commands a moment after the backend sent them. The
+	# last command that the check sends is tsx-autoupdate now (wait up to 15 s,
+	# an emulated CPU is slow).
+	for _ in $(seq 1 150); do grep -q '^tsx-autoupdate now$' "$F/cmds.log" 2>/dev/null && break; sleep 0.1; done
+	sleep 0.2
 	echo "-- backend commands issued --"
 	cat "$F/cmds.log" 2>/dev/null || echo "(none)"
 	grep -q '^tsx-ledbar set 100 0 0$' "$F/cmds.log" 2>/dev/null && echo "OK: ledbar command reached the backend" || { echo "FAIL: ledbar command missing/wrong"; rc=1; }
@@ -205,7 +213,7 @@ full_check() {
 		&& echo "OK: orientation persisted through tsx-config (portrait, and the bad option never reached it)" || { echo "FAIL: tsx-config set ORIENTATION portrait missing"; rc=1; }
 }
 noise_check() {  # noise_check PORT MODE [KEY]
-	"$T/venv/bin/python3" "$HERE/esphome-noise-check.py" "$@" || rc=1
+	"$T/venv/bin/python3" "$HERE/esphome-noise-check.py" "$@" || fail "esphome-noise-check.py $*"
 }
 
 # ---- standalone tsx-esphome, plaintext (no HA_API_KEY: zero-config) -------
@@ -286,12 +294,12 @@ TSX_TEST_SERVER_ARGS=--no-zeroconf start_server standalone "$T/server-nobt.log" 
 wait_listening "$T/server-bt.log" "$T/voice-bt.log" "$T/server-nobt.log"
 grep -q 'no mDNS announcement (--no-zeroconf)' "$T/server-nobt.log" && ! grep -q 'no mDNS announcement' "$T/server-bt.log" \
 	&& echo "OK: --no-zeroconf: a test instance serves without an mDNS announcement" || { echo "FAIL: --no-zeroconf"; rc=1; }
-"$T/venv/bin/python3" "$HERE/esphome-bt-check.py" "$BT_PORT" on || rc=1
-"$T/venv/bin/python3" "$HERE/esphome-bt-check.py" "$VBT_PORT" on --key "$KEY" || rc=1
+"$T/venv/bin/python3" "$HERE/esphome-bt-check.py" "$BT_PORT" on || fail "esphome-bt-check.py, standalone, proxy on"
+"$T/venv/bin/python3" "$HERE/esphome-bt-check.py" "$VBT_PORT" on --key "$KEY" || fail "esphome-bt-check.py, voice satellite, proxy on"
 grep -q 'tsx_lva: Bluetooth proxy on' "$T/voice-bt.log" && echo "OK: the voice satellite logs the proxy state" || { echo "FAIL: no proxy state line in voice-bt.log"; rc=1; }
 grep -q 'Unknown message type' "$T/voice-bt.log" && { echo "FAIL: Bluetooth messages reached satellite.py (voice-bt.log)"; rc=1; } \
 	|| echo "OK: the Bluetooth messages never reach satellite.py"
-"$T/venv/bin/python3" "$HERE/esphome-bt-check.py" "$NOBT_PORT" off || rc=1
+"$T/venv/bin/python3" "$HERE/esphome-bt-check.py" "$NOBT_PORT" off || fail "esphome-bt-check.py, proxy off"
 sleep 1
 python3 - "$T/hci.log" <<'PYEOF' && echo "OK: the scanner ran only while a front end was subscribed (enable/disable pairs, off at the end)" || { echo "FAIL: scan enable/disable"; cat "$T/hci.log"; rc=1; }
 import sys
@@ -303,16 +311,20 @@ PYEOF
 
 # The active proxy (BT_ACTIVE=on): the bleak backend of Home Assistant
 # (bleak-esphome ESPHomeClient) connects to a fake peer through each front
-# end. C0:FF:EE:00:00:EE never answers (a connect timeout).
+# end. C0:FF:EE:00:00:EE never answers (a connect timeout). After the fake peer
+# dropped a link it needs a moment to advertise again, and on a slow host (an
+# emulated CPU) a reconnect can arrive before that: the peer then drops the new
+# link too. Home Assistant tries such a connect again (bleak-retry-connector),
+# so the check does the same (--retries).
 echo "== Bluetooth proxy: active connections (GATT) =="
 ACT_PORT=$((API_PORT + 53)); VACT_PORT=$((API_PORT + 54))
 TSX_TEST_SERVER_ARGS=--no-zeroconf start_server standalone "$T/server-act.log" "$ACT_PORT" Act-Panel TSX_HA_API_KEY= TSX_BT_CONF="$F/run/tsx/bt-active.conf"
 start_server voice "$T/voice-act.log" "$VACT_PORT" Act-Voice TSX_HA_API_KEY="$KEY" TSX_BT_CONF="$F/run/tsx/bt-active.conf"
 wait_listening "$T/server-act.log" "$T/voice-act.log"
 "$T/venv/bin/python3" "$HERE/esphome-btactive-check.py" 127.0.0.1 "$ACT_PORT" --addr C0:FF:EE:00:00:01 --atype 1 \
-	--silent C0:FF:EE:00:00:EE --cycles 5 --adv || { rc=1; tail -20 "$T/btscan.log"; }
+	--silent C0:FF:EE:00:00:EE --cycles 5 --adv --retries 3 || { fail "esphome-btactive-check.py, standalone"; tail -20 "$T/btscan.log"; }
 "$T/venv/bin/python3" "$HERE/esphome-btactive-check.py" 127.0.0.1 "$VACT_PORT" --key "$KEY" --addr C0:FF:EE:00:00:02 \
-	--cycles 2 || { rc=1; tail -20 "$T/btscan.log"; }
+	--cycles 2 --retries 3 || { fail "esphome-btactive-check.py, voice satellite"; tail -20 "$T/btscan.log"; }
 grep -q '^cmd 200b 01a000a0' "$T/hci.log" && echo "OK: the active scan mode of Home Assistant reached the controller (scan type 1)" \
 	|| { echo "FAIL: no active scan parameters in hci.log"; rc=1; }
 grep -q 'tsx_lva: Bluetooth proxy on, active connections' "$T/voice-act.log" && echo "OK: the voice satellite logs the active proxy" \
@@ -321,7 +333,7 @@ grep -q 'Unknown message type' "$T/voice-act.log" && { echo "FAIL: Bluetooth mes
 	|| echo "OK: the GATT messages never reach satellite.py"
 # tsx-bt restarts (tsx-btscan goes away and comes back): Home Assistant sees
 # no free slot while it is away, and 3 free slots again after
-"$T/venv/bin/python3" - "$ACT_PORT" > "$T/slots.out" 2>&1 <<'PYEOF' &
+"$T/venv/bin/python3" - "$ACT_PORT" "$T/slots.ready" > "$T/slots.out" 2>&1 <<'PYEOF' &
 import asyncio, sys
 from aioesphomeapi import APIClient
 async def main():
@@ -329,7 +341,12 @@ async def main():
     await cli.connect(login=False)
     seen = []
     cli.subscribe_bluetooth_connections_free(lambda free, limit, alloc: seen.append((free, limit)))
-    for _ in range(80):
+    for _ in range(300):
+        if seen:
+            break
+        await asyncio.sleep(0.1)
+    open(sys.argv[2], "w").close()    # the shell script may stop tsx-btscan now
+    for _ in range(300):
         await asyncio.sleep(0.1)
         if (0, 0) in seen and seen[-1] == (3, 3):
             break
@@ -339,7 +356,8 @@ async def main():
 asyncio.run(main())
 PYEOF
 SLOTS_PID=$!
-sleep 1.5
+for _ in $(seq 1 300); do [ -e "$T/slots.ready" ] && break; sleep 0.1; done
+sleep 0.5
 kill "$BTSCAN_PID"; wait "$BTSCAN_PID" 2>/dev/null
 sleep 0.5
 start_btscan
@@ -358,10 +376,10 @@ TSX_TEST_SERVER_ARGS=--no-zeroconf start_server standalone "$T/server-gov.log" "
 start_server voice "$T/voice-gov.log" $((API_PORT + 56)) Gov-Voice TSX_HA_API_KEY= TSX_HW_CONF="$F/run/tsx/hw-gov.conf"
 GOVV_PID=$LAST_PID
 wait_listening "$T/server-gov.log"
-"$T/venv/bin/python3" "$HERE/esphome-bt-check.py" "$GOV_PORT" off || rc=1
+"$T/venv/bin/python3" "$HERE/esphome-bt-check.py" "$GOV_PORT" off || fail "esphome-bt-check.py, government=1"
 grep -q 'Bluetooth proxy: off' "$T/server-gov.log" && echo "OK: tsx-esphome logs the proxy as off (no Bluetooth module)" \
 	|| { echo "FAIL: no 'Bluetooth proxy: off' in server-gov.log"; rc=1; }
-"$T/venv/bin/python3" - "$GOV_PORT" "$BT_PORT" <<'PYEOF' || rc=1
+"$T/venv/bin/python3" - "$GOV_PORT" "$BT_PORT" <<'PYEOF' || fail "government=1: voice flags and entity list"
 import asyncio, sys
 from aioesphomeapi import APIClient
 async def info(port):
@@ -395,7 +413,7 @@ start_server standalone "$T/server-bare.log" "$BARE_PORT" Bare-Panel TSX_HA_API_
 	TSX_RUN_DIR="$F/bare/run" TSX_BUTTONS_CONF="$F/etc/tsx/buttons.conf.missing" TSX_LEDBAR=tsx-ledbar-not-installed
 wait_listening "$T/server-bare.log"
 echo "== tsx-esphome, no front keys, no LED bar, no eMMC health =="
-"$T/venv/bin/python3" "$HERE/esphome-check.py" "$BARE_PORT" --name bare-panel --friendly Bare-Panel --bare || rc=1
+"$T/venv/bin/python3" "$HERE/esphome-check.py" "$BARE_PORT" --name bare-panel --friendly Bare-Panel --bare || fail "esphome-check.py --bare"
 
 # ---- a configured key that cannot be used: refuse to start, never plaintext
 echo "== unusable key file: fail closed =="
@@ -418,8 +436,8 @@ start_server standalone "$T/server-allow.log" "$ALLOW_PORT" Allow-Test TSX_HA_AP
 start_server standalone "$T/server-deny.log" "$DENY_PORT" Deny-Test TSX_HA_API_KEY= TSX_HA_ALLOW_FROM="10.0.0.99"
 wait_listening "$T/server-allow.log" "$T/server-deny.log"
 
-"$T/venv/bin/python3" "$HERE/esphome-allowlist-check.py" "$ALLOW_PORT" allow || rc=1
-"$T/venv/bin/python3" "$HERE/esphome-allowlist-check.py" "$DENY_PORT" deny || rc=1
+"$T/venv/bin/python3" "$HERE/esphome-allowlist-check.py" "$ALLOW_PORT" allow || fail "esphome-allowlist-check.py, allowed peer"
+"$T/venv/bin/python3" "$HERE/esphome-allowlist-check.py" "$DENY_PORT" deny || fail "esphome-allowlist-check.py, denied peer"
 grep -q 'closing connection from 127.0.0.1' "$T/server-deny.log" 2>/dev/null && echo "OK: denial was logged" || { echo "FAIL: no denial logged"; rc=1; }
 
 [ "$rc" = 0 ] && echo "PASS test-esphome" || echo "FAIL test-esphome"

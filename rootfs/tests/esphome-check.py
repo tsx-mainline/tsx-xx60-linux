@@ -20,6 +20,16 @@ from aioesphomeapi import APIClient
 from aioesphomeapi.model import UpdateCommand
 
 
+async def until(cond, timeout=15.0):
+    """Wait until cond() is true, for at most timeout seconds. A fixed sleep
+    is too short on a slow host (an emulated CPU), where the server needs
+    longer to run a command and publish the new state."""
+    end = asyncio.get_running_loop().time() + timeout
+    while not cond() and asyncio.get_running_loop().time() < end:
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.05)
+
+
 async def main(args) -> int:
     client = APIClient("127.0.0.1", args.port, None, noise_psk=args.key)
     await client.connect(login=False)
@@ -59,13 +69,16 @@ async def main(args) -> int:
             got_state.set()
 
         client.subscribe_states(on_state)
-        await asyncio.sleep(0.5)
+        first = ["kiosk_url", "blank_timeout", "verbose_boot", "touched_recently", "update"]
+        if not args.bare:
+            first += ["ledbar", "emmc_life_a", "emmc_life_b", "emmc_eol"]
+        await until(lambda: all(by_id[o].key in states for o in first))
 
         if not args.bare:
             client.light_command(
                 key=by_id["ledbar"].key, state=True, rgb=(1.0, 0.0, 0.0), brightness=1.0, color_mode=35,
             )
-            await asyncio.sleep(0.5)
+            await until(lambda: getattr(states.get(by_id["ledbar"].key), "state", False))
             light_state = states.get(by_id["ledbar"].key)
             assert light_state is not None and light_state.state and light_state.red == 1.0, light_state
             print("OK: LED bar light toggled on (red)")
@@ -83,7 +96,7 @@ async def main(args) -> int:
         print("OK: kiosk URL reports the configured URL, not the live page")
 
         client.text_command(key=by_id["kiosk_url"].key, state="https://ha.example.org/lovelace/0")
-        await asyncio.sleep(0.5)
+        await until(lambda: getattr(states.get(by_id["kiosk_url"].key), "state", "") == "https://ha.example.org/lovelace/0")
         text_state = states.get(by_id["kiosk_url"].key)
         assert text_state is not None and text_state.state == "https://ha.example.org/lovelace/0", text_state
         print("OK: kiosk URL text set")
@@ -98,11 +111,11 @@ async def main(args) -> int:
         o_state = states.get(orient.key)
         assert o_state is not None and o_state.state == "landscape", o_state
         client.select_command(orient.key, "portrait")
-        await asyncio.sleep(0.5)
+        await until(lambda: getattr(states.get(orient.key), "state", "") == "portrait")
         o_state = states.get(orient.key)
         assert o_state is not None and o_state.state == "portrait", o_state
         client.select_command(orient.key, "sideways")
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1.0)   # a refused option changes nothing, so there is no state to wait for
         o_state = states.get(orient.key)
         assert o_state is not None and o_state.state == "portrait", o_state
         print("OK: orientation select: four options, reported landscape, set portrait, 'sideways' refused")
@@ -110,7 +123,7 @@ async def main(args) -> int:
         bt_state = states.get(by_id["blank_timeout"].key)
         assert bt_state is not None and bt_state.state == 120.0, bt_state
         client.number_command(by_id["blank_timeout"].key, 600.0)
-        await asyncio.sleep(0.5)
+        await until(lambda: getattr(states.get(by_id["blank_timeout"].key), "state", 0) == 600.0)
         bt_state = states.get(by_id["blank_timeout"].key)
         assert bt_state is not None and bt_state.state == 600.0, bt_state
         print("OK: blank timeout reported (120 s) and set (600 s, test-esphome.sh checks tsx-config)")
@@ -118,7 +131,7 @@ async def main(args) -> int:
         vb_state = states.get(by_id["verbose_boot"].key)
         assert vb_state is not None and not vb_state.state, vb_state
         client.switch_command(key=by_id["verbose_boot"].key, state=True)
-        await asyncio.sleep(0.5)
+        await until(lambda: getattr(states.get(by_id["verbose_boot"].key), "state", False))
         vb_state = states.get(by_id["verbose_boot"].key)
         assert vb_state is not None and vb_state.state, vb_state
         print("OK: verbose boot switch reported off, then set on (test-esphome.sh checks tsx-config)")
