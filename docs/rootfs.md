@@ -9,8 +9,9 @@ rootfs, what runs on the panel, and the kiosk browser stack. For the kernel and 
 
 ### Build a rootfs
 
-1. Build with the wrapper. It runs `rootfs/mkrootfs.sh` in an armv7 Alpine container under
-   `qemu-user`. The result is native armv7 code.
+1. Build with the wrapper. It runs `rootfs/mkrootfs.sh` in an armv7 Alpine container. On a host
+   of another architecture, the container runs under `qemu-user`. An arm64 host with 32-bit
+   support runs it natively. The result is native armv7 code.
 
    ```sh
    PROFILE=console ./build-rootfs.sh rootfs
@@ -172,11 +173,12 @@ With `TSX_FROM_PACKAGES=1`, `mkrootfs.sh` does these steps:
 
 | Package | Files |
 |---|---|
-| `tsx-base`, `tsx-setup`, `tsx-autoupdate`, `tsx-buttons`, `tsx-ha`, `tsx-rescue-ui`, `tsx-splash` | the common software (tsx-linux-common) |
+| `tsx-base`, `tsx-setup`, `tsx-autoupdate`, `tsx-buttons`, `tsx-ha`, `tsx-ledbar`, `tsx-rescue-ui`, `tsx-splash` | the common software (tsx-linux-common) |
 | `tsx-idled` | `tsx-idled`, its init script, `tsx-blank`, `tsx-display-power`. Every profile runs them. |
 | `tsx-kiosk` | the kiosk session, `tsx-overlay`, the blank cursor theme `/usr/share/tsx/cursors` |
-| `tsx-xx60-board` | `board.sh`, `panel-board.conf`, `motd.board`, `tsx-hw`, `tsx-als`, `tsx-cpufreqd`, `tsx-audio`, `tsx-ledbar`, `tsx-ledbard`, `tsx-tfa-dsp`, `tsx-peak`, `tsx-boot-ok`, `tsx-emmc-state`, `tsx-update-boot`, `uboot-env.conf`, `asound.conf` |
-| `tsx-xx60-board-kiosk` | the patched `cage`, `tsx-chromium-es2` and its patch tool |
+| `tsx-xx60-board` | `board.sh`, `panel-board.conf`, `motd.board`, `tsx-hw`, `tsx-als`, `tsx-cpufreqd`, `tsx-audio`, `tsx-tfa-dsp`, `tsx-peak`, `tsx-boot-ok`, `tsx-emmc-state`, `tsx-update-boot`, `uboot-env.conf`, `asound.conf`, the `tsx-config` plugin `config.d/camera.sh` |
+| `tsx-xx60-board-kiosk` | the patched `cage`, `tsx-chromium-es2` and its patch tool, the kiosk hook `kiosk.d/es2.sh` |
+| `tsx-xx60-board-ha` | the camera plugins `esphome.d/camera.py` and `setup.d/camera.py` (see [camera.md](camera.md)) |
 
 `tsx-splash` is at `/usr/local/bin/tsx-splash` in the image and in the initramfs.
 
@@ -239,7 +241,7 @@ base system owns it. `tsx_panel` and `tsx-mqtt` never call `tsx-ledbar`, `tsx-ke
 | `tsx-panelctl` | The daemon. It reads one whitelisted command per line from the FIFO `/run/tsx/panelctl` (owner root, group `kiosk`) and runs the tool as root. It treats every line as hostile input. |
 | `tsx-panelctl send CMD ARG...` | Writes one command to the FIFO. It stops after 3 s when no daemon reads the FIFO. |
 | `tsx-panelctl get NAME` | Prints one value: `volume` (percent), `lux`, `als-auto`, `screen`, `ledbar`, `ledbar-fx`, `keypad-led`, `last-key`. |
-| `tsx-panelctl has NAME` | Tells whether the panel has the hardware: `ledbar`, `ledbar-fx` (firmware TSX-LEDBAR), `ledbar-leds` (TSX-LEDBAR 0.1.3 or later, 16 LEDs), `keypad`, `als`, `sound`. It needs no root. `ledbar-fx` and `ledbar-leds` read `/run/tsx/ledbar.fw` ("The 16 LEDs"). |
+| `tsx-panelctl has NAME` | Tells whether the panel has the hardware: `ledbar`, `ledbar-fx` (firmware TSX-LEDBAR), `ledbar-leds` (TSX-LEDBAR 0.1.3 or later, 16 LEDs), `keypad` (the panel has front keys), `keyleds` (the keys have LEDs), `als`, `sound`. It needs no root. `ledbar-fx` and `ledbar-leds` read `/run/tsx/ledbar.fw`, which the `tsx-ledbar` service writes. |
 | `tsx-panelctl events` | Prints a line when a value changes: `button NAME short\|long\|hold`, `lux N`, `als-auto on\|off`, `screen ...`, `ledbar R G B`, `keypad-led N`. |
 
 The whitelisted commands are:
@@ -254,7 +256,7 @@ The whitelisted commands are:
 | `brightness-offset N` | `brightness-learn-reset` |
 | `blank-timeout S` | `orientation NAME` |
 | `volume N` | `config-url URL` |
-| `verbose-boot on\|off` | `reload-page` |
+| `verbose-boot on\|off` | `reload-page` (runs `tsx-kiosk-page reload`) |
 | `setup` | `reboot` |
 | `update-install` | `keypad led-blank N` |
 
@@ -275,7 +277,7 @@ are the event interface. The base daemons write them. `tsx-mqtt` and `tsx_panel`
 A package adds fields with a plugin file in `/usr/local/share/tsx/setup.d` (`TSX_SETUP_PLUGIN_DIR`
 in tests). The plugin `setup.d/ha.py` of `tsx-ha` adds the Home Assistant URL with the discovery
 and check buttons, the login method and token, the voice assistant and wake word, and MQTT. It also
-reports the settings that a panel cannot use (no microphone, no Bluetooth module). `tsx-setupd`
+reports the settings that a panel cannot use (no microphone, no Bluetooth module). The plugin `setup.d/camera.py` of this board adds the camera field ([camera.md](camera.md)). `tsx-setupd`
 loads the plugins once at start and skips a plugin that fails to load. A submit ignores the keys of
 a missing plugin. A plugin sets each of its fields at load time, also to empty or unchecked. The
 page sends a plugin field only when the user changed it (see "Save").
@@ -427,6 +429,7 @@ part. It also checks `tsx-emmc-state` (fake sysfs, `TSX_EMMC_DIR`) and `tsx-fstr
 | `KIOSK_OSK_HEIGHT` | 300 | Keyboard height for `wvkbd` |
 | `OSK_GESTURE` | `threefinger` | The gesture that toggles the keyboard |
 | `KIOSK_OVERLAY` | `on` | The quick-settings overlay |
+| `OVERLAY_GESTURE` | `fivefinger` | The gesture that opens the overlay. `off` turns it off. |
 | `KIOSK_GPU` | `browser` | GPU path. See "GPU path". |
 | `KIOSK_REDUCED_MOTION` | 1 | Tells pages `prefers-reduced-motion` |
 | `KIOSK_DEVTOOLS` | 1 | Chromium DevTools on the loopback of the panel |
@@ -468,34 +471,34 @@ cage 0.3.1 from source with one patch. It does not use the Alpine package (0.3.0
 Limits of the cage session: no overlay, no orientation (it stays landscape), and screen blanking
 uses the backlight only.
 
-### Quick settings and the front-key strip
+### Quick settings
 
 These controls work on the panel. They need no Home Assistant.
 
 | Action | Effect |
 |---|---|
-| Slide a finger along the five front keys | Up (or right on a portrait panel) makes the screen brighter. Each key changes the backlight by `SLIDE_STEP` (2) steps. A brightness bar shows at the screen edge and goes away 1.5 s after the last step. |
-| Hold the top key (0.7 s) | Opens the overlay: a brightness slider and the buttons *Auto brightness*, *Screen off*, *Reload page*, *Setup* and *Close*. It closes 8 s after the last touch. |
+| Tap the screen with five fingers | Opens the overlay: a brightness slider and the buttons *Auto brightness*, *Screen off*, *Reload page*, *Setup* and *Close*. A second five-finger tap closes it. It also closes 8 s after the last touch. |
+
+The five fingers must all lift within `OSK_TAP_MS` (500 ms) and move less than 40 px. A three-finger tap still toggles the on-screen keyboard. A four-finger tap does nothing. `OVERLAY_GESTURE=off` in `/etc/kiosk.conf` turns the five-finger tap off.
 
 The overlay has no orientation button.
 
 The ambient light sensor stays in charge. The manual setting is an offset on top of the sensor
 level (or on top of the day and night schedule when auto brightness is off). The offset lasts until
-you turn *Auto brightness* on (overlay button, Home Assistant or `tsx-als auto on`), until
-`brightness auto` runs (a key action), or until a reboot. When you turn auto brightness off, the
+you turn *Auto brightness* on (overlay button, Home Assistant or `tsx-als auto on`) or until a
+reboot. When you turn auto brightness off, the
 current level stays as a fixed level. A fixed level that you set with the Home Assistant
 *Backlight* number wins until the next day and night change. Touching the local slider turns it
 back into an offset.
 
 | Item | Detail |
 |---|---|
-| Keys | The five keys are touch zones outside the LCD (board DT `touch-overlay`). The kernel reports `KEY_F13` to `KEY_F17` press and release events, not coordinates. A slide releases one key and presses the next within `SLIDE_GAP_MS` (250 ms). A short press of a strip key fires `SLIDE_GAP_MS` after its release. A slide runs no action and sends no Home Assistant event. `SLIDE_STEP=0` turns the slide off. |
 | Level | `tsx-idled` computes `base` (the `tsx-als` level, else the schedule) plus `/run/tsx/brightness-offset`, limited to 1..`BACKLIGHT_MAX`. `/run/tsx/brightness` (absolute level) wins. It watches `/run/tsx` with inotify. `/run/tsx/brightness.state` has `level`, `base`, `offset`, `override`, `max`, `blank_timeout`, `min`. |
 | Floor | `BACKLIGHT_MIN` is 1. Blanking still sets the backlight to 0. The slider has 24 linear steps. |
 | Ramp | `RAMP_SLIDER_MS` for the slider, `RAMP_AUTO_MS` for light, schedule and reload. 0 is a jump. |
 | Learning | `tsx-als` runs `tsx_brightness.py als-daemon`. An offset that stays the same for 8 s becomes a point of the curve. The curve goes to `/run/tsx/als-curve` and replaces `ALS_CURVE`. The offset returns to 0. Up to 12 points stay in `/data/tsx/brightness-learn.json`. Remove them with `tsx-panelctl send brightness-learn-reset` or the setup page button. `BRIGHTNESS_LEARN=off` turns learning off. |
-| Overlay | `tsx-overlay` (`rootfs/src/tsx-overlay.c`) is a `wlr-layer-shell` client that sway starts with the kiosk. It draws with cairo, stays resident (a few MB) and has no wakeups while hidden. It takes no keyboard focus, so the on-screen keyboard keeps working. Touches outside it reach the page. `tsx-buttons` shows it through the FIFO `/run/tsx/overlay.ctl` (group `kiosk`). From a shell: `tsx-keypad overlay full\|slider\|hide\|toggle`. It runs as `kiosk` and acts only through `tsx-panelctl`. |
-| cage | The slide sets the brightness. A long press of the top key runs `OVERLAY_FALLBACK` from `buttons.conf` (`blank toggle`). |
+| Overlay | `tsx-overlay` (`rootfs/src/tsx-overlay.c`) is a `wlr-layer-shell` client that sway starts with the kiosk. It draws with cairo, stays resident (a few MB) and has no wakeups while hidden. It takes no keyboard focus, so the on-screen keyboard keeps working. Touches outside it reach the page. `tsx-idled` shows it on the five-finger tap through the FIFO `/run/tsx/overlay.ctl` (group `kiosk`). From a shell: `tsx-keypad overlay full\|slider\|hide\|toggle`. It runs as `kiosk` and acts only through `tsx-panelctl`. |
+| cage | There is no overlay, so the five-finger tap does nothing. |
 
 ### Screen blanking
 
@@ -544,17 +547,41 @@ branch (`beq`) with two NOP bytes, so the fallback from ES 3.0 to ES 2.0 always 
   `rootfs/src/chromium-es2/README.md`).
 - `tsx-chromium-es2` on the panel checks, applies or reverts the patch without Python.
 
-With `KIOSK_GPU=browser`, the session adds `--disable-features=AllowANGLEPassthroughShaders`
-automatically. Without it the screen is black except for the scrollbar. The Mali-450 reports zero
-vertex texture image units, and the ANGLE shader-link check counts the fragment texture samplers
-against the vertex stage.
+#### The kiosk hook `es2.sh`
+
+The `kiosk-session` of tsx-linux-common has no ES2 code. The xx60 adds this code with the kiosk
+hook `/usr/local/lib/tsx/kiosk.d/es2.sh` (package `tsx-xx60-board-kiosk`). `kiosk-session`
+sources the hook after its renderer choice. The hook rules are in the `kiosk-hooks.md` page of
+tsx-linux-common. The hook can change four names: `KIOSK_GL_COMPOSITOR`, `KIOSK_GL_BROWSER`,
+`KIOSK_BROWSER_GL_FLAGS` and `KIOSK_DISABLE_FEATURES`.
+
+The hook does this:
+
+- `KIOSK_GPU=browser`, a render node exists, and `tsx-chromium-es2 check` passes: GLES in the
+  compositor and the GPU in the browser. The browser flags are `--use-gl=angle --use-angle=gles
+  --disable-webgl2`. `kiosk-session` adds `--ignore-gpu-blocklist` itself. The hook also adds
+  `AllowANGLEPassthroughShaders` to the disabled features.
+- `KIOSK_GPU=browser` and the check fails (or no render node exists): GLES in the compositor, a
+  software browser, and one log line.
+- `KIOSK_GPU=auto` (or a value that no hook knows) and the render driver is in
+  `TSX_RENDER_ES2_DRM` (`lima`): GLES in the compositor, a software browser, and one log line.
+  Stock Chromium cannot use this GPU.
+- `KIOSK_GPU=on`, `compositor` and `off`: the hook changes nothing.
+
+Without the hook, `KIOSK_GPU=browser` counts as `auto`, and no rule keeps stock Chromium off the
+Lima GPU. The hook logs one line in each of the first three cases. A good start shows
+`browser_gpu=1` in the `display=` line of the kiosk log, and the `es2 hook` line before it.
+
+With the passthrough shaders on, the screen is black except for the scrollbar. The Mali-450
+reports zero vertex texture image units, and the ANGLE shader-link check counts the fragment
+texture samplers against the vertex stage. So the hook turns the feature off.
 
 | `KIOSK_GPU` | Compositor | Browser |
 |---|---|---|
-| `auto` | GLES (Lima) if available, else pixman | Software (stock Chromium needs ES 3.0) |
+| `auto` | GLES (Lima) if available, else pixman | Software (stock Chromium needs ES 3.0, the hook keeps it off Lima) |
 | `on` | GLES | Tries the GPU, falls back |
 | `compositor` | GLES | Software |
-| `browser` (default) | GLES | GPU compositing through ANGLE ES2. Needs the patched Chromium. |
+| `browser` (default, a mode of the hook) | GLES | GPU compositing through ANGLE ES2. Needs the patched Chromium. |
 | `off` | pixman | Software |
 
 If the picture is black or garbled, set `KIOSK_GPU=auto` in
@@ -620,7 +647,7 @@ C.
 | Kiosk (sway) | `kiosk-session` writes `output * transform N` and `input type:touch calibration_matrix ...` into the sway config. On a change, `tsx-orientation apply` sends both commands over the sway IPC socket. There is no restart and no page reload. The touch matrix is the identity in every orientation, because sway maps the touchscreen to the output and wlroots turns the touches. Chromium, the keyboard and the overlay get the new output size. squeekboard picks its portrait layout. wvkbd keeps `KIOSK_OSK_HEIGHT`. |
 | cage (`KIOSK_OSK=off`) | Stays landscape. `kiosk-session` logs this. |
 | Overlay | Stays at the right edge, centered, no higher than on the 10-inch landscape panel (720 px full, 600 px slider). Layout: `rootfs/src/tsx-overlay-layout.h`. |
-| Front keys | They are keys, not coordinates, so they work in every orientation. The names and actions in `buttons.conf` belong to the physical key. Only the slide changes. `tsx-buttons` reads `/etc/tsx/orientation` at each slide step and turns the direction, so a slide up (landscape) or to the right (portrait) always makes the screen brighter. |
+| Front keys | They are keys, not coordinates, so they work in every orientation. The name of a key belongs to the physical key. Only the slide changes. The slide is off by default. `tsx-buttons` reads `/etc/tsx/orientation` at each slide step and turns the direction. So a slide up (landscape) or to the right (portrait) makes the screen brighter. |
 | Boot splash, text console | They turn from the root mount on (about 1 s after the splash first shows). See [boot.md](boot.md). |
 | Always landscape | The vendor U-Boot logo, the first second of the splash, the cage session and the rescue system (it never depends on the setting). |
 
@@ -628,18 +655,39 @@ In `portrait`, the top of the picture is at the left edge of the native LCD.
 
 ## Front keys, key LEDs and the LED bar
 
-`tsx-buttons` is a small C daemon for the five capacitive front keys and their LEDs. A press can
-run a local action, call a Home Assistant service, navigate the kiosk, or only fire an HA event.
-`tsx-keypad` controls the keys and LEDs from a shell. `tsx-ledbar` and `tsx-ledbard` control the
-optional USB RGB LED bar. `tsx-mqtt` bridges it to MQTT ([ha.md](ha.md)). For the config syntax and
-the action list, read `/etc/tsx/buttons.conf` and `tsx-keypad --help` on the panel.
+`tsx-buttons` is a small C daemon for the five capacitive front keys and their LEDs.
+`tsx-keypad` controls the keys and LEDs from a shell. The optional USB RGB LED bar has its own
+tools (see "LED bar" below). `tsx-mqtt` bridges the bar to MQTT ([ha.md](ha.md)).
 
-| Item | Detail |
-|---|---|
-| Start check | At power-up the STM32 of the bar can fail to start its three LED driver chips, and no color lights. When the bar appears, `tsx-ledbard` asks the STM32 console (USB interface 0) for the state of each chip (`tsx-ledbar console 'tlcoutmode red 0'`). If a chip failed, it restarts the STM32 (`tsx-ledbar console reboot`) and checks again, at most 3 times. Then it sets the color. Log: `/var/log/tsx-ledbar.log`. For a manual check, stop the service and run `tsx-ledbard check`. |
-| Screen state | A blank or wake of the screen never changes the bar. |
-| LED map | With TSX-LEDBAR 0.1.5 or later, `tsx-ledbard` sends the LED map to the bar after each plug-in and each start of the bar, before the first color. See [LED map](#led-map). |
-| Stock firmware | The installer from Android copies the stock image (`statussign_*.upg`, a Crestron file) to `/data/tsx/vendor/` ([install.md](install.md) "Stock LED bar firmware image"). It is never in a package or image. To load it back: `tsx-ledbar-flash flash /data/tsx/vendor/statussign_*.upg`. The tool comes with the package `tsx-ledbar-fw`. It checks the image, stops and starts the `tsx-ledbar` service and confirms the firmware name. |
+### Front keys
+
+The five keys are the zones of the touch controller right of the screen. The kernel reports them as
+`KEY_F13` (top) to `KEY_F17` (bottom). The board layer `/etc/tsx/buttons-board.conf` defines them:
+
+| Key | Code | LED |
+|---|---|---|
+| `power` | `KEY_F13` | `led=1` |
+| `home` | `KEY_F14` | `led=2` |
+| `lights` | `KEY_F15` | `led=3` |
+| `up` | `KEY_F16` | `led=4` |
+| `down` | `KEY_F17` | `led=5` |
+
+The names are the functions that the vendor printed on the glass. The board layer also sets
+`LED_PWM=tsx:keypad` (the brightness of all key LEDs), `LED_KEY_PREFIX=tsx:key` (the enable LEDs
+`tsx:key1` to `tsx:key5`) and `SLIDE_STEP=0`.
+
+The keys have these jobs and no others:
+
+- Each press fires the Home Assistant event `tsx_button` and the ESPHome event entity of the key
+  ([ha.md](ha.md) "Trigger an automation from a front key").
+- A press on a blank screen only wakes the screen.
+- Home Assistant sets the key LEDs and the screen-off level.
+
+A press runs no local action. There is no overlay, no home, no reload, no brightness change and no
+slide. To bind an action to a key, add an `on` line to `/etc/tsx/buttons.conf`, for example
+`on power long overlay full`. To turn on the slide along the keys, add `SLIDE_STEP=2` to the same
+file. `/etc/tsx/buttons.conf` is the template of tsx-linux-common. It defines no keys. The layers,
+the settings and the actions are in the page "Front keys" of tsx-linux-common (`docs/buttons.md`).
 
 ### Key LED levels
 
@@ -669,124 +717,22 @@ An override replaces the day and night levels. The `led` action of a key, `tsx-k
 | `led_awake N SOURCE` | The level while the screen is awake. `SOURCE` is `day`, `night` or `override`. The Home Assistant light shows this level. |
 | `led_blank N` | The screen-off level. |
 
-### LED bar in bootloader mode
+### LED bar
 
-The bar controller can stop in its stock bootloader (USB `14be:001a`). It then runs no application, and the LEDs stay dark. An interrupted load can cause this. The start guard of TSX-LEDBAR can also cause it: after three failed starts in a row, the guard hands the bar to the bootloader.
+The USB RGB LED bar has its own page in tsx-linux-common: [LED bar](https://github.com/tsx-mainline/tsx-linux-common/blob/main/docs/ledbar.md). The page describes the tools `tsx-ledbar` and `tsx-ledbard`, the settings in `/etc/tsx/ledbar.conf`, the recovery from bootloader mode, the effects and the 16 LEDs. The package `tsx-ledbar` ships them. [hardware.md](hardware.md) "USB LED bar" describes the bar hardware.
 
-`tsx-ledbard` looks for this state when the service starts and when the bar appears later. It loads an image with `tsx-ledbar-fw-install --recover`. The tool comes with the package `tsx-ledbar-fw`, together with the TSX-LEDBAR image and the flasher.
+Only the TSW-1060-LB bar is tested on hardware. The bar cannot tell its model, so the board file gives the LED map. The function `tsx_board_ledbar_map` in `board.sh` picks the map from the panel model:
 
-| Case | What the daemon does |
+| Panel model | `tsx-ledbard` sends |
 |---|---|
-| The package is installed and `/data/tsx/ledbar-fw.installed` exists | Loads the TSX-LEDBAR image |
-| The package is installed, the file does not exist, and `/data/tsx/vendor/` has a stock image | Loads the newest stock image (`statussign_*.upg`) |
-| The package is installed, the file does not exist, and there is no stock image | Loads the TSX-LEDBAR image |
-| The package is not installed | Logs one line. It tells you to run `apk add tsx-ledbar-fw` and to restart the service |
-| The package is installed, but its `tsx-ledbar-fw-install` has no `--recover-image` | Logs one line. It tells you to run `apk upgrade tsx-ledbar-fw` and to restart the service |
+| TSW-1060 and its variants (for example TSW-1060-NC), TSS-10 | `LEDMAP TSW-1060-LB PANEL` |
+| Other models | `LEDMAP DEFAULT`: the firmware default map (the TSW-1060-LB map) |
 
-- The marker file `/data/tsx/ledbar-fw.installed` shows that the panel is set up for TSX-LEDBAR. `tsx-ledbar-fw-install` writes it and `tsx-ledbar-fw-uninstall` removes it. A recovery does not change it.
-- If no image exists (the packaged image is missing and there is no stock image), the daemon logs one line and does nothing else.
-- The daemon tries once for each start of the service. It does not try again after a failed load. It also does not try again when the bar returns to the bootloader later. To try again, run `rc-service tsx-ledbar restart`. You can also load an image by hand with `tsx-ledbar-fw-install` or `tsx-ledbar-fw-uninstall`.
-- The load does not stop the `tsx-ledbar` service. It restarts `tsx-esphome` and `tsx-voice` when they run, because these services read the firmware name of the bar only at start.
-- The daemon never sends `TLCRESET` and never cuts the power of the bar.
-- `/var/log/tsx-ledbar.log` shows a start line, the progress lines of the flasher and a result line.
-- `tsx-ledbard check` does not load an image. It reports the bootloader mode and exits with 1.
-
-### LED bar effects
-
-The open bar firmware TSX-LEDBAR (repository `tsx-ledbar-fw`) runs effects on the bar.
-`tsx-ledbar fw` prints the firmware name and `effects yes` or `effects no`. With the stock firmware
-`tsx-ledbar fx` refuses, and everything else works.
-
-| Command | Effect |
-|---|---|
-| `tsx-ledbar fx fade R G B MS` | Fade to the color in MS ms (0 to 600000) |
-| `tsx-ledbar fx blink R G B ON OFF` | Blink: ON ms on, OFF ms off |
-| `tsx-ledbar fx breathe R G B MS` | Breathe, one breath in MS ms (100 to 600000) |
-| `tsx-ledbar fx rainbow MS [LEVEL]` | Cycle the hue in MS ms at LEVEL (0 to 100, default 100) |
-| `tsx-ledbar fx smooth MS` | Ramp each new color over MS ms (0 to 60000) |
-| `tsx-ledbar fx cap PERCENT` | Power cap of the three colors (10 to 150, default 110) |
-| `tsx-ledbar fx off` | End the effect and show the wanted color |
-| `tsx-ledbar fx` | Print the running effect |
-
-- The tool sends effects as lines on the bar console (USB interface 0). The kernel driver keeps
-  interface 1.
-- An effect does not change the wanted color. `fx off` shows the wanted color again, also after
-  `fade`. For a smooth change that stays, run `tsx-ledbar fx smooth MS` once and then
-  `tsx-ledbar set R G B`.
-- `tsx-ledbar get` shows the wanted color, the running effect and the LED pattern.
-  `/run/tsx/ledbar.state` records the effect (`fx ...`).
-- A new color (`set`, `on`, `off`, `boot`, a front key, Home Assistant) ends the effect.
-- `tsx-ledbar apply` sends the recorded color, pattern and effect again, so they come back after a
-  restart of the bar.
-- `FX_SMOOTH` and `FX_CAP` in `ledbar.conf` set the ramp and the cap. `tsx-ledbard` sends them each
-  time the bar appears.
-- Home Assistant shows `Breathe`, `Blink` and `Rainbow` as light effects ([ha.md](ha.md)).
-
-### The 16 LEDs
-
-TSX-LEDBAR 0.1.3 or later sets each of the 16 LEDs and has zone effects. `tsx-ledbar fw` prints
-`leds yes` when the answer to `CAPS` has the word `leds16`. Without `leds yes` (for example with the
-stock firmware), these commands refuse and change nothing.
-
-The `CAPS` query needs root, because only root can open the USB device of the bar. So `tsx-ledbard`
-writes the answer to `/run/tsx/ledbar.fw` (mode 644) after each plug-in and each start of the bar.
-The file has the lines of `tsx-ledbar fw` and the line `caps` with the words of the answer to `CAPS`
-(`caps none` when the bar has no `CAPS`). `tsx-panelctl has ledbar-fx` and `has ledbar-leds` read
-this file. So the voice satellite (user `kiosk`) gets the same answer as root. The daemon removes
-the file when the bar goes away, when the bar is in bootloader mode and when the service stops.
-Then `tsx-panelctl` runs `tsx-ledbar fw`, which gives the full answer only to root.
-
-A LED is `R1` to `R8` (right side) or `L1` to `L8` (left side), from top to bottom. The index `0`
-to `15` is `R1` to `R8`, then `L1` to `L8`. `LEDS` is one LED, a range (`R1-R4`, `8-11`), a side
-(`R` or `L`) or `ALL`.
-
-| Command | Effect |
-|---|---|
-| `tsx-ledbar led LEDS R G B` | Set LEDs of the pattern (levels 0 to 100) |
-| `tsx-ledbar side R\|L R G B` | Set one side of the pattern |
-| `tsx-ledbar clear` | Drop the pattern and show the wanted color |
-| `tsx-ledbar fx chase R G B MS` | A dot runs down both sides, one run in MS ms (100 to 600000) |
-| `tsx-ledbar fx fill R G B PERCENT` | A level bar from the bottom up, PERCENT of the height |
-| `tsx-ledbar fx spectrum MS [LEVEL] [ring\|rows]` | The hue circle, one cycle in MS ms. `ring` (firmware default) runs around the bar, `rows` along each side. |
-| `tsx-ledbar fx split R G B R G B` | The first color on the right side, the second on the left |
-
-- The first `led` or `side` copies the wanted color into all 16 LEDs, then changes the LEDs that
-  you give. `/run/tsx/ledbar.state` records the pattern (`pattern` and 48 levels, or `pattern none`).
-- A LED command ends the effect. An effect on top of the pattern keeps the pattern, and `fx off`
-  goes back to it. A new color ends both.
-- Home Assistant shows `Chase`, `Fill` and `Spectrum`, and has actions for the LEDs, sides, fill and
-  split ([ha.md](ha.md) "LED bar actions").
-
-### LED map
-
-A LED map gives the position of each LED on the bar. The bar cannot tell its model, so the panel
-tells the bar which map to use. The default map of TSX-LEDBAR 0.1.5 and later is the map of the
-TSW-1060-LB. Only the TSW-1060-LB LED bar is tested on hardware. Another bar model can have a
-different map.
-After each plug-in and each start of the bar, `tsx-ledbard` sends the map of this panel, before the
-first color. It sends it only when the answer to `CAPS` has the word `ledmap`.
-
-| `LEDMAP` in `/etc/tsx/ledbar.conf` | Panel model | `tsx-ledbard` sends |
-|---|---|---|
-| Empty | TSW-1060 and its variants (for example TSW-1060-NC), TSS-10 | `LEDMAP TSW-1060-LB PANEL` |
-| Empty | Other models | `LEDMAP DEFAULT`: the firmware default map (the TSW-1060-LB map) |
-| A map name, for example `outputs` | Any | `LEDMAP NAME PANEL` |
-| `default` | Any | `LEDMAP DEFAULT` |
-
-- The panel model comes from `/run/tsx/model`. `tsx-hostname` writes it at boot from
-  `product_name` in the U-Boot env. Without this file, the device tree gives the board:
-  `crestron,tsw1060` counts as a TSW-1060.
-- The map `outputs` lights LED n on output n. Use it to find the map of a bar model that has no map.
-  The tsx-ledbar-fw docs give the steps.
-- The firmware does not save the map. After `rc-service tsx-ledbar restart`, the daemon sends it
-  again.
-- `tsx-ledbar console LEDMAP` shows the map in use, for example `variant 1 map TSW-1060-LB panel`.
-  The last word is the source: `default`, `panel` (from the daemon) or `console` (from a user). The
-  variant value is for information only.
-- `/var/log/tsx-ledbar.log` has one line for each map that the daemon sends, with the answer of the
-  bar. A name that the bar does not have gives one log line, and the bar keeps its map.
-- The daemon sends no `LEDMAP` to the stock firmware or to a TSX-LEDBAR version without `ledmap`. A
-  `LEDMAP` key then gives one log line.
+- The panel model comes from `/run/tsx/model`. `tsx-hostname` writes it at boot from `product_name` in the U-Boot env. Without this file, the device tree gives the board: `crestron,tsw1060` counts as a TSW-1060.
+- `LEDMAP` in `/etc/tsx/ledbar.conf` replaces the map of the board.
+- The kernel driver `leds-crestron-stm32` makes the LED device `tsx:rgb:bar`. Without it, `tsx-ledbar` uses libusb.
+- The installer from Android copies the stock image (`statussign_*.upg`, a Crestron file) to `/data/tsx/vendor/` ([install.md](install.md) "Stock LED bar firmware image"). It is never in a package or image.
+- To load the stock firmware back, run `tsx-ledbar-flash flash /data/tsx/vendor/statussign_*.upg`. The tool comes with the package `tsx-ledbar-fw`. It checks the image, stops and starts the `tsx-ledbar` service and confirms the firmware name.
 
 ## Audio userland
 
@@ -905,7 +851,7 @@ only text. Shell scripts and Python tools can read and write the file safely.
 | `BT_PROXY` | `on`, `off` or empty. Empty is the board default (`TSX_BT_PROXY_DEFAULT`), which is `off` on the xx60. |
 | `BT_ACTIVE` | `on` or `off` (default `off`). With `BT_PROXY=on`, allows active connections, so Home Assistant can connect to BLE devices through the panel. |
 | `BT_MAC` | The Bluetooth address. Empty means the eth0 MAC ([hardware.md](hardware.md) "Bluetooth (CSR8811)"). Without an eth0 MAC the controller keeps its own address and `tsx-btscan` writes it to `/run/tsx/bt.mac`. |
-| `CAMERA` | `off` (default), `snapshot` or `live`. `on` is the same as `live`. The camera mode for Home Assistant ([ha.md](ha.md) "Camera"). |
+| `CAMERA` | `off` (default), `snapshot` or `live`. `on` is the same as `live`. The camera mode for Home Assistant ([camera.md](camera.md)). The plugin `config.d/camera.sh` of this board adds the key. |
 | `AUTO_BRIGHTNESS` | `on` (default) or `off`. The backlight follows the light sensor. `tsx-als auto on\|off` and the Home Assistant *Auto brightness* switch write it. |
 | `ALS_SCALE` | A factor from 0.01 to 1000 (default 1.0). Lux = sensor lux x `ALS_SCALE`. It corrects for the light that the front window blocks. |
 | `ROOT_PASSWORD_HASH` | A crypt(3) hash, never a plaintext password |
@@ -934,7 +880,7 @@ The `tsx-config` service runs `tsx-hw detect` (it writes `/run/tsx/hw.conf`) and
 | `/run/tsx/als.panel` | `AUTO_BRIGHTNESS`, `ALS_SCALE` | |
 | `/run/tsx/esphome.conf` | `TRANSPORT`, `ALLOW_FROM` | Always written, mode 644. The ESPHome plugin runs as `kiosk` and cannot read `panel.conf`. |
 | `/run/tsx/bt.conf` | `PROXY`, `ACTIVE`, `MAC` | Always written, mode 644 |
-| `/run/tsx/camera.conf` | `CAMERA` | Always written, mode 644. `off` on a panel without a camera. |
+| `/run/tsx/camera.conf` | `CAMERA` | Written by the plugin `config.d/camera.sh`, mode 644. `off` on a panel without a camera. |
 | `/run/tsx/panel-name` | `PANEL_NAME` | `tsx-hostname` reads it first |
 | `/etc/tsx/orientation` | `ORIENTATION` | |
 | `/etc/tsx/boot-verbose` | `BOOT_VERBOSE` | |
@@ -1083,7 +1029,7 @@ in the environment wins (host tests use this).
 | `TSX_APK_CATEGORY` | `xx60` | The second apk repository (`<APK_URL>/<branch>/xx60`) |
 | `TSX_HA_MODEL` | `xx60` | The model in Home Assistant (`xx60 (mainline Linux)` over MQTT, `xx60 panel` over ESPHome) |
 | `TSX_SOUND_CARD` | `TSW1060` | The ALSA card name. `tsx-audio card` prints it. |
-| `TSX_DISPLAY_DRM`, `TSX_RENDER_DRM`, `TSX_RENDER_ES2_DRM` | `meson*`, `lima panfrost`, `lima` | DRM drivers that `kiosk-session` picks |
+| `TSX_DISPLAY_DRM`, `TSX_RENDER_DRM`, `TSX_RENDER_ES2_DRM` | `meson*`, `lima panfrost`, `lima` | DRM drivers that `kiosk-session` picks. Only the hook `es2.sh` reads `TSX_RENDER_ES2_DRM`. |
 | `TSX_DISPLAY_ENV` | the cage variables | Variables that `kiosk-session` exports |
 | `TSX_BT_CHIP`, `TSX_BT_PROXY_DEFAULT`, `TSX_BT_MAC_SETTABLE` | the CSR8811 file, `off`, `yes` | Bluetooth (`tsx-bt`, `tsx-config`) |
 | `TSX_MAC_SOURCE`, `TSX_MAC_DEV` | `uboot`, `/dev/mmcblk0` | The source of the eth0 MAC |
@@ -1098,6 +1044,39 @@ Python programs read a value with `tsx-board get NAME` and call a function with
 
 The board file holds fixed facts. `tsx-hw` detects the parts that a panel can lack (microphone,
 Bluetooth) at boot into `/run/tsx/hw.conf`.
+
+### Tests with tsx-linux-common
+
+The tests in `rootfs/tests/common/` run the shared software of tsx-linux-common with the real board
+files of this repository. These files are `rootfs/overlay/usr/local/lib/tsx/board.sh`,
+`rootfs/overlay/etc/tsx/panel-board.conf` and `rootfs/overlay/etc/tsx/buttons-board.conf`. The tests hold
+no copy of a board file.
+
+`rootfs/tests/common/run.sh` runs all of them. `TSX_COMMON` names the tsx-linux-common checkout. The
+default is the folder `tsx-linux-common` next to this repository. A test stops with exit code 2 when
+it finds no checkout. `TSX_TEST_LOGDIR` names the folder for the logs. The tests need `busybox`,
+`jq` and `python3`.
+
+`rootfs/tests/common/lib.sh` finds the checkout and sets `TSX_BOARD_CONF` and `TSX_BOARD_BIN` for the
+tests. It also loads `tests/lib/paths.sh` of tsx-linux-common. That file finds a shared file by its
+path on the panel. The CI job `common-tests` checks out tsx-linux-common and runs `run.sh`.
+
+| Test | What it checks with the xx60 board files |
+|---|---|
+| `mqtt-dry.sh` | The five key events from `buttons-board.conf`, the Key LEDs light, the backlight range 1 to 23 and the model in `tsx-mqtt` |
+| `test-buttons-xx60.sh` | The real board layer with the template of `buttons.conf`: five keys, `tsx:keypad` and `tsx:key1` to 5, `SLIDE_STEP=0`. Each press fires the HA event and the last line. No overlay, home, reload, blank, brightness change or slide. Home Assistant sets the key LEDs and the screen-off level. The test compiles `tsx-buttons`. |
+| `test-board-xx60.sh` | The board values, the meson and lima renderer selection with the kiosk hook `es2.sh`, the browser flags of the hook, the volume entity, the Home Assistant model, `tsx-bt` with the CSR8811 chip file, the kernel package name and `ttyAML0` |
+| `test-bt-csr8811.sh` | The CSR8811 bring-up: `csr_psload.py` against a fake BlueCore (`bt-fake-bluecore.py`), `tsx-bt` with the chip file, the PSR kinds, the failure reasons, and `state=absent` with the `REASON` text on a TSW-760-NC (from the real `tsx-hw`) |
+| `test-camera.sh` | The three camera plugins with the real files of this repository: the key `CAMERA` of `tsx-config` (`config.d/camera.sh`: values, `apply`, `camera.conf`, the restart of the ESPHome services, the warning with the `REASON` text on a TSW-760-NC from the real `tsx-hw`), the camera field of the setup page (`setup.d/camera.py`), the camera entities and the image requests (`esphome.d/camera.py`) in `tsx-esphome` and in the voice satellite, and the command line of the plugin file. The JPEG part needs numpy and libturbojpeg on the host |
+| `test-ledbar-xx60.sh` | `tsx_board_ledbar_map`: the TSW-1060-LB map for the TSW-1060, the TSW-1060-NC and the TSS-10, no map for the TSW-760. The map that the real `tsx-ledbard` sends for each model. The real `tsx-hw` writes `LEDBAR=yes` for every model, and the real `tsx-panelctl` answers `has ledbar` from it |
+| `test-panel-board.sh` | The values of `panel-board.conf` in `kiosk-session`: GPU mode, backlight range, brightness levels, governors |
+| `test-rescue-backlight.sh` | The rescue backlight level on the range 0 to 31 |
+| `test-rescue-screen.sh` | The rescue screen: the model, the stock firmware and the unit id from the U-Boot env, and the MAC |
+| `test-tsx-config-apply.sh` | `tsx-config apply`: the repository category, the Bluetooth defaults, `BT_MAC`, and the keys of a TSW-760-NC (from the real `tsx-hw`) |
+| `test-tsx-setup-mac.sh` | The eth0 MAC from the U-Boot env at 1 MiB of the eMMC (`tsx-setup`) |
+
+When tsx-linux-common changes shared software, run `rootfs/tests/common/run.sh` against the new
+checkout.
 
 ## Updates
 

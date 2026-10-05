@@ -13,6 +13,7 @@ Look up a part. Read Recovery when an install fails or when you want stock Andro
 
 - [Hardware](hardware.md): the board, SoC, display, touch screen, LED bar and audio parts.
 - [Boot](boot.md): U-Boot, the boot image and the root selection.
+- [Camera](camera.md): the camera modes for Home Assistant, privacy, the defaults and the limits.
 - [Kernel](kernel.md): the kernel flavors, the patches and the build.
 - [Rootfs](rootfs.md): the root file system, the profiles, the panel configuration and the panel services.
 - [Recovery](recovery.md): the rescue system, the repair steps and the factory restore to stock Android.

@@ -363,7 +363,7 @@ The rescue looks for the file in the stock Android system partition, read-only (
 - `--wipe-data` and any other format of `tsxdata` remove the copy. Install from Android again to get it back.
 - If the rescue finds no file, the installer prints one line and continues. A panel with no LED bar is not affected.
 
-To load the stock firmware into the bar, see [rootfs.md](rootfs.md) "Front keys, key LEDs and the LED bar".
+To load the stock firmware into the bar, see [rootfs.md](rootfs.md) "LED bar".
 
 ### Progress output
 

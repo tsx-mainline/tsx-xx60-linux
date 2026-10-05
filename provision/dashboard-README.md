@@ -31,7 +31,7 @@ The panel has a 4-core 1.6 GHz Cortex-A9. With the browser GPU patch, the Mali-4
 | Page size with the on-screen keyboard open | 1280x534. Text fields (for example in more-info dialogs) stay visible above the keyboard |
 | `max_columns` | `3` fits the 1280 px width when the sidebar is hidden. Sections reflow at about 1050 px content width |
 | Panel user | Use a dedicated non-admin HA user (token: `kiosk-set-token`). A tap then cannot reach the settings |
-| Front keys | The front keys can switch views. Use the `tsx-buttons` action `navigate /wall-panel/media` (front-panel, `/etc/tsx/buttons.conf`) |
+| Front keys | The front keys have no action by default. To switch views, bind the `tsx-buttons` action `navigate /wall-panel/media` to a key, for example `on lights long navigate /wall-panel/media` in `/etc/tsx/buttons.conf` |
 
 ### Hide the sidebar and the header
 

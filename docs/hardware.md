@@ -270,7 +270,7 @@ Each LED has its own red, green and blue output on three TLC59116 drivers. The t
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | Output | 15 | 6 | 0 | 1 | 2 | 3 | 4 | 5 | 14 | 13 | 12 | 11 | 10 | 9 | 8 | 7 |
 
-See [ha.md](ha.md) for the LED bar controls in Home Assistant.
+See [rootfs.md](rootfs.md) "LED bar" for the LED map of the panel and [ha.md](ha.md) for the LED bar controls in Home Assistant.
 
 ## Ambient light sensor
 
@@ -396,7 +396,7 @@ The TSW-1060 and the TSS-10 have an OmniVision OV5640 camera sensor (5 MP, chip 
 
 The TSW-760 has a camera with the same connections. The vendor device trees of the 7-inch and the 10-inch panel have the same camera node. The TSW-760 DTB and the TSW-1060 DTB have the same camera nodes. The camera of the TSW-760 is not tested on hardware.
 
-Two kernel modules drive the camera: `ov5640` for the sensor and `meson8-csi2` for the receiver and the capture device. The NC models have no camera. The camera is off by default in Home Assistant (see [ha.md](ha.md) "Camera").
+Two kernel modules drive the camera: `ov5640` for the sensor and `meson8-csi2` for the receiver and the capture device. The NC models have no camera. The camera is off by default in Home Assistant (see [camera.md](camera.md)).
 
 ### Capture a frame
 
@@ -491,7 +491,7 @@ The `ov5640` driver in this kernel writes a tuning table for the TSW-1060 camera
 | Symptom | Cause | Fix |
 |---|---|---|
 | `media-ctl -p` shows no `ov5640 3-003c` entity, and no subdevice nodes exist | The `ov5640` module did not load, or the sensor did not answer on I2C_D. An NC model has no sensor. The receiver waits for the sensor | Run `dmesg \| grep ov5640` and `lsmod`. Load the module with `modprobe ov5640` |
-| `VIDIOC_REQBUFS` or `VIDIOC_STREAMON` fails with `EBUSY` | Another program uses the camera, for example the Home Assistant camera | Stop the other program. For the Home Assistant camera, set `CAMERA=off` ([ha.md](ha.md) "Camera") |
+| `VIDIOC_REQBUFS` or `VIDIOC_STREAMON` fails with `EBUSY` | Another program uses the camera, for example the Home Assistant camera | Stop the other program. For the Home Assistant camera, set `CAMERA=off` ([camera.md](camera.md)) |
 | A stream at 2592x1944 gives no frame | A rare start failure at the largest size | Stop the stream and start it again |
 | The image has a magenta cast | The `ov5640` driver has no tuning table for this camera module | Use the `tsx-xx60` kernel. Its `ov5640` driver logs `ISP tuning for crestron,tsw1060` (or `crestron,tsw760`) at probe |
 
@@ -525,24 +525,29 @@ At boot, the `tsx-config` service runs `tsx-hw detect` before `tsx-config apply`
 | `MIC` | `yes`, `no` | A microphone is fitted |
 | `BT` | `yes`, `no` | A Bluetooth module is fitted |
 | `CAMERA` | `yes`, `no` | A camera is fitted |
-| `REASON` | text | Why a part is missing (empty if none is) |
+| `PRESENCE` | `no` | The xx60 has no presence sensor. The value is always `no` |
+| `LEDBAR` | `yes` | The panel can have the USB LED bar. The value is always `yes` |
+| `REASON` | text | Why a part is missing (empty if none is). `government=1 (TSW-760-NC): no microphone, no camera, no Bluetooth module` on an NC panel |
 
-With `government=1`, `MIC`, `BT` and `CAMERA` are `no`. Any other value, no flag, or no `hw.conf` means a panel with all parts. `tsx-hw get KEY` and `tsx-hw show` print the file. If the command line has no flag, the rescue reads the U-Boot environment. `tsx-hw` has no fallback to the environment, because `fw_printenv` needs the env disk and can hang ([boot.md](boot.md) "Troubleshooting").
+The texts about a missing part show `REASON` in brackets, for example "this panel has no microphone (REASON)". They name the flag only through `REASON`.
+
+With `government=1`, `MIC`, `BT` and `CAMERA` are `no`. Any other value, no flag, or no `hw.conf` means a panel with all parts. `LEDBAR` is `yes` on every model, also the TSW-760-NC. `tsx-hw get KEY` and `tsx-hw show` print the file. If the command line has no flag, the rescue reads the U-Boot environment. `tsx-hw` has no fallback to the environment, because `fw_printenv` needs the env disk and can hang ([boot.md](boot.md) "Troubleshooting").
 
 These programs read `hw.conf`, not the command line:
 
 | Program | Behavior without a part |
 |---|---|
-| `tsx-config` | Accepts `VOICE=on`, `BT_PROXY=on`, `BT_ACTIVE=on` and each `CAMERA` mode, so that a `panel.conf` from another panel still loads. `set` and `show` print a warning. `apply` treats these keys as `off` ([rootfs.md](rootfs.md) "Panel configuration") |
+| `tsx-panelctl` | `tsx-panelctl has ledbar` is true when the tool `tsx-ledbar` is installed and `LEDBAR` is not `no`. Without `hw.conf` or without the key, the bar counts as there. Home Assistant gets the LED bar entities only then ([ledbar.md](https://github.com/tsx-mainline/tsx-linux-common/blob/main/docs/ledbar.md) "Panels without a bar") |
+| `tsx-config` | Accepts `VOICE=on`, `BT_PROXY=on`, `BT_ACTIVE=on` and each `CAMERA` mode, so that a `panel.conf` from another panel still loads. `set` and `show` print a warning with the `REASON` text. `apply` treats these keys as `off` ([rootfs.md](rootfs.md) "Panel configuration") |
 | `tsx-bt` | Does not touch the chip (no rfkill pulse, no UART). `tsx-bt status` prints `state=absent` with the reason. `up` and `down` exit 0 |
 | `tsx-voice` | Does not start. `tsx-esphome` serves the panel entities, also with `VOICE=on` |
 | `tsx-esphome` | Announces no Bluetooth proxy flags and no voice features. It has no camera entities. The other entities are the same as on a panel with all parts ([ha.md](ha.md)) |
-| Setup page | Shows the voice assistant, the Bluetooth proxy and the camera as not available |
+| Setup page | Shows the voice assistant, the Bluetooth proxy and the camera as not available, with the `REASON` text |
 | Installer | Looks for no Bluetooth PSR file and does not download the `.puf` for it ([install.md](install.md) "Bluetooth PSR file"). The speaker DSP files install as on other panels |
 
 If the chip does not answer on a panel with `government=0`, the failure reason names the flag.
 
-Host tests: `rootfs/tests/test-hw.sh`, and the government cases in `rootfs/tests/test-bt.sh`, `test-tsx-config-apply.sh`, `test-esphome.sh`, `test-setup.sh` and `installer/lib/tests/test-tsx-psr.sh`.
+Host tests: `rootfs/tests/test-hw.sh`, and the government cases in `rootfs/tests/test-bt.sh` and `rootfs/tests/common/test-bt-csr8811.sh`, `test-tsx-config-apply.sh`, `test-esphome.sh`, `test-setup.sh` and `installer/lib/tests/test-tsx-psr.sh`.
 
 ## Model differences
 

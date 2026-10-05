@@ -54,20 +54,20 @@ Provisioning creates a non-admin Home Assistant user for the panel, mints its lo
    | `wait-event`, `states-grep`, `light-state` | Read as the panel user: wait for one button event, list the visible entities, print the state of one light. |
 
    The script uses the WebSocket API and the Python standard library only.
-2. Run `provision/panel-provision.sh` with the panel, your Home Assistant URL, the light and your login:
+2. Run `provision/panel-provision.sh` with the panel, your Home Assistant URL and your login:
 
    ```sh
    provision/panel-provision.sh --panel <panel-ip> --ha-url https://ha.example.org \
-     --light light.example --broker <mqtt-host> --key ~/.ssh/panel_key
+     --broker <mqtt-host> --key ~/.ssh/panel_key
    ```
 
    The script first prints the panel, the login method and the Home Assistant URL, and tests the login. It writes nothing to the panel before the login test passes. Use `--check` to stop after this preflight. Then the script does these steps over ssh:
-   - It writes the token file `/etc/tsx/ha-token` for the front-key actions.
+   - It writes the token file `/etc/tsx/ha-token` for the front-key event.
    - It sets the MQTT broker, user and password and the `KIOSK_URL`.
    - It seeds the kiosk login token with `kiosk-set-token --file`.
    - It restarts `tsx-buttons` and `tsx-mqtt`.
    - It saves each file that it edits as `*.pre-provision`.
-3. Wait for the checks. The script presses the Lights key and checks the light, the `tsx_button` event, the MQTT entities and the kiosk page. It prints `FAIL` for each failed check.
+3. Wait for the checks. The script presses the Lights key and checks the `tsx_button` event, the MQTT entities and the kiosk page. It prints `FAIL` for each failed check.
 
 The script logs in as `root` with the login that you set in `panel.conf` (`ROOT_PASSWORD_HASH` or `SSH_AUTHORIZED_KEY`, see [rootfs.md](rootfs.md) "Root login"). The panel has no default password. The script never puts a password on a command line, never prints it and never stores it.
 
@@ -75,7 +75,6 @@ The script logs in as `root` with the login that you set in `panel.conf` (`ROOT_
 |---|---|---|
 | `--panel <ip>` | `$PANEL_IP` | Address of the panel. Required. |
 | `--ha-url <url>` | `$HA_URL` | Home Assistant URL, `http://` or `https://`. Required. |
-| `--light <entity>` | `$LIGHT` | The `light.` entity that the Lights key toggles. Required. |
 | `--key <file>` | none | Private key for `root`. |
 | `--password-file <file>` | `$PANEL_PASSWORD_FILE` | File with the root password. The script passes it to `sshpass -f`, so `sshpass` must be on the host. |
 | `--broker <host>` | `$BROKER`, else none | MQTT broker host. |
@@ -153,6 +152,8 @@ The panel is a Sendspin network-audio receiver. Music Assistant finds it over mD
 
 The button daemon fires a plain Home Assistant event, with no MQTT or entity setup. It needs the token file `/etc/tsx/ha-token`. Without it, the daemon skips every Home Assistant action. The event carries the panel name, the button name, the press type (`short` or `long`) and the raw key code. The event type is configurable.
 
+The five keys of the xx60 are `power`, `home`, `lights`, `up` and `down`, from top to bottom. A press fires this event and does nothing else: the keys have no local action. A press on a blank screen only wakes the screen. Home Assistant sets the key LEDs and their screen-off level. [rootfs.md](rootfs.md) "Front keys, key LEDs and the LED bar" tells how to bind an action to a key.
+
 ```yaml
 trigger:
   - platform: event
@@ -169,10 +170,10 @@ The ESPHome device has these entities. The exact entity IDs depend on your Home 
 | Entity | Type | What it does |
 |---|---|---|
 | LED bar | RGB light, effects | Sets the color of the LED bar. See "LED bar light". Only where `tsx-ledbar` is installed. |
-| Key LEDs | Brightness light | Sets the level of the key LEDs while the screen is awake. Off makes the keys dark at once, also while the screen is blank. Both hold until `tsx-keypad led auto` ([rootfs.md](rootfs.md) "Key LED levels"). The light shows the awake level. Only with front keys (`/etc/tsx/buttons.conf`). |
-| Key LEDs screen-off level | Number, 0 to 255 | The level of the key LEDs while the screen is blank. `0` makes the keys dark. Stored in `panel.conf` (`KEY_LED_BLANK`), so it survives a reboot or reinstall. `tsx-buttons` applies it at once. Only with front keys. |
+| Key LEDs | Brightness light | Sets the level of the key LEDs while the screen is awake. Off makes the keys dark at once, also while the screen is blank. Both hold until `tsx-keypad led auto` ([rootfs.md](rootfs.md) "Key LED levels"). The light shows the awake level. Only where the keys have LEDs. |
+| Key LEDs screen-off level | Number, 0 to 255 | The level of the key LEDs while the screen is blank. `0` makes the keys dark. Stored in `panel.conf` (`KEY_LED_BLANK`), so it survives a reboot or reinstall. `tsx-buttons` applies it at once. Only where the keys have LEDs. |
 | Screen | Switch | On = awake. Off blanks the screen. |
-| Backlight | Number | Sets a fixed level in the brightness steps of the panel. It wins over the ambient light sensor until the next day/night change or until *Auto brightness* turns on. The slider on the panel turns it back into an offset ([rootfs.md](rootfs.md) "Quick settings and the front-key strip"). |
+| Backlight | Number | Sets a fixed level in the brightness steps of the panel. It wins over the ambient light sensor until the next day/night change or until *Auto brightness* turns on. The slider on the panel turns it back into an offset ([rootfs.md](rootfs.md) "Quick settings"). |
 | Blank timeout | Number (box), 0 to 86400 | Seconds without input before the screen goes dark. `0` = never. Stored in `panel.conf` (`BLANK_TIMEOUT`), so it survives a reboot or reinstall. `tsx-idled` applies it at once. |
 | Orientation | Select: `landscape`, `portrait`, `landscape-flipped`, `portrait-flipped` | Sets how the panel hangs ([rootfs.md](rootfs.md) "Orientation"). Stored in `panel.conf` (`ORIENTATION`). The kiosk turns at once. The boot splash turns from the next boot. |
 | Kiosk URL | Text | Sets the dashboard URL. Also updates `panel.conf` (`KIOSK_URL`), so it survives a reboot or reinstall. |
@@ -191,7 +192,7 @@ The ESPHome device has these entities. The exact entity IDs depend on your Home 
 | Verbose boot | Switch | On shows kernel and boot text on the LCD instead of the splash, from the next boot. Stored in `panel.conf` (`BOOT_VERBOSE`). |
 | Update | Update entity | Status and Install action of `tsx-autoupdate` (see "Update entity"). |
 | Voice entities | See "Voice satellite" | On the same device. A panel with a microphone shows the voice selects and an idle assist satellite also with voice off. |
-| Camera, Take snapshot, Last snapshot | Camera, button, timestamp sensor | The panel camera. All three with `CAMERA=snapshot`, only Camera with `CAMERA=live`, none with `off` (the default). See "Camera". |
+| Camera, Take snapshot, Last snapshot | Camera, button, timestamp sensor | The panel camera. All three with `CAMERA=snapshot`, only Camera with `CAMERA=live`, none with `off` (the default). The plugin `esphome.d/camera.py` adds them. See "Camera". |
 
 A Bluetooth proxy is not an entity. With `BT_PROXY=on` the device is also a Bluetooth scanner for Home Assistant (see "Bluetooth proxy").
 
@@ -242,7 +243,7 @@ The LED bar light is an RGB light. Each effect takes its color from the light.
 |---|---|---|
 | `None` | none | Shows the light color. |
 | `Pulse` | none | A software breathing effect. |
-| `Breathe`, `Blink`, `Rainbow` | Bar firmware TSX-LEDBAR | Run on the bar ([rootfs.md](rootfs.md) "Front keys, key LEDs and the LED bar"). |
+| `Breathe`, `Blink`, `Rainbow` | Bar firmware TSX-LEDBAR | Run on the bar ([LED bar](https://github.com/tsx-mainline/tsx-linux-common/blob/main/docs/ledbar.md) "Effects"). |
 | `Chase` | TSX-LEDBAR 0.1.3 or later (`tsx-panelctl has ledbar-leds`) | A dot of the light color (with its brightness) runs down both sides. One run takes 1.5 s. |
 | `Fill` | TSX-LEDBAR 0.1.3 or later | A level bar from the bottom up in the light color at full level. The brightness of the light sets the height (0 to 100 %). |
 | `Spectrum` | TSX-LEDBAR 0.1.3 or later | The hue circle on the bar at the brightness of the light. One cycle takes 10 s. The light keeps its color. |
@@ -399,7 +400,7 @@ The scanner uses a raw HCI socket and not BlueZ. It needs only the Python standa
 3. It finds the Bluetooth address and runs `chip_up` of the chip file. A board whose kernel driver registers `hciN` without help sets `TSX_BT_CHIP=none`.
 4. It waits for `hciN` for at most 20 s (`TSX_BT_WAIT`). A late kernel driver gets `HCIDEVUP` (`btscan.py --up`).
 
-The chip file is `/usr/local/lib/tsx/bt-chip-csr8811.sh`. It holds the rfkill pulse, the PSR upload, `hciattach` and the government check. A board with another chip sets `TSX_BT_CHIP` to its own file with the functions `chip_absent_reason`, `chip_up` and `chip_down`. `tsx-bt` has no chip steps.
+The chip file is `/usr/local/lib/tsx/bt-chip-csr8811.sh`. The xx60 board file names it in `TSX_BT_CHIP`. It holds the rfkill pulse, the PSR upload (with `csr_psload.py`) and `hciattach`. On a panel with `BT=no` it gives the `REASON` text of `hw.conf` as the reason. A board with another chip sets `TSX_BT_CHIP` to its own file with the functions `chip_up` and `chip_down`. `tsx-bt` itself has no chip steps.
 
 The address source on the xx60 is `BT_MAC`, else the eth0 MAC. If neither exists, or the board has no chip file, the controller keeps its own address. `tsx-btscan` reads it with Read BD_ADDR and writes it to `/run/tsx/bt.mac`, where the ESPHome servers read it. If `bt.mac` exists already, `tsx-btscan` only logs a warning when the controller reports another address.
 
@@ -436,7 +437,7 @@ A failed bring-up never stops the boot. The device info still announces the prox
 
 The camera works on the TSW-1060 and the TSS-10. The TSW-760 has the same camera. It is not tested on hardware. The NC models have no camera. `CAMERA` in `panel.conf` sets the mode: `off` (the default), `snapshot` or `live`. Only the panel sets the mode, with `tsx-config` or the setup page. Home Assistant cannot turn the camera on.
 
-The [camera page of tsx-linux-common](https://github.com/tsx-mainline/tsx-linux-common/blob/main/docs/camera.md) describes the modes, the entities, privacy, the limits and troubleshooting. [hardware.md](hardware.md) "Camera" describes the sensor and the capture device.
+[camera.md](camera.md) describes the modes, the entities, privacy, the limits and troubleshooting. [hardware.md](hardware.md) "Camera" describes the sensor and the capture device.
 
 ### Security
 
@@ -475,7 +476,7 @@ MQTT entities:
 | Entity | Type | What it does |
 |---|---|---|
 | LED bar | RGB light | Sets the bar color. No effects. Only where `tsx-ledbar` is installed. |
-| Key LEDs | Brightness light | Shows the level while the screen is awake. Only with front keys. The MQTT device has no screen-off level number. |
+| Key LEDs | Brightness light | Shows the level while the screen is awake. Only where the keys have LEDs. The MQTT device has no screen-off level number. |
 | Screen | Switch | On = awake. |
 | Backlight | Number | Brightness step range of the panel. |
 | Blank timeout | Number (box) | Seconds, `0` = never (`tsx-config set BLANK_TIMEOUT` + `apply`, as on the ESPHome device). |
