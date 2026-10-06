@@ -101,6 +101,9 @@
 #
 # Needs: $TSX_ADMIN_PW (the Crestron console and web UI admin password) for
 # step 1, not for a reinstall. The user is $TSX_ADMIN_USER, default admin.
+# The prompts and the checks of panel.conf use the tsx-config of tsx-linux-common.
+# Set $TSX_COMMON to the top of a checkout. The default is the folder
+# tsx-linux-common next to this repository.
 # Host tools: sshpass ssh python3 curl sha256sum ip. unzip is needed only for
 # the .puf download, and debugfs (e2fsprogs) only for the PSR file from it.
 # Without that download, a panel that has no DSP files gets no vendor speaker
@@ -136,7 +139,6 @@ case "$UART_OPT" in auto|yes|no) ;; *) echo "--uart must be auto, yes, or no" >&
 case "$TFA_SOURCE" in auto|panel|puf|none) ;; *) echo "--tfa-source must be auto, panel, puf, or none" >&2; exit 2;; esac
 case "$PSR_SOURCE" in auto|panel|puf|none) ;; *) echo "--psr-source must be auto, panel, puf, or none" >&2; exit 2;; esac
 [ -z "$CONFIG" ] || [ -f "$CONFIG" ] || { echo "tsx-install-mainline: --config file not found: $CONFIG" >&2; exit 2; }
-TSX_CONFIG_BIN=$(cd "$HERE/../rootfs/overlay/usr/local/sbin" && pwd -P)/tsx-config
 . "$HERE/lib/tsx-config-prompt.sh"   # the prompts and the root login check
 [ -n "$RESULTS" ] || RESULTS="$HERE/results/tsx-install-mainline-$(date +%Y%m%d-%H%M).txt"
 mkdir -p "$(dirname "$RESULTS")"
@@ -197,7 +199,7 @@ cleanup() {
 	# "|| true": under set -e a failed kill (server already stopped) would end
 	# cleanup early and leave the next server running
 	for s in "$STAGE1" "$STAGE2"; do [ -n "$s" ] && [ -f "$s/.http.pid" ] && kill "$(cat "$s/.http.pid")" 2>/dev/null || true; done
-	rm -rf "$STAGE1" "$STAGE2"
+	rm -rf "$STAGE1" "$STAGE2" "${TSX_CONFIG_STAGE:-}"
 	[ ${#TMPFILES[@]} = 0 ] || rm -f "${TMPFILES[@]}"
 }
 trap cleanup EXIT

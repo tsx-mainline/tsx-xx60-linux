@@ -10,15 +10,15 @@
 #      because the panel keeps its own panel.conf.
 #   3. The prompt flow of installer/lib/tsx-config-prompt.sh, with answers on
 #      stdin (a scripted or piped install, or this test). It uses the tsx-config
-#      of the panel. So `tsx-config apply` on the panel accepts every value
-#      that this flow accepts. The flow asks again after a bad answer and does
-#      not accept it.
+#      of the panel (tsx-linux-common, found through TSX_COMMON). So
+#      `tsx-config apply` on the panel accepts every value that this flow
+#      accepts. The flow asks again after a bad answer and does not accept it.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 DRIVER="$HERE/tsx-install-mainline"
-TSX_CONFIG_BIN="$HERE/../rootfs/overlay/usr/local/sbin/tsx-config"
+. "$HERE/lib/tsx-config-prompt.sh"   # sets TSX_CONFIG_BIN (tsx-config of tsx-linux-common with the xx60 board file)
 command -v busybox >/dev/null 2>&1 || { echo "SKIPPED test-install-mainline-config: no busybox on this host"; exit 0; }
-W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
+W=$(mktemp -d); trap 'rm -rf "$W" "${TSX_CONFIG_STAGE:-}"' EXIT
 N=0 F=0
 ok() { echo "  ok: $*"; N=$((N+1)); }
 bad() { echo "  FAIL: $*"; F=$((F+1)); }

@@ -8,7 +8,8 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 DRIVER="$HERE/tsx-install-mainline"
-W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
+. "$HERE/lib/tsx-config-prompt.sh"   # sets TSX_CONFIG_BIN (tsx-config of tsx-linux-common with the xx60 board file)
+W=$(mktemp -d); trap 'rm -rf "$W" "${TSX_CONFIG_STAGE:-}"' EXIT
 N=0 F=0
 ok() { echo "  ok: $*"; N=$((N+1)); }
 bad() { echo "  FAIL: $*"; F=$((F+1)); }
@@ -30,7 +31,7 @@ boot_sha256=$(sha256sum < "$p/lts/boot.img" | cut -d' ' -f1)" > "$p/lts/manifest
 
 echo "== 1. --dry-run with a valid payload: no PANEL_IP needed error, but usage is required"
 mkpayload "$W/good"
-TSX_CONF="$W/login.conf" "$HERE/../rootfs/overlay/usr/local/sbin/tsx-config" set SSH_AUTHORIZED_KEY "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test@host" >/dev/null
+TSX_CONF="$W/login.conf" "$TSX_CONFIG_BIN" set SSH_AUTHORIZED_KEY "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test@host" >/dev/null
 OUT=$("$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --dry-run 2>&1) && ok "dry-run exits 0" || bad "dry-run failed: $OUT"
 echo "$OUT" | grep -q "dry-run done" && ok "prints 'dry-run done'"
 echo "$OUT" | grep -q "dry-run\] 1:" && ok "prints step 1 (get root)"

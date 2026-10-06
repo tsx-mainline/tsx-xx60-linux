@@ -204,7 +204,7 @@ Environment variables:
 
 ### Panel configuration
 
-The installer builds `/data/tsx/panel.conf` after it arms the rescue and before it looks for the rescue. The file holds the panel name, the Home Assistant URL and login, the time zone, voice, MQTT, a root password hash and an SSH key. See [rootfs.md](rootfs.md) "Panel configuration" and `installer/panel.conf.example`. You can answer in three ways:
+The installer builds `/data/tsx/panel.conf` after it arms the rescue and before it looks for the rescue. The file holds the panel name, the Home Assistant URL and login, the time zone, voice, MQTT, a root password hash and an SSH key. See [rootfs.md](rootfs.md) "Panel configuration" and `installer/panel.conf.example`. The installer builds and checks the file with the `tsx-config` script of tsx-linux-common. Set `TSX_COMMON` to the top of a checkout of that repository. The default is the folder `tsx-linux-common` next to this repository. You can answer in three ways:
 
 | Mode | Behavior |
 |---|---|

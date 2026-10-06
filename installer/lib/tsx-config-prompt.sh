@@ -2,8 +2,9 @@
 # installer/lib/tsx-config-prompt.sh: interactive panel.conf prompts for
 # tsx-install-mainline. Source this file, do not run it. It builds the file
 # with the same tsx-config script that the panel runs
-# (rootfs/overlay/usr/local/sbin/tsx-config). So `tsx-config apply` on the
-# panel accepts every value that this script accepts. There is one parser and
+# (usr/local/sbin/tsx-config of tsx-linux-common, with the board file and the
+# config.d plugins of rootfs/overlay). So `tsx-config apply` on the panel
+# accepts every value that this script accepts. There is one parser and
 # validator, not two (docs/rootfs.md "Panel configuration").
 #
 #   tsx_config_prompt OUTFILE [DEFAULTS_FILE]
@@ -22,8 +23,33 @@
 # already in DEFAULTS_FILE (a reinstall) stays as it is, because Home Assistant
 # already has it.
 set -u
-TSX_CONFIG_BIN=${TSX_CONFIG_BIN:-"$(cd "$(dirname "${BASH_SOURCE[0]}")/../../rootfs/overlay/usr/local/sbin/tsx-config" 2>/dev/null && pwd -P)/tsx-config"}
-[ -x "$TSX_CONFIG_BIN" ] || TSX_CONFIG_BIN=$(dirname "${BASH_SOURCE[0]}")/../../rootfs/overlay/usr/local/sbin/tsx-config
+
+# tsx_config_stage: set TSX_CONFIG_BIN to a tsx-config that finds the xx60 board
+# file and its config.d plugins next to itself (the way the script runs from a
+# checkout on a host). The script comes from the checkout of tsx-linux-common
+# that TSX_COMMON names. The default is the folder tsx-linux-common next to
+# this repository. The function copies the three parts into a temporary
+# folder with the layout of the panel. The caller removes the folder
+# $TSX_CONFIG_STAGE at the end. A caller that sets TSX_CONFIG_BIN keeps it.
+tsx_config_stage() {
+	[ -z "${TSX_CONFIG_BIN:-}" ] || return 0
+	local here top common
+	here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+	top=$(cd "$here/../.." && pwd -P)
+	common=${TSX_COMMON:-$top/../tsx-linux-common}
+	if [ ! -x "$common/base/usr/local/sbin/tsx-config" ]; then
+		echo "no tsx-linux-common checkout at $common" >&2
+		echo "Set TSX_COMMON to the top of a tsx-linux-common checkout." >&2
+		return 2
+	fi
+	TSX_CONFIG_STAGE=$(mktemp -d) || return 1
+	mkdir -p "$TSX_CONFIG_STAGE/usr/local/sbin" "$TSX_CONFIG_STAGE/usr/local/lib/tsx"
+	cp "$common/base/usr/local/sbin/tsx-config" "$TSX_CONFIG_STAGE/usr/local/sbin/"
+	cp "$top/rootfs/overlay/usr/local/lib/tsx/board.sh" "$TSX_CONFIG_STAGE/usr/local/lib/tsx/"
+	cp -r "$top/rootfs/overlay/usr/local/lib/tsx/config.d" "$TSX_CONFIG_STAGE/usr/local/lib/tsx/"
+	TSX_CONFIG_BIN=$TSX_CONFIG_STAGE/usr/local/sbin/tsx-config
+}
+tsx_config_stage || exit 2
 
 _tcp_default() {  # _tcp_default KEY: print the default (empty if unset), never fail
 	local key=$1

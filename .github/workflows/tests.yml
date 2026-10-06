@@ -31,8 +31,16 @@ jobs:
   host-tests:
     name: host tests (no hardware)
     runs-on: ubuntu-latest
+    # The installer tests use the tsx-config of tsx-linux-common.
+    env:
+      TSX_COMMON: ${{ github.workspace }}/tsx-linux-common
     steps:
       - uses: actions/checkout@v4
+      - name: check out tsx-linux-common
+        uses: actions/checkout@v4
+        with:
+          repository: tsx-mainline/tsx-linux-common
+          path: tsx-linux-common
       # gawk: test-tsx-tfa.sh checks the CRC with the awk of the host, and mawk (the
       # awk of the runner) cannot. u-boot-tools: mkimage for test-aml-dt.sh.
       - name: install build deps (gcc for the fake-sysfs tests, libmpv for test-esphome.sh, busybox + cpio + gawk for test-tsx-tfa.sh, u-boot-tools for test-aml-dt.sh)
