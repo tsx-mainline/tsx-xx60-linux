@@ -250,11 +250,17 @@ svc_enable() {  # $1 = add|del, services...
 # satellite. Disable starts tsx-esphome again, but only when the satellite was
 # enabled before: apply runs "disable voice" at every boot with VOICE=off,
 # and that must not start tsx-esphome ahead of its own place in the boot order.
+# Inside an OpenRC service (RC_SVCNAME is set: the boot apply of the tsx-config
+# service), enable only puts the satellite into the default runlevel. A start
+# there waits for tsx-config itself (tsx-voice starts after it) until the
+# OpenRC timeout, about 60 s, and the network comes up that much later. The
+# default runlevel starts the satellite in its own place.
 voice_enabled() { [ -e "${TSX_RUNLEVEL_DIR:-/etc/runlevels/default}/tsx-voice" ]; }
 
 voice_handover() {  # $1 = add|del
 	if [ "$1" = add ]; then
 		rc-update add tsx-voice default >/dev/null || return 1
+		[ -n "${RC_SVCNAME:-}" ] && return 0
 		rc-service tsx-esphome stop >/dev/null 2>&1
 		rc-service tsx-voice start
 	else

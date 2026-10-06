@@ -129,6 +129,8 @@ au() { PATH=$T/pbin:$PATH TSX_INITD=$T/initd busybox sh "$HERE/overlay/usr/local
 rl() { tr '\n' '|' < "$T/rc.log"; }
 : > "$T/rc.log"; au enable voice >/dev/null; rc=$?
 [ $rc = 0 ] && [ "$(rl)" = "rc-update add tsx-voice default|rc-service tsx-esphome stop|rc-service tsx-voice start|" ] && ok "enable voice: runlevel, stop tsx-esphome, then start" || bad "enable voice (rc $rc): $(rl)"
+: > "$T/rc.log"; RC_SVCNAME=tsx-config au enable voice >/dev/null; rc=$?
+[ $rc = 0 ] && [ "$(rl)" = "rc-update add tsx-voice default|" ] && ok "enable voice inside a service (boot apply of tsx-config): runlevel only, no start that waits for tsx-config" || bad "enable voice in a service (rc $rc): $(rl)"
 rm -rf "$T/rl0"; : > "$T/rc.log"; TSX_RUNLEVEL_DIR=$T/rl0 au disable voice >/dev/null; rc=$?
 [ $rc = 0 ] && [ "$(rl)" = "rc-service tsx-voice stop|rc-update del tsx-voice default|" ] && ok "disable voice, never enabled (boot with VOICE=off): tsx-esphome is not touched" || bad "disable voice (rc $rc): $(rl)"
 : > "$T/rc.log"; TSX_RUNLEVEL_DIR=$T/rl au disable voice >/dev/null; rc=$?
