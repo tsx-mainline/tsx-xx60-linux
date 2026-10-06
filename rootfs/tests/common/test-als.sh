@@ -1,13 +1,20 @@
 #!/bin/sh
-# Host test of tsx-als (fake IIO + backlight sysfs) and of the tsx-mqtt ALS
-# entities (dry-run mode). No compiler needed. busybox/dash sh.
+# Host test of tsx-als of the xx60 board (fake IIO + backlight sysfs) and of the
+# tsx-mqtt ALS entities (dry-run mode) of tsx-linux-common. No compiler needed.
+# busybox/dash sh.
 set -eu
-# The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
-export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
-export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
-HERE=$(cd "$(dirname "$0")" && pwd); O=$HERE/../../rootfs/overlay
-ALS=$O/usr/local/sbin/tsx-als
+. "$(dirname "$0")/lib.sh"
 T=$(mktemp -d); PCPID=; trap '[ -z "$PCPID" ] || kill "$PCPID" 2>/dev/null; rm -rf "$T"' EXIT
+# O has the layout of a panel: the board files of this repository and the
+# shared software of tsx-linux-common, side by side.
+O=$T/o
+mkdir -p "$O/usr/local/sbin" "$O/etc/tsx"
+ln -s "$XX60/rootfs/overlay/usr/local/sbin/tsx-als" "$O/usr/local/sbin/tsx-als"
+ln -s "$XX60/rootfs/overlay/etc/tsx/als.conf" "$O/etc/tsx/als.conf"
+ln -s "$(P usr/local/sbin/tsx-mqtt)" "$O/usr/local/sbin/tsx-mqtt"
+ln -s "$(P usr/local/sbin/tsx-panelctl)" "$O/usr/local/sbin/tsx-panelctl"
+ln -s "$(P etc/kiosk.conf)" "$O/etc/kiosk.conf"
+ALS=$O/usr/local/sbin/tsx-als
 mkdir -p "$T/iio/iio:device0" "$T/bl/mp3309c" "$T/run" "$T/bin"
 printf '#!/bin/sh\n:\n' > "$T/bin/usleep"; chmod +x "$T/bin/usleep"
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/tsx-config"; chmod +x "$T/bin/tsx-config"

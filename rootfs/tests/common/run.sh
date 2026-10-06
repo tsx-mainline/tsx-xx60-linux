@@ -10,7 +10,7 @@
 # The lists are explicit. A new test goes into the list.
 set -u
 cd "$(dirname "$0")"
-TESTS="mqtt-dry test-board-xx60 test-brightness-xx60 test-bt-csr8811 test-buttons-xx60 test-camera test-ledbar-xx60 test-panel-board test-rescue-backlight test-rescue-screen test-tsx-config-apply test-tsx-setup-mac"
+TESTS="mqtt-dry test-als test-audio-miccheck test-board-xx60 test-brightness-xx60 test-bt-csr8811 test-buttons-xx60 test-camera test-initscripts test-ledbar-xx60 test-panel-board test-rescue-backlight test-rescue-screen test-tsx-config-apply test-tsx-setup-mac"
 CLEAN=
 trap '[ -z "$CLEAN" ] || rm -rf $CLEAN' EXIT
 if [ -n "${TSX_TEST_LOGDIR:-}" ]; then LOG=$TSX_TEST_LOGDIR; else LOG=$(mktemp -d); CLEAN="$CLEAN $LOG"; fi

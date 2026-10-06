@@ -70,8 +70,6 @@ jobs:
         run: rootfs/tests/test-idled-runtime.sh
       - name: rootfs/tests/test-idled-display.sh - display output off while blank (tsx-display-power)
         run: rootfs/tests/test-idled-display.sh
-      - name: rootfs/tests/test-als.sh
-        run: rootfs/tests/test-als.sh
       - name: rootfs/tests/test-clock.sh - network time (chrony, DHCP NTP servers, boot clock floor)
         run: sh rootfs/tests/test-clock.sh
       - name: rootfs/tests/test-autoupdate-logic.sh
@@ -108,10 +106,6 @@ jobs:
         run: sh rootfs/tests/ledbar-host-test.sh
       - name: rootfs/tests/test-ledbard.sh - LED bar start check, restart of the STM32 and load from bootloader mode (fake console, fake package tool)
         run: sh rootfs/tests/test-ledbard.sh
-      - name: rootfs/tests/test-initscripts.sh - init script start logic, eMMC state writer, weekly fstrim
-        run: rootfs/tests/test-initscripts.sh
-      - name: rootfs/tests/test-audio-miccheck.sh - tsx-audio mic-check, raw microphone beside the gated capture
-        run: rootfs/tests/test-audio-miccheck.sh
       - name: rootfs/tests/test-hw.sh - the panel parts from the government flag (/run/tsx/hw.conf)
         run: rootfs/tests/test-hw.sh
       - name: rootfs/tests/test-board-xx60.sh - the board file of the xx60 and tsx-board

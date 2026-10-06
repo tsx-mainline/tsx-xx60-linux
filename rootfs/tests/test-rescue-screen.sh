@@ -19,8 +19,12 @@
 set -eu
 # The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
 export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
-export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
+# The shared software comes from tsx-linux-common (TSX_COMMON).
+COMMON=${TSX_COMMON:-$HERE/../tsx-linux-common}
+[ -r "$COMMON/tests/lib/paths.sh" ] || { echo "no tsx-linux-common checkout at $COMMON (set TSX_COMMON)" >&2; exit 2; }
+TSX_ROOT=$COMMON; . "$COMMON/tests/lib/paths.sh"
+export TSX_BOARD_BIN=$(P usr/local/bin/tsx-board)
 RS=$HERE/rootfs/initramfs/overlay/usr/sbin/tsx-rescue-status
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 N=0 F=0

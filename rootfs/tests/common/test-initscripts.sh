@@ -1,20 +1,25 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Host test for the init scripts and the periodic jobs of the xx60 rootfs
-# (rootfs/overlay/etc/init.d, rootfs/overlay/etc/periodic, docs/rootfs.md).
+# Host test for the init scripts and the periodic jobs of the xx60 rootfs: the
+# board scripts of this repository (rootfs/overlay/etc/init.d) and the scripts
+# of tsx-linux-common (docs/rootfs.md).
 # OpenRC is not here: each script is sourced under busybox sh with
 # stand-ins for einfo, checkpath and default_start. Its /usr/local/sbin,
 # /run/tsx, /etc/tsx and /etc/crontabs paths move into a temp directory.
 # A panel without a part, or without a setting, must start nothing and
 # fail nothing.
 set -uo pipefail
-# The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
-export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
-export TSX_BOARD_BIN=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/bin/tsx-board
-HERE=$(cd "$(dirname "$0")/.." && pwd)
-I=$HERE/overlay/etc/init.d
+. "$(dirname "$0")/lib.sh"
+HERE=$XX60/rootfs
 command -v busybox >/dev/null 2>&1 || { echo "SKIPPED test-initscripts: no busybox on this host"; exit 0; }
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+# I holds every init script of the image: the board scripts and the scripts of
+# tsx-linux-common (the services of one image come from both).
+I=$T/allinit; mkdir -p "$I"
+for d in "$HERE/overlay/etc/init.d" $(for p in $TSX_PKGS; do echo "$COMMON/$p/etc/init.d"; done); do
+	[ -d "$d" ] || continue
+	for f in "$d"/*; do [ -e "$f" ] && ln -sf "$f" "$I/${f##*/}"; done
+done
 mkdir -p "$T/log" "$T/sbin" "$T/pbin" "$T/run" "$T/etc/tsx" "$T/etc/crontabs"
 N=0 F=0
 ok() { echo "  ok: $*"; N=$((N+1)); }
@@ -221,6 +226,7 @@ rm -rf "$T/er"; PATH=$T/bin:$PATH TSX_EMMC_DIR=$T/emmc-empty TSX_RUN_DIR=$T/er s
 [ -x "$HERE/overlay/etc/periodic/hourly/tsx-emmc-state" ] && busybox sh -n "$HERE/overlay/etc/periodic/hourly/tsx-emmc-state" && ok "the hourly job is executable and has valid syntax" || bad "hourly job"
 
 echo "== weekly fstrim =="
+FSTRIM=$(P etc/periodic/weekly/tsx-fstrim)
 mkdir -p "$T/bin"
 cat > "$T/bin/mountpoint" <<'EOS'
 #!/bin/sh
@@ -230,15 +236,15 @@ EOS
 printf '#!/bin/sh\necho "fstrim $*" >> "%s/trim.log"\n[ -z "$FSTRIM_FAIL" ] || { echo "the discard operation is not supported"; exit 1; }\necho "$2: 1 GiB trimmed"\n' "$T" > "$T/bin/fstrim"
 printf '#!/bin/sh\necho "logger $*" >> "%s/trim.log"\n' "$T" > "$T/bin/logger"
 chmod +x "$T/bin/"*
-busybox sh -n "$HERE/overlay/etc/periodic/weekly/tsx-fstrim" && ok "busybox sh -n" || bad "syntax"
-: > "$T/trim.log"; PATH=$T/bin:$PATH MOUNTED="/ /data" sh "$HERE/overlay/etc/periodic/weekly/tsx-fstrim"; rc=$?
+busybox sh -n "$FSTRIM" && ok "busybox sh -n" || bad "syntax"
+: > "$T/trim.log"; PATH=$T/bin:$PATH MOUNTED="/ /data" sh "$FSTRIM"; rc=$?
 [ $rc = 0 ] && grep -qx 'fstrim -v /' "$T/trim.log" && grep -qx 'fstrim -v /data' "$T/trim.log" && grep -q 'logger -t tsx-fstrim /data: 1 GiB trimmed' "$T/trim.log" \
 	&& ok "trims / and /data and logs the result" || bad "fstrim run (rc $rc): $(cat "$T/trim.log")"
-: > "$T/trim.log"; PATH=$T/bin:$PATH MOUNTED="/" sh "$HERE/overlay/etc/periodic/weekly/tsx-fstrim"
+: > "$T/trim.log"; PATH=$T/bin:$PATH MOUNTED="/" sh "$FSTRIM"
 [ "$(grep -c '^fstrim' "$T/trim.log")" = 1 ] && ok "no /data mounted: only /" || bad "unmounted /data trimmed: $(cat "$T/trim.log")"
-: > "$T/trim.log"; PATH=$T/bin:$PATH MOUNTED="/ /data" FSTRIM_FAIL=1 sh "$HERE/overlay/etc/periodic/weekly/tsx-fstrim"; rc=$?
+: > "$T/trim.log"; PATH=$T/bin:$PATH MOUNTED="/ /data" FSTRIM_FAIL=1 sh "$FSTRIM"; rc=$?
 [ $rc = 0 ] && grep -q 'fstrim failed: the discard operation is not supported' "$T/trim.log" && ok "a failing fstrim is logged, the script still exits 0" || bad "failing fstrim (rc $rc): $(cat "$T/trim.log")"
-[ -x "$HERE/overlay/etc/periodic/weekly/tsx-fstrim" ] && ok "the script is executable (run-parts skips others)" || bad "not executable"
+[ -x "$FSTRIM" ] && ok "the script is executable (run-parts skips others)" || bad "not executable"
 grep -qx util-linux-misc "$HERE/packages.txt" && ok "packages.txt: util-linux-misc (fstrim)" || bad "no util-linux-misc package"
 
 echo "== $N ok, $F failed =="

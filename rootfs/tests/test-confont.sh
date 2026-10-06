@@ -13,9 +13,13 @@
 #     same art. test-rescue-screen.sh checks the whole screen.
 set -eu
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
+# The motd comes from tsx-linux-common (TSX_COMMON).
+COMMON=${TSX_COMMON:-$HERE/../tsx-linux-common}
+[ -r "$COMMON/tests/lib/paths.sh" ] || { echo "no tsx-linux-common checkout at $COMMON (set TSX_COMMON)" >&2; exit 2; }
+TSX_ROOT=$COMMON; . "$COMMON/tests/lib/paths.sh"
 CF=$HERE/rootfs/initramfs/overlay/usr/sbin/tsx-confont
 RS=$HERE/rootfs/initramfs/overlay/usr/sbin/tsx-rescue-status
-MOTD=$HERE/rootfs/overlay/etc/motd
+MOTD=$(P etc/motd)
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 N=0 F=0
 ok()  { N=$((N + 1)); echo "  ok: $*"; }

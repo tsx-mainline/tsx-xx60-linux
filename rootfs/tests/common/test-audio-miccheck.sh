@@ -8,9 +8,8 @@
 # Stand-ins: i2ctransfer (a register file), arecord (writes a WAV from the
 # register state), the sound card directory and the zl38060 driver directory.
 set -uo pipefail
-HERE=$(cd "$(dirname "$0")/.." && pwd)
-AUDIO=$HERE/overlay/usr/local/bin/tsx-audio
-export TSX_BOARD_CONF=$HERE/overlay/usr/local/lib/tsx/board.sh
+. "$(dirname "$0")/lib.sh"
+AUDIO=$XX60/rootfs/overlay/usr/local/bin/tsx-audio
 command -v busybox >/dev/null 2>&1 || { echo "SKIPPED test-audio-miccheck: no busybox on this host"; exit 0; }
 command -v python3 >/dev/null 2>&1 || { echo "SKIPPED test-audio-miccheck: no python3 on this host"; exit 0; }
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
