@@ -14,6 +14,10 @@
 #   5. installer/rescue-v2/mkrescue-v2.sh       -> OUT (stamps the version)
 #      The rescue screen itself is in the base initramfs.
 #
+# TSX_APK_LOCAL (the environment) is required. It is a local copy of the published
+# apk tree (rootfs/fetch-apk-tree.sh). Step 2 takes the packages of
+# rootfs/initramfs/packages.pin from it.
+#
 #   ci/build-rescue.sh --kdir OUT_DIR --out RESCUE.img [--flavor NAME]
 #     --kdir OUT_DIR   the OUT_DIR of a kbuild.sh "image" step (zImage, board
 #                      DTB, kernel.release). The flavor of the kernel in the

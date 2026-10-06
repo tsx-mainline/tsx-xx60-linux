@@ -1,19 +1,6 @@
-# Expected differences between an image built from the overlay (old path) and
-# one built from packages (TSX_FROM_PACKAGES=1). Used by compare-rootfs.py.
+# Expected differences between two images that were built from packages (before
+# and after a change). Used by compare-rootfs.py.
 # Format: a regular expression for the path, two spaces, the reason.
 ^(lib/apk/db/|var/log/apk\.log$|etc/apk/world$|var/cache/fontconfig/)  apk database, apk log, package list and font caches
 ^etc/tsx/build-id$  build time stamp
-^usr$  /usr: the overlay copy of the old path leaves the owner of the checkout
-^usr/(bin/cage|local/bin/(tsx-ledbar|tsx-peak|tsx-splash|tsx-overlay)|local/sbin/(tsx-idled|tsx-buttons))$  compiled in the package build (other flags), same source, other bytes
 ^opt/lva/lib/micro_features_cpp\.abi3\.so$  extension compiled again in each image build
-^(etc/init\.d/(kiosk|tsx-bt|tsx-config|tsx-data|tsx-hostname|tsx-idled|tsx-setup)|etc/kiosk\.conf|etc/local\.d/tsx-ip\.start|etc/securetty|usr/local/bin/(kiosk-session|tsx-orientation)|usr/local/sbin/(tsx-autoupdate|tsx-banner|tsx-config|tsx-mqtt|tsx-panelctl|tsx-setupd)|opt/lva/shim/.*)$  file of tsx-linux-common v0.1.1, newer than the copy in rootfs/overlay
-^usr/sbin/tsx-orientation$  file of tsx-linux-common v0.1.1, newer than the copy in rootfs/overlay
-^(etc/tsx/buttons\.conf|usr/local/bin/(tsx-keypad|tsx-kiosk-page))$  file of tsx-linux-common 0.2.0 (the buttons.conf template, the tool tsx-kiosk-page), newer than the copy in rootfs/overlay. The keys are in buttons-board.conf
-^usr/local/lib/tsx/serial\.sh$  new in tsx-base
-^(etc/local\.d/tsx-banner\.start|etc/tsx/banner\.art|etc/tsx/boot-verbose|etc/udhcpc/post-bound/tsx-banner|usr/local/sbin/tsx-banner)$  banner files: tsx-base gives them to every profile (the old path gave them to the console profile only)
-^usr/share/tsx/install-lva\.sh$  tsx-ha ships the script for the image build
-^(usr/local/lib/tsx/(btgatt\.py|btscan\.py)|usr/local/sbin/tsx-bt)$  Bluetooth tools: tsx-ha owns them, so the console and kiosk images do not have them. The chip file and csr_psload.py belong to the board package, so every image has them
-^etc/motd$  motd of alpine-baselayout (the old path deleted it in the console image). tsx-banner writes it at boot
-# initramfs
-^usr/local/bin/tsx-splash$  compiled in the package build (other flags), same source, other bytes
-^usr/share/tsx/initramfs\.stamp$  the stamp covers packages.pin in the package mode

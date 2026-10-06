@@ -1,26 +1,23 @@
-# Packages from this project's own apk repository (tsx-aports: common + xx60),
-# installed by mkrootfs.sh when the build is given a local copy of the
-# published tree (TSX_APK_LOCAL, see build-rootfs.sh). Without one the rootfs
-# falls back to what these replace (in brackets). Either way the panel lists
-# the repository (TSX_APK_URL, panel.conf APK_URL) so `apk upgrade` sees it.
+# Packages from this project's own apk repository (tsx-aports: common + xx60).
+# mkrootfs.sh installs them from a local copy of the published tree
+# (TSX_APK_LOCAL, see build-rootfs.sh). The profile meta package
+# (tsx-xx60-console, -kiosk or -ha) comes with them. The panel lists the
+# repository (TSX_APK_URL, panel.conf APK_URL) so `apk upgrade` sees it.
 #
 # the repository's signing key (also shipped in overlay/etc/apk/keys)
 tsx-keys
 # Alpine's chromium with the Mali-450 ES2 patch applied at package build time.
 # Provides chromium, so packages.txt's chromium=<ver> pin is dropped
-# [chromium=<ver> + the in-place patch, src/chromium-es2/]
 tsx-xx60-chromium
 # Alpine's wlroots0.20 with one fix: the first "power on" after a "power off"
 # failed on Meson8, which has no gamma LUT. Provides wlroots0.20, so
-# packages.txt's wlroots0.20 line is dropped [wlroots0.20]
+# packages.txt's wlroots0.20 line is dropped
 tsx-xx60-wlroots0.20
 # both kernel flavors, side by side: /lib/modules/<release>/ of each is owned
 # by its package, and /boot/tsxboot-emmc-<flavor>.img lets tsx-kernel-flavor
 # switch without the network. Only the selected flavor's package writes the
-# eMMC boot partition on an upgrade [unowned trees from build-rootfs.sh modules]
+# eMMC boot partition on an upgrade
 tsx-xx60-kernel-lts
 tsx-xx60-kernel-stable
-# [/usr/local/bin/sendspin-cli from src/sendspin/build.sh]
 sendspin-cli
-# [voice/tflite/libtensorflowlite_c.so from voice/build-tflite.sh]
 tensorflow-lite-c

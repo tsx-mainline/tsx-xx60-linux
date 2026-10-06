@@ -7,7 +7,7 @@
 # call those scripts directly.
 #
 #   BUILD_HOST=<ssh host> BUILD_DIR=<remote repo path> \
-#     tools/build/remote-build.sh [--dest DIR] [--with-modules] [--no-pull] [-j N] <command> [arg]
+#     tools/build/remote-build.sh [--dest DIR] [--no-pull] [-j N] <command> [arg]
 #
 #   kernel [--flavor lts|stable | BRANCH]  push the worktree that has BRANCH checked
 #                    out. The default branch comes from --flavor or $FLAVOR:
@@ -21,24 +21,17 @@
 #                    and kernel.commit to <worktree>/../out-<flavor> or --dest DIR.
 #   rootfs           push the rootfs/ sources, run build-rootfs.sh rootfs, and
 #                    pull back rootfs.{ext4,tar.gz,manifest,sizes,sha256} to
-#                    rootfs/out or --dest.
-#                    --with-modules: first stage the modules of every flavor
-#                    built on the HOST (build-lts and build-stable next to the
-#                    fork checkout. Run "kernel" for each flavor first). The
-#                    rootfs then carries both trees. Default: no modules, as
-#                    in the local build.
-#                    Prebuilt inputs that exist only on the host
-#                    (rootfs/src/sendspin/out/,
-#                    rootfs/voice/tflite/libtensorflowlite_c.so) survive the push.
-#                    TSX_APK_LOCAL=<local tsx-aports published tree>: the script
-#                    mirrors it to rootfs/aports-local/ on the host, and
+#                    rootfs/out or --dest. The image comes from packages, so
+#                    TSX_APK_LOCAL=<local tsx-aports published tree> is
+#                    required (rootfs/fetch-apk-tree.sh makes one). The script
+#                    mirrors the tree to rootfs/aports-local/ on the host, and
 #                    build-rootfs.sh installs from there. The script passes
 #                    TSX_APK_URL, PROFILE (console, kiosk or ha, default ha),
-#                    TSX_FROM_PACKAGES=1 (build from the packages of TSX_APK_LOCAL,
-#                    for rootfs and initramfs), TSX_SKIP_BOOT_CHECK=1
-#                    and TSX_DEV_ROOT_HASH (a root password hash for a test
-#                    image) through.
+#                    TSX_SKIP_BOOT_CHECK=1 and TSX_DEV_ROOT_HASH (a root password
+#                    hash for a test image) through.
 #   initramfs        build-rootfs.sh initramfs -> initramfs-switchroot.cpio.gz
+#                    (from the packages of rootfs/initramfs/packages.pin, so
+#                    TSX_APK_LOCAL is required)
 #   image [--flavor lts|stable | BRANCH]   run rootfs/mkbootimg.sh with KDIR set to
 #                    the out-<flavor>/ of the worktree of the resolved branch
 #                    (the same default and override rule as "kernel").
@@ -73,11 +66,10 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)               # .../tsx-xx60-linux
 TOP=$(cd "$REPO/.." && pwd)
 LINUX=${LINUX_DIR:-$TOP/linux}                # the kernel fork checkout, sibling of this repo
-DEST= MODS=0 J= FLAVOR=${FLAVOR:-lts} PULL=${REMOTE_PULL:-1}
+DEST= J= FLAVOR=${FLAVOR:-lts} PULL=${REMOTE_PULL:-1}
 ARGS=() JOBREF=
 while [ $# -gt 0 ]; do case $1 in
 	--dest) DEST=$(mkdir -p "$2" && cd "$2" && pwd); shift;;
-	--with-modules) MODS=1;;
 	--no-pull) PULL=0;;
 	-j) J=$2; shift;;
 	--flavor) FLAVOR=$2; shift;;
@@ -97,7 +89,7 @@ flavor_branch() { case $1 in lts) echo tsx-xx60-lts;; stable) echo tsx-xx60-stab
 # has no ignored files, so the guard has nothing to check there.
 # Ignored paths that the script never sends, or that are build inputs on
 # purpose, are allowed.
-GUARD_OK='^(out|out-[^/]*|kernel/out|rootfs/(out|build|build-[^/]*|modules|aports-local)|tools/build/state|rootfs/src/sendspin/out)/|^rootfs/voice/tflite/libtensorflowlite_c\.so$|\.(o|ko)$'
+GUARD_OK='^(out|out-[^/]*|kernel/out|rootfs/(out|build|build-[^/]*|modules|aports-local)|tools/build/state)/|\.(o|ko)$'
 GUARD_PROP='\.(cnt|puf|psr)$|tfa9890|csr8811'
 guard_sources() {  # guard_sources PATH... (relative to the repo root)
 	local top st bad
@@ -124,8 +116,7 @@ if [ -z "${BUILD_HOST:-}" ]; then
 	say "BUILD_HOST not set: building locally (this wrapper is opt-in, and you can call the scripts below directly)"
 	case $CMD in
 	kernel) exec "$HERE/kbuild.sh" -f "$FLAVOR" ${J:+-j "$J"} ${DEST:+-d "$DEST"} kernel image;;
-	rootfs) [ $MODS = 1 ] && "$REPO/rootfs/build-rootfs.sh" modules
-		[ "$ALLOW_PROP" = 1 ] || export TFA_VENDOR_FETCH=${TFA_VENDOR_FETCH:-no}
+	rootfs) [ "$ALLOW_PROP" = 1 ] || export TFA_VENDOR_FETCH=${TFA_VENDOR_FETCH:-no}
 		"$REPO/rootfs/build-rootfs.sh" rootfs
 		[ "$ALLOW_PROP" = 1 ] || "$REPO/ci/check-no-proprietary.sh" "$REPO/rootfs/out/rootfs.tar.gz"
 		[ -z "$DEST" ] || { mkdir -p "$DEST"; cp "$REPO"/rootfs/out/rootfs.* "$DEST/"; }
@@ -192,15 +183,10 @@ push_tree() {  # $1 = local worktree dir, $2 = remote worktree dir; mirror the c
 	fi
 }
 
-# Build inputs that are built once on the host and never committed
-# (rootfs/src/sendspin/build.sh, rootfs/voice/build-tflite.sh): rsync "protect"
-# rules keep --delete from removing them when the local tree does not have
-# them. A local copy, if there is one, is still sent.
-PROTECT=(--filter='P /sendspin/out/' --filter='P /tflite/libtensorflowlite_c.so')
 push_rootfs() {
 	local p=$REPO/rootfs
 	rsh "mkdir -p $BUILD_DIR/rootfs"
-	for d in overlay profiles src initramfs config voice splash; do [ -d "$p/$d" ] && "${RS[@]}" --delete "${PROTECT[@]}" "$p/$d/" "$HOST:$BUILD_DIR/rootfs/$d/"; done
+	for d in overlay profiles src initramfs config; do [ -d "$p/$d" ] && "${RS[@]}" --delete "$p/$d/" "$HOST:$BUILD_DIR/rootfs/$d/"; done
 	for f in mkrootfs.sh build-rootfs.sh profile.sh mkbootimg.sh check-boot-images.py initramfs-stamp.sh packages.txt packages-tsx.txt vendor-fetch.sh install.sh tsx-disk.sh authorized_keys; do [ -e "$p/$f" ] && "${RS[@]}" "$p/$f" "$HOST:$BUILD_DIR/rootfs/"; done
 	true
 }
@@ -256,7 +242,7 @@ maybe_pull() {  # like pull, but --no-pull/REMOTE_PULL=0 leaves the files on the
 }
 
 t0=$(date +%s)
-RS_PATHS=(tools/build ci kernel/mkimage.sh kernel/aml-dt.py rootfs/overlay rootfs/profiles rootfs/src rootfs/initramfs rootfs/config rootfs/voice rootfs/splash
+RS_PATHS=(tools/build ci kernel/mkimage.sh kernel/aml-dt.py rootfs/overlay rootfs/profiles rootfs/src rootfs/initramfs rootfs/config
 	rootfs/mkrootfs.sh rootfs/build-rootfs.sh rootfs/profile.sh rootfs/mkbootimg.sh rootfs/check-boot-images.py rootfs/initramfs-stamp.sh rootfs/packages.txt rootfs/packages-tsx.txt rootfs/vendor-fetch.sh rootfs/install.sh rootfs/tsx-disk.sh rootfs/authorized_keys)
 case $CMD in
 kernel) guard_sources tools/build ci kernel/mkimage.sh kernel/aml-dt.py;;
@@ -279,13 +265,8 @@ kernel)
 	# the TSW-760 DTB exists from the kernel commit that added its DTS on
 	if rsh "test -e $rout/meson8m2-crestron-tsw760.dtb"; then maybe_pull "$to" "$rout/meson8m2-crestron-tsw760.dtb"; fi;;
 rootfs)
+	[ -n "${TSX_APK_LOCAL:-}" ] || { echo "rootfs needs TSX_APK_LOCAL (a tsx-aports published tree, see rootfs/fetch-apk-tree.sh)"; exit 1; }
 	push_common; push_rootfs
-	if [ $MODS = 1 ]; then
-		# every flavor built on the host: kbuild.sh -w <worktree> builds into
-		# <worktree>/../build-<flavor>, i.e. next to the fork checkout
-		kb=$(dirname "$RHOST_LINUX")
-		m="rm -rf modules; n=0; for f in lts stable; do [ -d $kb/build-\$f ] || continue; KBUILD=$kb/build-\$f ./build-rootfs.sh modules; n=\$((n+1)); done; [ \$n -gt 0 ] || { echo \"no kernel build dir ($kb/build-lts or build-stable) on the host: run kernel first\"; exit 1; }"
-	else m="rm -rf modules"; fi
 	# TSX_APK_LOCAL (a local tsx-aports published tree): mirrored next to the
 	# rootfs sources on the host and used from there
 	apkenv="TSX_APK_URL=${TSX_APK_URL:-https://tsx-aports.unexceptional.net}"
@@ -299,32 +280,25 @@ rootfs)
 	# TFA_VENDOR_FETCH=no: no Crestron file in the image (as CI and release.yml)
 	# A build through this script fetches nothing unless TSX_ALLOW_PROPRIETARY=1.
 	[ "$ALLOW_PROP" = 1 ] && [ -z "${TFA_VENDOR_FETCH:-}" ] || apkenv="$apkenv TFA_VENDOR_FETCH=${TFA_VENDOR_FETCH:-no}"
-	# TSX_FROM_PACKAGES=1 builds from the packages of TSX_APK_LOCAL (docs/rootfs.md
-	# "Build from packages"). TSX_SKIP_BOOT_CHECK=1 is for comparison builds only.
-	[ "${TSX_FROM_PACKAGES:-0}" != 1 ] || apkenv="$apkenv TSX_FROM_PACKAGES=1"
+	# TSX_SKIP_BOOT_CHECK=1 is for comparison builds only.
 	[ "${TSX_SKIP_BOOT_CHECK:-0}" != 1 ] || apkenv="$apkenv TSX_SKIP_BOOT_CHECK=1"
-	if [ -n "${TSX_APK_LOCAL:-}" ]; then
-		say "tsx-aports tree $TSX_APK_LOCAL -> $BUILD_DIR/rootfs/aports-local"
-		rsh "mkdir -p $BUILD_DIR/rootfs/aports-local"
-		"${RS[@]}" --delete "$TSX_APK_LOCAL/" "$HOST:$BUILD_DIR/rootfs/aports-local/"
-		apkenv="$apkenv TSX_APK_LOCAL=$BUILD_DIR/rootfs/aports-local"
-	fi
+	say "tsx-aports tree $TSX_APK_LOCAL -> $BUILD_DIR/rootfs/aports-local"
+	rsh "mkdir -p $BUILD_DIR/rootfs/aports-local"
+	"${RS[@]}" --delete "$TSX_APK_LOCAL/" "$HOST:$BUILD_DIR/rootfs/aports-local/"
+	apkenv="$apkenv TSX_APK_LOCAL=$BUILD_DIR/rootfs/aports-local"
 	chk=; [ "$ALLOW_PROP" = 1 ] || chk="; $BUILD_DIR/ci/check-no-proprietary.sh out/rootfs.tar.gz"
-	rjob rootfs "cd $BUILD_DIR/rootfs && flock $BUILD_DIR/rootfs/.rootfs.lock env $apkenv bash -c 'set -e; $m; ./build-rootfs.sh rootfs$chk'"
+	# rm -rf modules: a tree that an earlier "modules" run staged on the host stays out of the image
+	rjob rootfs "cd $BUILD_DIR/rootfs && flock $BUILD_DIR/rootfs/.rootfs.lock env $apkenv bash -c 'set -e; rm -rf modules; ./build-rootfs.sh rootfs$chk'"
 	to=${DEST:-$REPO/rootfs/out}; o=$BUILD_DIR/rootfs/out
 	say "artifacts:"
 	maybe_pull "$to" "$o/rootfs.ext4" "$o/rootfs.tar.gz" "$o/rootfs.manifest" "$o/rootfs.sizes" "$o/rootfs.sha256";;
 initramfs)
+	[ -n "${TSX_APK_LOCAL:-}" ] || { echo "initramfs needs TSX_APK_LOCAL (a tsx-aports published tree, see rootfs/fetch-apk-tree.sh)"; exit 1; }
 	push_common; push_rootfs
-	iev=
-	if [ "${TSX_FROM_PACKAGES:-0}" = 1 ]; then
-		[ -n "${TSX_APK_LOCAL:-}" ] || { echo "TSX_FROM_PACKAGES=1 needs TSX_APK_LOCAL"; exit 1; }
-		say "tsx-aports tree $TSX_APK_LOCAL -> $BUILD_DIR/rootfs/aports-local"
-		rsh "mkdir -p $BUILD_DIR/rootfs/aports-local"
-		"${RS[@]}" --delete "$TSX_APK_LOCAL/" "$HOST:$BUILD_DIR/rootfs/aports-local/"
-		iev="TSX_FROM_PACKAGES=1 TSX_APK_LOCAL=$BUILD_DIR/rootfs/aports-local"
-	fi
-	rjob initramfs "cd $BUILD_DIR/rootfs && flock $BUILD_DIR/rootfs/.rootfs.lock env $iev ./build-rootfs.sh initramfs"
+	say "tsx-aports tree $TSX_APK_LOCAL -> $BUILD_DIR/rootfs/aports-local"
+	rsh "mkdir -p $BUILD_DIR/rootfs/aports-local"
+	"${RS[@]}" --delete "$TSX_APK_LOCAL/" "$HOST:$BUILD_DIR/rootfs/aports-local/"
+	rjob initramfs "cd $BUILD_DIR/rootfs && flock $BUILD_DIR/rootfs/.rootfs.lock env TSX_APK_LOCAL=$BUILD_DIR/rootfs/aports-local ./build-rootfs.sh initramfs"
 	say "artifacts:"; maybe_pull "${DEST:-$REPO/rootfs/out}" "$BUILD_DIR/rootfs/out/initramfs-switchroot.cpio.gz";;
 image)
 	br=${ARG:-$(flavor_branch "$FLAVOR")}; wt=$(worktree_of "$br")

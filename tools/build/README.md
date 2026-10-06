@@ -23,9 +23,9 @@ A pin holds one commit hash. Every build tool below takes `-f` or `--flavor lts|
 tools/build/kbuild.sh                        # lts kernel: zImage + dtbs + modules + boot image
 tools/build/kbuild.sh --flavor stable        # same, stable flavor
 CCACHE=1 tools/build/kbuild.sh               # same, with a persistent ccache (~/.cache/tsx-ccache)
-rootfs/build-rootfs.sh all                   # rootfs.ext4/.tar.gz + initramfs-switchroot.cpio.gz
+TSX_APK_LOCAL=<apk tree> rootfs/build-rootfs.sh all   # rootfs.ext4/.tar.gz + initramfs-switchroot.cpio.gz, from packages
 rootfs/mkbootimg.sh                          # packs the installed-system boot image
-PROFILE=console rootfs/build-rootfs.sh rootfs   # a rootfs without the kiosk and Home Assistant
+PROFILE=console TSX_APK_LOCAL=<apk tree> rootfs/build-rootfs.sh rootfs   # a rootfs without the kiosk and Home Assistant
 ```
 
 `kbuild.sh` reads the kernel source from `LINUX_DIR` (default: `../linux-<flavor>`, for example `../linux-lts`, a sibling checkout of this repo). If that directory does not exist, the script clones `https://github.com/tsx-mainline/linux` and checks out the commit that `kernel/KERNEL_REV.<flavor>` pins. The script uses an existing `LINUX_DIR` as it is and never changes it. If its HEAD does not match `kernel/KERNEL_REV.<flavor>`, the script only prints a warning.
@@ -39,7 +39,7 @@ PROFILE=console rootfs/build-rootfs.sh rootfs   # a rootfs without the kiosk and
 
 ```
 BUILD_HOST=<ssh host> BUILD_DIR=<path on that host> \
-  tools/build/remote-build.sh [--flavor lts|stable] [--dest DIR] [--with-modules] [--no-pull] [-j N] <command> [arg]
+  tools/build/remote-build.sh [--flavor lts|stable] [--dest DIR] [--no-pull] [-j N] <command> [arg]
 ```
 
 A kernel build with a cold cache takes a long time. Start it as a background job and read the log.
@@ -54,18 +54,15 @@ BUILD_HOST=<ssh host> BUILD_DIR=<path on that host> \
 # artifacts left on <ssh host>: <path>/rootfs.ext4, ...
 ```
 
-### Put both kernel flavors in one rootfs
+### Stage the kernel modules
 
-The rootfs tarball holds the modules of both flavors. `tsx-update-boot` can then switch an installed panel between the flavors and write only the boot image. `rootfs/build-rootfs.sh modules` stages one kernel build dir (`KBUILD`) into `rootfs/modules/lib/modules/<release>`. It replaces only that release and older trees of the same series (the same `major.minor`). The tree of the other flavor stays. If you do not set `KBUILD`, it stages every default flavor build dir that `kbuild.sh` made next to this repo (`../build-lts` and `../build-stable`).
+The image gets its kernel modules from the kernel packages, which hold both flavors. `rootfs/build-rootfs.sh modules` is for the kernel bundle of tsx-aports (the `kbundle` job of `.github/workflows/release.yml`). The release build also puts the staged tree of its own kernel in the image when no kernel package has it. A `rootfs` build through `remote-build.sh` clears `rootfs/modules/` on the host first. The command stages one kernel build dir (`KBUILD`) into `rootfs/modules/lib/modules/<release>`. It replaces only that release and older trees of the same series (the same `major.minor`). The tree of the other flavor stays. If you do not set `KBUILD`, it stages every default flavor build dir that `kbuild.sh` made next to this repo (`../build-lts` and `../build-stable`).
 
 ```
 tools/build/kbuild.sh --flavor lts kernel
 tools/build/kbuild.sh --flavor stable kernel
 rootfs/build-rootfs.sh modules      # both trees
-rootfs/build-rootfs.sh all          # rootfs with both + initramfs
 ```
-
-For a remote build, run `kernel` for both flavors. Then run `rootfs --with-modules`. It clears `rootfs/modules/` on the host and stages `build-lts` and `build-stable` from next to the fork checkout there.
 
 ### Run kbuild.sh directly on the build host
 
@@ -130,8 +127,8 @@ The default directories of the two flavors never collide, so a build of one flav
 | Command | What it does |
 |---|---|
 | `kernel [BRANCH]` | Pushes the worktree with `BRANCH` checked out, and the shared `.git`. The default branch follows `--flavor` or `$FLAVOR`: `lts` (the default) uses `tsx-xx60-lts` and `stable` uses `tsx-xx60-stable`. An explicit `BRANCH` argument overrides this. Then it runs `kbuild.sh -f <flavor>` on `BUILD_HOST` and pulls back `zImage`, the board DTB, `test.img`, `kernel.release` and `kernel.commit` |
-| `rootfs [--with-modules]` | Pushes the `rootfs/` sources, runs `build-rootfs.sh rootfs` there and pulls back `rootfs.{ext4,tar.gz,manifest,sizes,sha256}`. `--with-modules` first stages the modules of every flavor built on the host |
-| `initramfs` | Runs `build-rootfs.sh initramfs` to make `initramfs-switchroot.cpio.gz` |
+| `rootfs` | Needs `TSX_APK_LOCAL`, a local copy of the published apk tree (`rootfs/fetch-apk-tree.sh` makes one). Pushes the `rootfs/` sources and the tree, runs `build-rootfs.sh rootfs` there and pulls back `rootfs.{ext4,tar.gz,manifest,sizes,sha256}` |
+| `initramfs` | Needs `TSX_APK_LOCAL` too. Runs `build-rootfs.sh initramfs` to make `initramfs-switchroot.cpio.gz` |
 | `image [BRANCH]` | Runs `mkbootimg.sh` with the kernel build of the host for the resolved flavor and branch. `kernel` must have run there first |
 | `sync` | Mirrors the full tree again (no `--delete`) |
 | `jobs` | Lists the last jobs on the host and their exit codes |
@@ -140,7 +137,6 @@ The default directories of the two flavors never collide, so a build of one flav
 |---|---|
 | `--flavor lts\|stable` | Kernel flavor (also `$FLAVOR`) |
 | `--dest DIR` | Puts the pulled-back artifacts in `DIR` instead of the default place |
-| `--with-modules` | Stages the modules of every flavor for `rootfs` |
 | `--no-pull` | Does not copy the built artifacts back. It only prints where they are on `BUILD_HOST` (also `REMOTE_PULL=0`) |
 | `-j N` | Parallel jobs of the kernel make (default: all cores on the host) |
 
@@ -150,24 +146,15 @@ If you do not set `BUILD_HOST`, each command runs the matching local script (`kb
 
 - Always: `tools/build/` (without its `state/` job logs), `ci/`, `kernel/mkimage.sh`, `kernel/aml-dt.py`, `kernel/KERNEL_REV.lts`, `kernel/KERNEL_REV.stable` and `kernel/out/initramfs.cpio.gz` if it exists. The script sends both pins whatever `--flavor` says. This is cheap, and `kbuild.sh` then warns correctly for either flavor.
 - `kernel`: the shared `.git/` of the fork (with `--delete`, `*.lock` excluded) and the worktree directory (with `--delete`). The push includes uncommitted changes, so the remote build matches the local working tree exactly. The `.git` file of a linked worktree and `worktrees/<name>/gitdir` of the fork hold local absolute paths. After the push, the script rewrites them to the remote copy. Git on the host then never reads a repository that exists at the local path there (wrong HEAD, `-dirty` release).
-- `rootfs`, `initramfs`, `image`: `rootfs/{overlay,profiles,src,initramfs,config,voice}/` (with `--delete`), `mkrootfs.sh`, `build-rootfs.sh`, `profile.sh`, `mkbootimg.sh` and `authorized_keys`.
+- `rootfs`, `initramfs`, `image`: `rootfs/{overlay,profiles,src,initramfs,config}/` (with `--delete`), `mkrootfs.sh`, `build-rootfs.sh`, `profile.sh`, `mkbootimg.sh` and `authorized_keys`.
 
 The script uses `--delete` only on these source directories on the remote host. It never sends or deletes the build and output directories there.
 
 ### Ignored and proprietary files
 
-Before it sends anything, the script runs `git status --ignored` on the folders it copies. It stops with a non-zero exit when one of them holds an ignored file, or an untracked `.cnt`, `.puf` or `.psr` file. The message lists the files and sends nothing. The prebuilt inputs below and the build output directories are allowed. A tree that is not a git checkout, such as a `git archive` export, has nothing to check.
+Before it sends anything, the script runs `git status --ignored` on the folders it copies. It stops with a non-zero exit when one of them holds an ignored file, or an untracked `.cnt`, `.puf` or `.psr` file. The message lists the files and sends nothing. The build output directories are allowed. A tree that is not a git checkout, such as a `git archive` export, has nothing to check.
 
 A `rootfs` build through this script uses `TFA_VENDOR_FETCH=no` and runs `ci/check-no-proprietary.sh` on the finished tarball on the host. The build fails when the tarball holds a Crestron file, and nothing comes back.
-
-### Prebuilt inputs
-
-Two build inputs are built once and never committed:
-
-- `rootfs/src/sendspin/out/` (`rootfs/src/sendspin/build.sh`)
-- `rootfs/voice/tflite/libtensorflowlite_c.so` (`rootfs/voice/build-tflite.sh`)
-
-To build them, run the two scripts once on the host, in `BUILD_DIR`. If they exist only on the build host, the `--delete` push keeps them (rsync protect rules, `PROTECT` in `remote-build.sh`). Later `rootfs` pushes do not remove them, so you do not need to copy them between builds. If you have a local copy, the script still sends it and it replaces the copy on the host.
 
 ### Safety rules
 
@@ -180,7 +167,6 @@ To build them, run the two scripts once on the host, in `BUILD_DIR`. If they exi
 
 - `remote-build.sh` has no `vendor`, `dtbs_check` or busybox-initramfs targets. Run those directly on the target machine with the existing scripts. `ci/Dockerfile.dt` builds the `dtbs_check` image.
 - `image` uses the kernel in `out-<flavor>/` on the same host. For a remote build, run `kernel` there first (with the same `--flavor`).
-- `rootfs --with-modules` needs a kernel build dir with modules. Run `kernel` first, on the machine where `rootfs` runs (local or `BUILD_HOST`).
 
 ## CI release asset for tsx-aports (`tsx-xx60-kernel-<flavor>-bundle.tar.zst`)
 

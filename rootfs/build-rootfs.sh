@@ -1,6 +1,6 @@
 #!/bin/bash
-# Build the xx60 kiosk rootfs (Alpine armv7) and the switch_root
-# initramfs. The build runs in docker. A host of another architecture needs
+# Build the xx60 rootfs (Alpine armv7) and the switch_root initramfs from
+# packages. The build runs in docker. A host of another architecture needs
 # qemu-user binfmt for the armv7 containers. An arm64 host with 32-bit support
 # runs them natively.
 #
@@ -10,30 +10,34 @@
 # (exact package versions), rootfs.sizes, rootfs.sha256, initramfs-switchroot.cpio.gz
 #
 # Env:
+# TSX_APK_LOCAL (required for rootfs, initramfs and all) is a local copy of the
+# published tree of the apk repository of this project: the directory that
+# holds <ALPINE>/common and <ALPINE>/xx60, for example from tsx-aports
+# scripts/index.sh --out DIR or from rootfs/fetch-apk-tree.sh. The rootfs build
+# installs the profile meta package (tsx-xx60-console, tsx-xx60-kiosk or
+# tsx-xx60-ha), the packages of packages-tsx.txt and the Alpine packages of
+# packages.txt. The initramfs build takes the packages of initramfs/packages.pin
+# from it. Nothing is compiled. The kernel modules come from the kernel packages.
 # ALPINE (default v3.24).
-# KBUILD is the kernel build dir that supplies the modules. The build only
-# reads it. The default is every flavor build dir that tools/build/kbuild.sh
-# made next to this repo (../build-lts and ../build-stable, whichever exist),
-# else ../build.
 # IMG_MB (default 1492).
-# "modules" copies the stripped *.ko files of KBUILD into
-# modules/lib/modules/<release>. The rootfs build then includes that tree.
+# "modules" copies the stripped *.ko files of KBUILD (the kernel build dir, read
+# only) into modules/lib/modules/<release>. The kernel bundle of tsx-aports uses
+# them (.github/workflows/release.yml). The image takes the module trees from the
+# kernel packages. A tree that the packages lack, for example the one of the
+# kernel that a release builds, comes from here. The default KBUILD is every
+# flavor build dir that tools/build/kbuild.sh made next to this repo
+# (../build-lts and ../build-stable, whichever exist), else ../build.
 # "modules" replaces only the dir of that release and the older trees of the
 # same kernel series (same major.minor, for example an earlier 6.18.y build).
-# The tree of the other flavor stays. An earlier "modules" run with the other
-# KBUILD staged that tree. Run "modules" once per flavor (KBUILD=../build-lts,
-# then KBUILD=../build-stable) to get a rootfs with both.
-# KVER selects which release trees under modules/lib/modules/ the build copies
-# into the rootfs. There can be several, for example from `make modules_install
-# INSTALL_MOD_PATH=...` for more than one kernel. The default is every release
-# dir found there, space-separated. Set KVER to build for one release only.
-# DRM_MESON, PANEL_LVDS, LIMA, touch and backlight are built in, so the panel
-# works without modules. The modules are extras (USB, sound, ...).
+# The tree of the other flavor stays. Run "modules" once per flavor
+# (KBUILD=../build-lts, then KBUILD=../build-stable) to stage both.
+# KVER selects which release trees under modules/lib/modules/ the image build may
+# copy. The default is every release dir found there, space-separated.
 # Downloads: only Alpine packages from dl-cdn.alpinelinux.org (branch $ALPINE)
 # and the alpine:3.24 docker image. out/rootfs.manifest records the versions.
 # PROFILE (default ha) is what the image holds: console (text login and SSH),
 # kiosk (console plus the browser kiosk) or ha (kiosk plus the Home Assistant
-# layer). rootfs/profiles/*.list name the files, packages and services of each
+# layer). rootfs/profiles/*.list name the packages and services of each
 # profile (docs/rootfs.md "Profiles").
 # TSX_DEV_ROOT_HASH (optional) is a crypt(3) hash for the root password of the
 # image, for our own test builds only. Without it, the image has no root
@@ -43,22 +47,9 @@
 # TSX_DEV_RESCUE_HASH (optional) does the same for the root password of the
 # rescue initramfs (./build-rootfs.sh initramfs). Without it, the rescue has no
 # fixed password (docs/recovery.md).
-# CHROMIUM_ES2_PATCH (default 1) patches the Chromium ES3 to ES2 fallback gate
-# (src/chromium-es2/). 0 gives the stock binary. TSX_APK_LOCAL disables it.
-# This project's apk repository is tsx-aports (docs/updates.md).
 # TSX_APK_URL (default https://tsx-aports.unexceptional.net) is the base URL
 # that /etc/apk/repositories on the panel lists first (<url>/<ALPINE>/common
 # and /xx60). The build never fetches it.
-# TSX_APK_LOCAL (optional) is a local copy of the published tree: the directory
-# that holds <ALPINE>/common and <ALPINE>/xx60, for example from tsx-aports
-# scripts/index.sh --out DIR. The build then installs the packages in
-# packages-tsx.txt (tsx-xx60-chromium, both kernel flavors, sendspin-cli,
-# tensorflow-lite-c, tsx-keys) from that copy. It does not use the Alpine
-# chromium with the in-place patch, or the local sendspin and TFLite builds.
-# TSX_FROM_PACKAGES (default 0): 1 builds the rootfs from the profile meta
-# package (tsx-xx60-console, -kiosk or -ha) and the initramfs from the packages
-# of initramfs/packages.pin. Both need TSX_APK_LOCAL. 0 compiles the tools and
-# copies the overlay, as before (docs/rootfs.md "Build from packages").
 # TSX_SKIP_BOOT_CHECK=1 skips the check of the kernel packages (comparison
 # builds only).
 set -euo pipefail
@@ -74,8 +65,6 @@ MODULES=$HERE/modules
 # is nonzero when $MODULES/lib/modules does not exist yet. That is the normal
 # case before anyone runs "modules". The nonzero status fails the pipeline and
 # kills the script under set -e, even with stderr redirected to /dev/null.
-# This is the same class of bug as the "ash dd stdin trap" in docs/recovery.md.
-# Here pipefail causes it, not a backgrounded job.
 KVER=${KVER:-$(ls "$MODULES/lib/modules" 2>/dev/null | tr '\n' ' ' || true)}
 IMG_MB=${IMG_MB:-1492}
 UIDGID="$(id -u):$(id -g)"
@@ -134,31 +123,36 @@ modules() {
 	echo "staged module trees: $(ls "$MODULES/lib/modules" | tr '\n' ' ')"
 }
 
+# The apk tree: a required directory with <ALPINE>/common and <ALPINE>/xx60.
+# It becomes the read-only mount /aports in the container.
+need_apk_tree() {
+	[ -n "${TSX_APK_LOCAL:-}" ] || { echo "TSX_APK_LOCAL is required (a tsx-aports published tree with $ALPINE/common and $ALPINE/xx60, see rootfs/fetch-apk-tree.sh)"; exit 1; }
+	[ -d "$TSX_APK_LOCAL/$ALPINE" ] || { echo "TSX_APK_LOCAL=$TSX_APK_LOCAL has no $ALPINE/ (a tsx-aports published tree)"; exit 1; }
+}
+
 rootfs() {
-	need_armv7
-	local mnt=() apk=()
+	need_apk_tree; need_armv7
+	local mnt=()
 	[ -d "$MODULES" ] && mnt=(-v "$MODULES:/modules:ro")
-	if [ -n "${TSX_APK_LOCAL:-}" ]; then
-		[ -d "$TSX_APK_LOCAL/$ALPINE" ] || { echo "TSX_APK_LOCAL=$TSX_APK_LOCAL has no $ALPINE/ (a tsx-aports published tree)"; exit 1; }
-		mnt+=(-v "$(cd "$TSX_APK_LOCAL" && pwd):/aports:ro"); apk=(-e TSX_APK_LOCAL=/aports)
-	fi
+	mnt+=(-v "$(cd "$TSX_APK_LOCAL" && pwd):/aports:ro")
 	mnt+=(-v "$(cd "$HERE/../kernel" && pwd):/kernel:ro")   # the kernel pins (check-boot-images.py)
-	docker run --rm --platform linux/arm/v7 -v "$HERE:/w" "${mnt[@]}" "${apk[@]}" \
-		-e ALPINE="$ALPINE" -e PROFILE="${PROFILE:-ha}" -e TSX_DEV_ROOT_HASH="${TSX_DEV_ROOT_HASH:-}" -e KVER="$KVER" -e OUT=/w/out -e UIDGID="$UIDGID" -e IMG_MB="$IMG_MB" -e CHROMIUM_ES2_PATCH="${CHROMIUM_ES2_PATCH:-1}" \
+	docker run --rm --platform linux/arm/v7 -v "$HERE:/w" "${mnt[@]}" -e TSX_APK_LOCAL=/aports \
+		-e ALPINE="$ALPINE" -e PROFILE="${PROFILE:-ha}" -e TSX_DEV_ROOT_HASH="${TSX_DEV_ROOT_HASH:-}" -e KVER="$KVER" -e OUT=/w/out -e UIDGID="$UIDGID" -e IMG_MB="$IMG_MB" \
 		-e TSX_APK_URL="${TSX_APK_URL:-https://tsx-aports.unexceptional.net}" \
 		-e TFA_VENDOR_FETCH="${TFA_VENDOR_FETCH:-yes}" \
-		-e TSX_FROM_PACKAGES="${TSX_FROM_PACKAGES:-0}" -e TSX_SKIP_BOOT_CHECK="${TSX_SKIP_BOOT_CHECK:-0}" \
+		-e TSX_SKIP_BOOT_CHECK="${TSX_SKIP_BOOT_CHECK:-0}" \
 		"$IMAGE" $(arm32) /w/mkrootfs.sh
 }
 
 initramfs() {
-	need_armv7
-	local mnt=() apk=()
-	if [ "${TSX_FROM_PACKAGES:-0}" = 1 ]; then
-		[ -n "${TSX_APK_LOCAL:-}" ] && [ -d "$TSX_APK_LOCAL/$ALPINE" ] || { echo "TSX_FROM_PACKAGES=1 needs TSX_APK_LOCAL (a tsx-aports published tree with $ALPINE/)"; exit 1; }
-		mnt+=(-v "$(cd "$TSX_APK_LOCAL" && pwd):/aports:ro"); apk=(-e TSX_APK_LOCAL=/aports)
-	fi
-	docker run --rm --platform linux/arm/v7 -v "$HERE:/w" "${mnt[@]}" "${apk[@]}" -e ALPINE="$ALPINE" -e TSX_FROM_PACKAGES="${TSX_FROM_PACKAGES:-0}" -e TSX_DEV_RESCUE_HASH="${TSX_DEV_RESCUE_HASH:-}" "$IMAGE" sh -c "
+	need_apk_tree; need_armv7
+	local mnt=()
+	mnt+=(-v "$(cd "$TSX_APK_LOCAL" && pwd):/aports:ro")
+	# initramfs/mkinitramfs-switchroot.sh takes the rescue tools, the splash and the
+	# board files from the packages of initramfs/packages.pin when TSX_FROM_PACKAGES
+	# is 1. The stamp of the initramfs covers that script, so the script keeps its
+	# old switch until the next release of the kernel packages.
+	docker run --rm --platform linux/arm/v7 -v "$HERE:/w" "${mnt[@]}" -e TSX_APK_LOCAL=/aports -e ALPINE="$ALPINE" -e TSX_FROM_PACKAGES=1 -e TSX_DEV_RESCUE_HASH="${TSX_DEV_RESCUE_HASH:-}" "$IMAGE" sh -c "
 		printf 'https://dl-cdn.alpinelinux.org/alpine/%s/main\nhttps://dl-cdn.alpinelinux.org/alpine/%s/community\n' $ALPINE $ALPINE > /etc/apk/repositories
 		apk add -q --no-cache cpio mkpasswd >/dev/null
 		/w/initramfs/mkinitramfs-switchroot.sh /w/out/initramfs-switchroot.cpio.gz /w/authorized_keys

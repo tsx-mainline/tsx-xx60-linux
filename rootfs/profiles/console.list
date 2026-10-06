@@ -1,105 +1,14 @@
 # Base of every image profile (profile "console"): a plain Linux system with
 # a text login on the panel screen and SSH. Every other profile adds to it.
-# Format: KIND NAME. See ../profile.sh. A profile can also have files that no
-# other profile has, in profiles/NAME/overlay. The build copies them over the
-# image last (console: the login on tty1 and the banner. kiosk: the marker file
-# /etc/tsx/profile. ha: none, and a missing marker means ha).
-#   overlay  file below rootfs/overlay, path relative to it
-#   built    file that mkrootfs.sh compiles or installs, absolute path on the panel
-#   tree     directory that a build step installs, absolute path on the panel
-#   step     build step of mkrootfs.sh
+# Format: KIND NAME. See ../profile.sh. The packages own the files of the
+# panel software. A profile can also have files that no other profile has, in
+# profiles/NAME/overlay. image.list names the files that the image keeps (the
+# build copies them from there or from rootfs/overlay).
+#   step     build step of mkrootfs.sh (the profile has the step, or it has not)
 #   pkg      Alpine or tsx-aports package, from packages.txt or packages-tsx.txt
 #   svc      OpenRC service: svc RUNLEVEL NAME (boot or default)
 #   user     system user that mkrootfs.sh adds
 
-# --- files of the overlay
-overlay etc/apk/keys/tsx-mainline-6ab9ca44.rsa.pub
-overlay etc/asound.conf
-overlay etc/chrony/chrony.conf
-overlay etc/conf.d/chronyd
-overlay etc/conf.d/syslog
-overlay etc/conf.d/tsx-panelctl
-overlay etc/conf.d/watchdog
-overlay etc/fstab
-overlay etc/init.d/tsx-als
-overlay etc/init.d/tsx-audio
-overlay etc/init.d/tsx-autoupdate
-overlay etc/init.d/tsx-boot-ok
-overlay etc/init.d/tsx-buttons
-overlay etc/init.d/tsx-config
-overlay etc/init.d/tsx-cpufreq
-overlay etc/init.d/tsx-data
-overlay etc/init.d/tsx-hostname
-overlay etc/init.d/tsx-idled
-overlay etc/init.d/tsx-ledbar
-overlay etc/init.d/tsx-panelctl
-overlay etc/init.d/tsx-setup
-overlay etc/init.d/tsx-tfa-dsp
-overlay etc/local.d/tsx-ip.start
-overlay etc/logrotate.d/tsx-als
-overlay etc/logrotate.d/tsx-autoupdate
-overlay etc/logrotate.d/tsx-buttons
-overlay etc/logrotate.d/tsx-cpufreq
-overlay etc/network/interfaces
-overlay etc/periodic/15min/tsx-savetime
-overlay etc/periodic/hourly/tsx-emmc-state
-overlay etc/periodic/weekly/tsx-fstrim
-overlay etc/profile.d/tsx.sh
-overlay etc/securetty
-overlay etc/ssh/sshd_config.d/tsx.conf
-overlay etc/sysctl.d/tsx.conf
-overlay etc/tsx/als.conf
-overlay etc/tsx/audio.conf
-overlay etc/tsx/autoupdate.conf
-overlay etc/tsx/buttons-board.conf
-overlay etc/tsx/buttons.conf
-overlay etc/tsx/ledbar.conf
-overlay etc/tsx/motd.board
-overlay etc/tsx/panel-board.conf
-overlay etc/tsx/tfa-dsp.conf
-overlay etc/tsx/uboot-env.conf
-overlay etc/udev/rules.d/60-tsx-backlight.rules
-overlay etc/udhcpc/post-bound/tsx-ntp
-overlay etc/udhcpc/post-renew/tsx-ntp
-overlay usr/local/bin/tsx-audio
-overlay usr/local/bin/tsx-blank
-overlay usr/local/bin/tsx-board
-overlay usr/local/bin/tsx-display-power
-overlay usr/local/bin/tsx-keypad
-overlay usr/local/bin/tsx-rootpw
-overlay usr/local/lib/tsx/board.sh
-overlay usr/local/lib/tsx/bt-chip-csr8811.sh
-overlay usr/local/lib/tsx/btgatt.py
-overlay usr/local/lib/tsx/btscan.py
-overlay usr/local/lib/tsx/config.d/camera.sh
-overlay usr/local/lib/tsx/csr_psload.py
-overlay usr/local/lib/tsx/tfa_dsp.py
-overlay usr/local/lib/tsx/tsx_brightness.py
-overlay usr/local/sbin/tsx-als
-overlay usr/local/sbin/tsx-autoupdate
-overlay usr/local/sbin/tsx-boot-ok
-overlay usr/local/sbin/tsx-bt
-overlay usr/local/sbin/tsx-config
-overlay usr/local/sbin/tsx-cpufreqd
-overlay usr/local/sbin/tsx-dhcp-ntp
-overlay usr/local/sbin/tsx-emmc-state
-overlay usr/local/sbin/tsx-hw
-overlay usr/local/sbin/tsx-ledbard
-overlay usr/local/sbin/tsx-panelctl
-overlay usr/local/sbin/tsx-tfa-dsp
-overlay usr/local/sbin/tsx-update-boot
-overlay usr/local/sbin/tsx-wait-time
-
-# --- files that the build installs
-built /usr/local/sbin/tsx-idled
-built /usr/local/sbin/tsx-buttons
-built /usr/local/bin/tsx-ledbar
-built /usr/local/bin/tsx-peak
-built /usr/local/bin/tsx-splash
-tree /usr/share/tsx/splash
-tree /usr/local/share/tsx/tfa9890
-step compile-base
-step splash
 step tfa-containers
 step ssh-policy
 step root-password

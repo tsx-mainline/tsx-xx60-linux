@@ -128,8 +128,10 @@ jobs:
         run: rootfs/tests/test-build-modules.sh
       - name: rootfs/tests/test-boot-images.sh - kernel pins and initramfs stamp of the kernel packages
         run: rootfs/tests/test-boot-images.sh
-      - name: tools/build/tests/test-push-protect.sh - remote push keeps host-only inputs
-        run: tools/build/tests/test-push-protect.sh
+      - name: rootfs/tests/test-fetch-apk-tree.sh - the download of the published apk tree (file:// source)
+        run: rootfs/tests/test-fetch-apk-tree.sh
+      - name: rootfs/tests/test-mkrootfs.sh - the wiring of the image build (apk tree, root password, files, users)
+        run: sh rootfs/tests/test-mkrootfs.sh
       - name: tools/build/tests/test-no-pull.sh - remote build can leave artifacts on the host
         run: tools/build/tests/test-no-pull.sh
       - name: tools/build/tests/test-send-guard.sh - remote build refuses ignored and proprietary files

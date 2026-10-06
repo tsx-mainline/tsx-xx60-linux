@@ -7,40 +7,47 @@ rootfs, what runs on the panel, and the kiosk browser stack. For the kernel and 
 
 ## Tasks
 
-### Build a rootfs
+### Build the image
 
-1. Build with the wrapper. It runs `rootfs/mkrootfs.sh` in an armv7 Alpine container. On a host
+The image comes from packages. The build installs them from a local copy of the published apk
+tree and compiles nothing.
+
+1. Download the published apk tree into a folder. The script keeps the files that the folder
+   already has.
+
+   ```sh
+   rootfs/fetch-apk-tree.sh <tree>
+   ```
+
+2. Build with the wrapper. It runs `rootfs/mkrootfs.sh` in an armv7 Alpine container. On a host
    of another architecture, the container runs under `qemu-user`. An arm64 host with 32-bit
-   support runs it natively. The result is native armv7 code.
+   support runs it natively.
 
    ```sh
-   PROFILE=console ./build-rootfs.sh rootfs
-   PROFILE=console BUILD_HOST=... BUILD_DIR=... tools/build/remote-build.sh rootfs
+   TSX_APK_LOCAL=<tree> PROFILE=console ./build-rootfs.sh all
+   TSX_APK_LOCAL=<tree> PROFILE=console BUILD_HOST=... BUILD_DIR=... tools/build/remote-build.sh rootfs
    ```
 
-2. Find the outputs: a tarball, an ext4 image, a package manifest (`rootfs.manifest`, the exact
-   installed versions), a size report and checksums.
+3. Find the outputs: a tarball, an ext4 image, a package manifest (`rootfs.manifest`, the exact
+   installed versions), a size report and checksums. `build-rootfs.sh all` also makes the rescue
+   initramfs.
 
-Set `PROFILE` to `console`, `kiosk` or `ha` (default `ha`). See "Profiles".
+Set `PROFILE` to `console`, `kiosk` or `ha` (default `ha`). See "Profiles". The build stops if the
+kernel packages in the tree do not match the pins of `kernel/KERNEL_REV.*` and the initramfs of
+this checkout (see [kernel.md](kernel.md)).
 
-### Build from packages
+### Compare two builds
 
-1. Set `TSX_FROM_PACKAGES=1` and give `TSX_APK_LOCAL`, a local copy of the published apk tree:
+To check that a change leaves the image the same, build the same profile before and after the
+change. Then run:
 
-   ```sh
-   TSX_FROM_PACKAGES=1 TSX_APK_LOCAL=<published tree> PROFILE=console ./build-rootfs.sh all
-   ```
+```sh
+rootfs/tests/compare-rootfs.py old/rootfs.tar.gz new/rootfs.tar.gz --expect rootfs/tests/compare-rootfs.expect
+```
 
-2. To compare with the default build (`TSX_FROM_PACKAGES=0`, which compiles the tools and copies
-   the whole overlay), build the same profile both ways and run:
-
-   ```sh
-   rootfs/tests/compare-rootfs.py old/rootfs.tar.gz new/rootfs.tar.gz --expect rootfs/tests/compare-rootfs.expect
-   ```
-
-   The script compares the type, mode, owner and content hash of each path. It also reads the
-   initramfs (`.cpio.gz`). It prints each difference that no rule in `compare-rootfs.expect`
-   explains and exits with status 1 if there is one.
+The script compares the type, mode, owner and content hash of each path. It also reads the
+initramfs (`.cpio.gz`). It prints each difference that no rule in `compare-rootfs.expect`
+explains and exits with status 1 if there is one.
 
 ### Change the orientation
 
@@ -73,10 +80,10 @@ the state, run `tsx-autoupdate status`. See "Updates".
 |---|---|
 | Base | Alpine v3.24 (`ALPINE` variable), musl libc, OpenRC, eudev, busybox |
 | Packages | `rootfs/packages.txt`. `rootfs/profiles/*.list` say which profile installs which package |
-| Project packages | `rootfs/packages-tsx.txt`, from `TSX_APK_LOCAL` |
+| Project packages | the profile meta package and `rootfs/packages-tsx.txt`, from `TSX_APK_LOCAL` (the published apk tree) |
 | Installed size | about 750 MiB with the voice stack. See [install.md](install.md) for the partition sizes |
 | Root image | `mke2fs -d` writes the ext4 image straight from the directory tree. The build needs no loop mount and no privileged container |
-| Kernel modules | none by default. The kernel has the display, panel, touch, GPU and backlight drivers built in |
+| Kernel modules | from the kernel packages. The kernel has the display, panel, touch, GPU and backlight drivers built in |
 | `TSX_SKIP_BOOT_CHECK=1` | skips the check of the kernel packages in `mkrootfs.sh`. Use it for a comparison build only |
 | `TSX_DEV_ROOT_HASH` | test builds only. A sha512-crypt hash for root. See "Root login" |
 
@@ -92,20 +99,20 @@ Package groups:
 
 `chromium` needs `icu-data-full` (about 31 MiB). You cannot replace it with `icu-data-en`.
 
-Without a local apk tree, the build compiles `cage` 0.3.1 from source (see "cage"), builds
-`sendspin-cli` and TFLite locally, and patches the Alpine Chromium in place (see "GPU path").
-With the tree, these come from the project packages `tsx-xx60-chromium`, both kernel packages,
-`sendspin-cli`, `tensorflow-lite-c` and `tsx-keys`.
+The project packages `tsx-xx60-chromium` (the ES2 patch is built into it, see "GPU path"), both
+kernel packages, `sendspin-cli`, `tensorflow-lite-c` and `tsx-keys` come from the apk tree. The
+package `tsx-xx60-board-kiosk` has `cage` 0.3.1, built from source with a patch (see "cage").
 
-The build downloads only official Alpine packages and a few pinned, checksummed source tarballs
-(cage, the Sendspin build dependencies, the TFLite C library). It fetches nothing from an unpinned
-URL.
+The image build downloads only official Alpine packages and the pinned Python wheels of the voice
+satellite. It fetches nothing from an unpinned URL.
 
 ### Kernel modules
 
-`build-rootfs.sh modules` copies `*.ko` files read-only from a kernel build directory. Use it for
-drivers that are modules (USB, sound). It refuses a module whose vermagic does not match the
-target kernel release.
+The image gets its kernel modules from the kernel packages. `build-rootfs.sh modules` copies
+`*.ko` files read-only from a kernel build directory into `rootfs/modules/`. The kernel bundle of
+tsx-aports uses them (see [kernel.md](kernel.md)). The release build also puts a staged tree in the
+image when no kernel package has it. The command refuses a module whose vermagic does not match
+the kernel release.
 
 ### Proprietary blobs: `vendor-fetch.sh`
 
@@ -144,28 +151,27 @@ three.
 
 | Word | Meaning |
 |---|---|
-| `overlay` | a file of `rootfs/overlay` |
-| `built`, `tree` | a file or directory that `mkrootfs.sh` installs |
-| `step` | a build step |
+| `step` | a build step of `mkrootfs.sh` |
 | `pkg` | a package of `packages.txt` or `packages-tsx.txt` |
 | `svc` | an OpenRC service and its runlevel |
 | `user` | a system user |
 
-A profile can have its own files in `rootfs/profiles/NAME/overlay`. The build copies them last.
-The console profile has the tty1 login and the banner there. The kiosk profile has
-`/etc/tsx/profile`. A missing `/etc/tsx/profile` means `ha`.
-`rootfs/tests/test-profiles.sh` checks that each overlay file and package is in exactly one list.
+`rootfs/profiles/image.list` names the files that the image keeps: `fstab`, `inittab` and the
+profile marker `/etc/tsx/profile`. The build takes each file from `rootfs/profiles/NAME/overlay`
+when the profile has its own copy, and else from `rootfs/overlay`. The console profile has its own
+`inittab` with the tty1 login. The console and kiosk profiles have their own `/etc/tsx/profile`. A
+missing `/etc/tsx/profile` means `ha`. `rootfs/tests/test-profiles.sh` checks that each package is
+in exactly one list.
 
 ### Package-built images
 
-With `TSX_FROM_PACKAGES=1`, `mkrootfs.sh` does these steps:
+`mkrootfs.sh` does these steps:
 
 1. It installs the meta package of the profile (`tsx-xx60-console`, `tsx-xx60-kiosk` or
    `tsx-xx60-ha`) from `TSX_APK_LOCAL`, with the Alpine packages of `packages.txt`.
 2. It compiles nothing. The packages hold the compiled tools (`tsx-idled`, `tsx-buttons`,
    `tsx-splash`, `tsx-overlay`, `tsx-ledbar`, `tsx-peak`, `cage`).
-3. It copies only the files of `profiles/image.list` from the overlay: `fstab`, `inittab` and the
-   profile marker.
+3. It copies only the files of `profiles/image.list`: `fstab`, `inittab` and the profile marker.
 4. It runs `install-lva.sh` from `tsx-ha` (`/usr/share/tsx/install-lva.sh`). The script downloads
    pinned Python wheels, so it stays a build step.
 5. It does these steps itself: the TFA9890 containers, the root password, users that need
@@ -185,9 +191,11 @@ With `TSX_FROM_PACKAGES=1`, `mkrootfs.sh` does these steps:
 The initramfs uses the same packages. `mkinitramfs-switchroot.sh` fetches the versions that
 `initramfs/packages.pin` names. It takes `tsx-rescue-ui` and `tsx-splash` whole, `board.sh`,
 `tsx-boot-ok` and `uboot-env.conf` from `tsx-xx60-board`, and `tsx-orientation` from `tsx-kiosk`.
-The initramfs stamp (`initramfs-stamp.sh`) covers `packages.pin` in this mode. A boot image of one
-mode does not match the stamp of the other mode. Build the kernel packages again in the mode that
-the image uses.
+The initramfs stamp (`initramfs-stamp.sh`) covers `packages.pin`. Each kernel package carries an
+initramfs with this stamp. Do not change a file of `rootfs/initramfs`, `install.sh` or
+`tsx-disk.sh` without new kernel packages. `mkinitramfs-switchroot.sh` still has a branch for a
+build without packages (`TSX_FROM_PACKAGES=0`). `build-rootfs.sh` never uses it. Remove it with the
+next release of the kernel packages.
 
 ### The console profile
 
@@ -1080,9 +1088,10 @@ checkout.
 
 ## Updates
 
-Packages come from Alpine (`rootfs/packages.txt`) and, with a local apk tree, from the project
-repository (`rootfs/packages-tsx.txt`). The build pins a package only where needed (the Alpine
-chromium). Others float with the `ALPINE` branch (`v3.24`) at build time.
+Packages come from Alpine (`rootfs/packages.txt`) and from the project repository (the profile meta
+package and `rootfs/packages-tsx.txt`). The build pins a package only where needed (the Alpine
+chromium, which the project package replaces). Others float with the `ALPINE` branch (`v3.24`) at
+build time.
 
 A running panel updates its packages with `apk upgrade`. The stable Alpine branch gets security
 updates and fixes. `tsx-autoupdate` (`rootfs/overlay/usr/local/sbin/tsx-autoupdate`) runs the
@@ -1115,21 +1124,21 @@ result of the last check and install. The ESPHome device and `tsx-mqtt` publish 
 The project publishes signed apk packages (repository `tsx-aports`: `common/` for hardware-neutral
 packages, `xx60/` for this board). `apk upgrade` updates them with the Alpine packages.
 
-| Package | Replaces in a rootfs without the repository |
+| Package | What it is |
 |---|---|
-| `tsx-xx60-chromium` (Alpine build with the ES2 patch, `provides=chromium`) | the `chromium=<ver>` pin and the in-place patch |
-| `tsx-xx60-kernel-lts`, `tsx-xx60-kernel-stable` (both installed) | unowned `/lib/modules/<release>/` trees |
-| `tsx-xx60-wlroots0.20` | Alpine `wlroots0.20` (see "Screen blanking") |
-| `sendspin-cli` (`/usr/bin`) | `/usr/local/bin/sendspin-cli` |
-| `tensorflow-lite-c` (`/usr/lib/libtensorflowlite_c.so`) | `voice/tflite/` |
-| `tsx-keys` (the signing key) | `overlay/etc/apk/keys/` (shipped in both cases) |
+| `tsx-xx60-chromium` (Alpine build with the ES2 patch, `provides=chromium`) | the browser. The `chromium=<ver>` line of `packages.txt` is dropped |
+| `tsx-xx60-kernel-lts`, `tsx-xx60-kernel-stable` (both installed) | the kernels, their `/lib/modules/<release>/` trees and the boot images |
+| `tsx-xx60-wlroots0.20` | replaces Alpine `wlroots0.20` (see "Screen blanking") |
+| `sendspin-cli` (`/usr/bin`) | the Sendspin player |
+| `tensorflow-lite-c` (`/usr/lib/libtensorflowlite_c.so`) | the TFLite C library of the voice satellite |
+| `tsx-keys` (the signing key) | the signing key. `rootfs/overlay/etc/apk/keys/` holds a copy, which the build trusts before it installs the first package |
 
 - **Repositories.** Every rootfs trusts the project key. `/etc/apk/repositories` lists
   `<TSX_APK_URL>/<branch>/common` and `.../xx60` first, before Alpine `main` and `community`, so
   `tsx-xx60-chromium` wins over Alpine `chromium`. The default URL is
   `https://tsx-aports.unexceptional.net`. The `APK_URL` key points a panel at a mirror, a LAN copy or
   a local directory, or is `off` (`tsx-config apply` rewrites only the marked block). The build
-  never fetches from that URL. It uses `TSX_APK_LOCAL`.
+  never fetches from that URL. It uses `TSX_APK_LOCAL` (`rootfs/fetch-apk-tree.sh` fills it).
 - **Kernel packages.** Both flavors are installed, so a switch writes only a boot image. Each package
   ships `/boot/tsxboot-emmc-<flavor>.img`. Its install script writes the eMMC boot partition (through
   `tsx-update-boot`, with backup and readback verify) only when its flavor is the selected one

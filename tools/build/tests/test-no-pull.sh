@@ -2,8 +2,7 @@
 # Host test: the --no-pull and REMOTE_PULL=0 opt-out of remote-build.sh
 # (README.md "Remote build (optional)"). This test needs no ssh and no rsync.
 # The argument parser and maybe_pull() are self-contained. The test extracts
-# them from the real script (the same technique as the PROTECT= extraction in
-# test-push-protect.sh) and runs them with a stub pull().
+# them from the real script and runs them with a stub pull().
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 N=0 F=0
@@ -11,7 +10,7 @@ ok() { echo "  ok: $*"; N=$((N+1)); }
 bad() { echo "  FAIL: $*"; F=$((F+1)); }
 
 # --- the arg-parsing block: DEST=... through "set -- ${ARGS[@]}" ----------
-argblock=$(sed -n '/^DEST= MODS=0/,/^set -- "\${ARGS\[@\]}"$/p' "$HERE/remote-build.sh")
+argblock=$(sed -n '/^DEST= J=/,/^set -- "\${ARGS\[@\]}"$/p' "$HERE/remote-build.sh")
 [ -n "$argblock" ] || { echo "FAIL: could not extract the arg-parsing block from remote-build.sh"; exit 1; }
 
 run_args() {  # run_args ARG... ; prints "PULL=x CMD=y" after parsing

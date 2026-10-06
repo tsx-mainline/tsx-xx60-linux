@@ -5,16 +5,17 @@ on:
       - 'v*'
 
 # Nothing here downloads or bundles a Crestron file: the boot images, the
-# rootfs, the rescue image and the v2 install payload are all built from this
-# repo's own sources (rootfs/vendor-fetch.sh's proprietary DSP files are
-# fetched by the PANEL itself at install time over the network, never bundled
-# into a release asset).
+# rootfs, the rescue image and the v2 install payload come from this repo's own
+# sources and from the published packages of tsx-aports (rootfs/vendor-fetch.sh's
+# proprietary DSP files are fetched by the PANEL itself at install time over the
+# network, never bundled into a release asset).
 #
 # Job graph (no job needs --privileged, and no job mounts a loop device to
 # build an image -- mk-tsxroot-emmc.sh builds its ext4 with `mke2fs -d` straight
 # from a directory tree, never a loopback mount):
 #   kernel (matrix lts/stable) -> rescue -----\
 #                               \-> rootfs ---> payload (matrix lts/stable) -> bundle -> publish
+#   (the rootfs job builds from the published packages of tsx-aports)
 #
 # Runners. The jobs that compile or run ARM code (kernel, rootfs, rescue) run
 # on the hosted arm64 runner ubuntu-24.04-arm. This runner runs armv7 (32-bit
@@ -94,12 +95,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The stage 2 initramfs takes the packages of rootfs/initramfs/packages.pin
+      # from the published apk tree of this project.
+      - name: cache the apk tree
+        uses: actions/cache@v4
+        with:
+          path: apk-tree
+          key: apk-tree-${{ github.run_id }}
+          restore-keys: apk-tree-
+
+      - name: fetch the published apk tree (rootfs/fetch-apk-tree.sh)
+        run: rootfs/fetch-apk-tree.sh apk-tree
+
       - name: cache the built rescue image
         id: cache
         uses: actions/cache@v4
         with:
           path: rescue-out
-          key: rescue-${{ hashFiles('installer/rescue/**', 'installer/rescue-v2/**', 'installer/initramfs/**', 'rootfs/initramfs/**', 'rootfs/overlay/**', 'kernel/KERNEL_REV.lts') }}
+          key: rescue-${{ hashFiles('installer/rescue/**', 'installer/rescue-v2/**', 'installer/initramfs/**', 'rootfs/initramfs/**', 'kernel/KERNEL_REV.lts', 'apk-tree/*/*/armv7/APKINDEX.tar.gz') }}
 
       - uses: actions/download-artifact@v4
         if: steps.cache.outputs.cache-hit != 'true'
@@ -115,6 +128,8 @@ jobs:
 
       - name: ci/build-rescue.sh --kdir ../out-lts --flavor shared
         if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          TSX_APK_LOCAL: ${{ github.workspace }}/apk-tree
         run: |
           mkdir -p rescue-out
           ci/build-rescue.sh --kdir ../out-lts --flavor shared --out rescue-out/rescue.img
@@ -131,13 +146,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The image comes from packages. The published apk tree of this project
+      # (https://tsx-aports.unexceptional.net) holds them. The cache keeps the
+      # files between runs. The script fetches only what the cache does not
+      # have. The rootfs cache below depends on the indexes of the tree, so a
+      # new package makes a new image.
+      - name: cache the apk tree
+        uses: actions/cache@v4
+        with:
+          path: apk-tree
+          key: apk-tree-${{ github.run_id }}
+          restore-keys: apk-tree-
+
+      - name: fetch the published apk tree (rootfs/fetch-apk-tree.sh)
+        run: rootfs/fetch-apk-tree.sh apk-tree
+
       - name: cache the built rootfs + initramfs
         id: cache
         uses: actions/cache@v4
         with:
           path: rootfs/out
-          key: rootfs-${{ hashFiles('rootfs/**', 'kernel/KERNEL_REV.lts', 'kernel/KERNEL_REV.stable') }}
+          key: rootfs-${{ hashFiles('rootfs/**', 'kernel/KERNEL_REV.lts', 'kernel/KERNEL_REV.stable', 'apk-tree/*/*/armv7/APKINDEX.tar.gz') }}
 
+      # The modules trees of the kernels that this release builds. The kernel
+      # packages of the published tree may be older. The rootfs build copies a
+      # tree that no package has (build-rootfs.sh rootfs, KVER default).
       - uses: actions/download-artifact@v4
         if: steps.cache.outputs.cache-hit != 'true'
         with:
@@ -145,49 +178,32 @@ jobs:
           path: rootfs/modules
           merge-multiple: true
 
-      # The rootfs build needs two programs that are not in the repo:
-      # sendspin-cli (rootfs/src/sendspin/build.sh) and libtensorflowlite_c.so
-      # (rootfs/voice/build-tflite.sh). Both build in armv7 containers,
-      # natively on this runner. TFLITE_CHECK=1 compares the library with the
-      # pin in rootfs/voice/tflite/SHA256SUMS and stops when the sums differ.
-      # The cache keeps the library between runs. install-lva.sh checks the
-      # pin again.
-      - name: build sendspin-cli from source (rootfs/src/sendspin/build.sh)
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: rootfs/src/sendspin/build.sh
-
-      - name: cache libtensorflowlite_c.so
-        id: tflite
-        if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
-        with:
-          path: rootfs/voice/tflite/libtensorflowlite_c.so
-          key: tflite-${{ hashFiles('rootfs/voice/build-tflite.sh', 'rootfs/voice/tflite/SHA256SUMS') }}
-
-      - name: build libtensorflowlite_c.so (rootfs/voice/build-tflite.sh)
-        if: steps.cache.outputs.cache-hit != 'true' && steps.tflite.outputs.cache-hit != 'true'
-        env:
-          TFLITE_CHECK: "1"
-        run: rootfs/voice/build-tflite.sh
-
       # No Crestron file is ever fetched or bundled here: TFA_VENDOR_FETCH=no
       # and TFA_VENDOR_SRC unset means mkrootfs.sh leaves the TFA9890 DSP
       # tuning containers out of the image entirely (a local build run by a
       # user, on their own machine, keeps fetching them by default). The
       # no-proprietary-files step below checks this on the build's output,
       # not just this env var. KVER is left at its default (every release dir
-      # under rootfs/modules/lib/modules -- both flavors, merged above), so
-      # this ONE rootfs tarball carries both kernels' modules. See
-      # installer/emmc/mk-tsxroot-emmc.sh's header for why the eMMC root
-      # image built from it later keeps only one flavor's tree.
+      # under rootfs/modules/lib/modules, both flavors, merged above), so this
+      # ONE rootfs tarball carries both kernels' modules. See
+      # installer/emmc/mk-tsxroot-emmc.sh's header for why the eMMC root image
+      # built from it later keeps only one flavor's tree.
+      # TSX_SKIP_BOOT_CHECK: the release builds its own kernel, boot image and
+      # initramfs (the payload job). The kernel packages of the published tree
+      # follow the pins of the last release, so they cannot match the pins of
+      # this one. The check protects the images that a panel boots.
       - name: build the rootfs (rootfs/build-rootfs.sh rootfs)
         if: steps.cache.outputs.cache-hit != 'true'
         env:
           TFA_VENDOR_FETCH: "no"
+          TSX_SKIP_BOOT_CHECK: "1"
+          TSX_APK_LOCAL: ${{ github.workspace }}/apk-tree
         run: rootfs/build-rootfs.sh rootfs
 
       - name: build the switch_root initramfs (rootfs/build-rootfs.sh initramfs)
         if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          TSX_APK_LOCAL: ${{ github.workspace }}/apk-tree
         run: rootfs/build-rootfs.sh initramfs
 
       - name: manifest / sizes / sha256

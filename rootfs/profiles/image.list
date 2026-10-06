@@ -1,11 +1,10 @@
-# Files that the image build itself owns when it builds from packages
-# (TSX_FROM_PACKAGES=1, docs/rootfs.md "Build from packages"). The profile meta
-# package (tsx-xx60-console, -kiosk or -ha) and the packages it pulls own every
-# other file of rootfs/overlay. profile.sh stage-image copies only these files.
-# A file here that the profile does not have (the profile marker of the ha
-# profile, for example) is not copied. Format: image PATH, relative to the root
-# of the image. The build takes the file from rootfs/overlay, or from
-# profiles/NAME/overlay when the profile has its own copy.
+# Files that the image build itself owns. The profile meta package (tsx-xx60-console,
+# -kiosk or -ha) and the packages it pulls own every other file of the panel.
+# profile.sh stage copies only these files. A file here that the profile does
+# not have (the profile marker of the ha profile, for example) is not copied.
+# Format: image PATH, relative to the root of the image. The build takes the
+# file from profiles/NAME/overlay when the profile has its own copy, else from
+# rootfs/overlay.
 image etc/fstab
 image etc/inittab
 image etc/tsx/profile

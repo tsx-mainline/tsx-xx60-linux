@@ -14,13 +14,13 @@ Run these commands on the panel. The tool needs no python.
 
 ### Add a new Chromium package version
 
-`rootfs/packages.txt` pins `chromium=<ver>` to the exact build that the signature list covers. Until you change the pin, `apk add` and the rootfs build refuse a new version. The project apk repository (tsx-aports) builds `tsx-xx60-chromium` with the same `patch-chromium.py` and `sigs.json`. A new `sigs.json` entry must reach that repository too (see its README, section "Chromium").
+The project apk repository (tsx-aports) builds `tsx-xx60-chromium` with `patch-chromium.py` and `sigs.json` of this folder. The image build installs that package. `rootfs/packages.txt` pins `chromium=<ver>` to the exact build that the signature list covers, but the image build drops that line. A new `sigs.json` entry must reach tsx-aports too (see its README, section "Chromium").
 
-1. Change the pin. Set `chromium=<ver>` in `rootfs/packages.txt` to the new version. To find the exact `<ver>-rN` string, run `apk add --root ... --simulate chromium` against `dl-cdn.alpinelinux.org/alpine/vX.Y/community/armv7`. Run the rootfs build. It installs the new binary and logs `chromium ES2 patch NOT applied` (unknown sha256). This log line is normal until step 5.
-2. Get the new binary. Take `/usr/lib/chromium/chromium` from `out/rootfs.tar.gz` of the rootfs build (`tar -xzf rootfs.tar.gz ./usr/lib/chromium/chromium`) or from the apk.
+1. Change the pin. Set `chromium=<ver>` in `rootfs/packages.txt` to the new version. To find the exact `<ver>-rN` string, run `apk add --root ... --simulate chromium` against `dl-cdn.alpinelinux.org/alpine/vX.Y/community/armv7`.
+2. Get the new binary. Take `/usr/lib/chromium/chromium` from the Alpine package (`apk fetch chromium=<ver>`, then `tar -xzf chromium-<ver>.apk usr/lib/chromium/chromium`).
 3. Run `python3 patch-chromium.py --derive chromium --name alpine-vX.Y-armv7-chromium-<ver>-rN --package "<pkg>"` (see "What --derive does").
 4. Check the listing by eye. The fall-through path must lead to the second `eglGetError` and LOG with the next line number (`mov.w r2, #374` in 152). It must also lead to the `EGL_BAD_MATCH` (0x3009) and `EGL_BAD_ATTRIBUTE` (0x3004) compares. The branch target must be the LOG with `movw r2, #363`. Line numbers change between versions, so compare with `ui/gl/gl_context_egl.cc` at the new tag. Also make sure that the failure did not move to another gate. These gates are `gl_features.cc ShouldFallbackToSWIfGLES3NotSupported()` and the check `"GLES3 is unsupported and ES version fallback is disabled"`. The second check runs only without `EGL_KHR_no_config_context`.
-5. Add the signature. Run the same command with `--add` and rebuild the rootfs. The log line `chromium-es2-patch: applied: ...` must appear (also in `out/rootfs.sizes`).
+5. Add the signature. Run the same command with `--add`. Build the package `tsx-xx60-chromium` in tsx-aports, and build the image from it. The log line `chromium-es2-patch: tsx-xx60-chromium: ... patched (verified)` must appear (also in `out/rootfs.sizes`).
 6. Test on the panel with `KIOSK_GPU=browser`. `chrome://gpu` must show "Compositing: Hardware accelerated".
 
 To work by hand, run `arm-linux-gnueabihf-objdump -d -M force-thumb --start-address=0x... --stop-address=0x... chromium` (or `llvm-objdump --triple=thumbv7a`) around the reference. Find the reference with `grep -abo 'ES version fallback is disabled' chromium`.
@@ -28,7 +28,7 @@ To work by hand, run `arm-linux-gnueabihf-objdump -d -M force-thumb --start-addr
 ### Revert
 
 - Panel: run `rc-service kiosk stop; tsx-chromium-es2 revert; rc-service kiosk start`. This writes `60 d0` back and verifies the original sha256. `tsx-chromium-es2 apply` patches the binary again. Alternatively, run `apk fix chromium` (needs the network) to reinstall the stock file. Then remove `/etc/tsx/chromium-es2-patched`.
-- Build: run `CHROMIUM_ES2_PATCH=0 rootfs/build-rootfs.sh rootfs`.
+- Build: the patch is part of the package `tsx-xx60-chromium`. The image build has no switch to turn it off.
 
 The panel does not keep the unpatched binary (192 MB). The 2 original bytes and both hashes in the record are enough to go back. `apk audit` lists `usr/lib/chromium/chromium` as changed. This is normal.
 

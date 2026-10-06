@@ -2,32 +2,6 @@
 # screen blanking, the on-screen keyboard and the setup page. The kiosk owns
 # the screen, so this profile has no getty on tty1. Format: see console.list.
 
-overlay etc/chromium/policies/managed/tsx-kiosk.json
-overlay etc/init.d/kiosk
-overlay etc/kiosk.conf
-overlay etc/init.d/tsx-setupd
-overlay etc/init.d/tsx-setup-helper
-overlay etc/inittab
-overlay etc/logrotate.d/tsx-kiosk
-overlay etc/motd
-overlay etc/tsx/setup.conf
-overlay usr/local/bin/kiosk-session
-overlay usr/local/bin/tsx-kiosk-reveal
-overlay usr/local/bin/tsx-kiosk-url
-overlay usr/local/bin/tsx-orientation
-overlay usr/local/bin/tsx-osk
-overlay usr/local/lib/tsx/kiosk.d/es2.sh
-overlay usr/local/sbin/tsx-chromium-es2
-overlay usr/local/sbin/tsx-setupd
-overlay usr/local/sbin/tsx-setup-helper
-
-built /usr/bin/cage
-built /usr/local/bin/tsx-overlay
-built /usr/local/share/tsx/chromium-es2/patch-chromium.py
-built /usr/share/tsx-cage.version
-tree /usr/share/tsx/cursors
-step compile-kiosk
-step cursors
 step chromium-es2
 
 pkg seatd

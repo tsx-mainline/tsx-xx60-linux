@@ -12,27 +12,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: build sendspin-cli from source (rootfs/src/sendspin/build.sh)
-        run: rootfs/src/sendspin/build.sh
-
-      # libtensorflowlite_c.so is a build product. It is not in the repo, and
-      # the build of the rootfs needs it (rootfs/voice/install-lva.sh). The
-      # script builds it in an armv7 container, natively on this runner.
-      # TFLITE_CHECK=1 compares the result with the pin in
-      # rootfs/voice/tflite/SHA256SUMS and stops when the sums differ. The
-      # cache keeps the file between runs. install-lva.sh checks the pin again.
-      - name: cache libtensorflowlite_c.so
-        id: tflite
+      # The image comes from packages. The published apk tree of this project
+      # (https://tsx-aports.unexceptional.net) holds them. The cache keeps the
+      # files between runs. The script fetches only what the cache does not have.
+      - name: cache the apk tree
         uses: actions/cache@v4
         with:
-          path: rootfs/voice/tflite/libtensorflowlite_c.so
-          key: tflite-${{ hashFiles('rootfs/voice/build-tflite.sh', 'rootfs/voice/tflite/SHA256SUMS') }}
+          path: apk-tree
+          key: apk-tree-${{ github.run_id }}
+          restore-keys: apk-tree-
 
-      - name: build libtensorflowlite_c.so (rootfs/voice/build-tflite.sh)
-        if: steps.tflite.outputs.cache-hit != 'true'
-        env:
-          TFLITE_CHECK: "1"
-        run: rootfs/voice/build-tflite.sh
+      - name: fetch the published apk tree (rootfs/fetch-apk-tree.sh)
+        run: rootfs/fetch-apk-tree.sh apk-tree
 
       # No Crestron file is ever fetched or bundled here: TFA_VENDOR_FETCH=no
       # and TFA_VENDOR_SRC unset means mkrootfs.sh leaves the TFA9890 DSP
@@ -40,9 +31,10 @@ jobs:
       # user, on their own machine, keeps fetching them by default). The
       # no-proprietary-files step below checks this on the build's output,
       # not just this env var.
-      - name: build rootfs + initramfs (rootfs/build-rootfs.sh all)
+      - name: build rootfs + initramfs from packages (rootfs/build-rootfs.sh all)
         env:
           TFA_VENDOR_FETCH: "no"
+          TSX_APK_LOCAL: ${{ github.workspace }}/apk-tree
         run: rootfs/build-rootfs.sh all
 
       - name: manifest / sizes / sha256

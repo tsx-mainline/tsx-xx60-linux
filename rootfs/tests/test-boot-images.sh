@@ -67,8 +67,17 @@ cp -a "$HERE" "$W/copy"
 echo "# changed" >> "$W/copy/initramfs/overlay/init"
 [ "$(sh "$W/copy/initramfs-stamp.sh")" != "$GOODSTAMP" ] && ok "a changed initramfs file changes the stamp" || bad "stamp ignores initramfs/overlay/init"
 cp -a "$HERE" "$W/copy2"
-echo "# changed" >> "$W/copy2/overlay/usr/local/lib/tsx/board.sh"
-[ "$(sh "$W/copy2/initramfs-stamp.sh")" != "$GOODSTAMP" ] && ok "a changed board.sh changes the stamp" || bad "stamp ignores board.sh"
+echo "# changed" >> "$W/copy2/initramfs/packages.pin"
+[ "$(sh "$W/copy2/initramfs-stamp.sh")" != "$GOODSTAMP" ] && ok "a changed packages.pin changes the stamp" || bad "stamp ignores packages.pin"
+cp -a "$HERE" "$W/copy3"
+echo "# changed" >> "$W/copy3/initramfs/overlay/usr/sbin/tsx-confont"
+echo "# changed" >> "$W/copy3/overlay/usr/local/lib/tsx/board.sh"
+[ "$(sh "$W/copy3/initramfs-stamp.sh")" = "$GOODSTAMP" ] && ok "the stamp ignores the tools that come from packages and the board file of the rootfs" || bad "stamp covers tsx-confont or board.sh"
+# The kernel packages in the published apk tree carry an initramfs with this stamp.
+# A changed file under rootfs/initramfs (or install.sh, tsx-disk.sh) needs new kernel
+# packages. Change this value together with the new packages.
+PUBLISHED_STAMP=f43442ff7650
+[ "${GOODSTAMP:0:12}" = "$PUBLISHED_STAMP" ] && ok "the stamp is the stamp of the published kernel packages ($PUBLISHED_STAMP)" || bad "the stamp is ${GOODSTAMP:0:12}, the published kernel packages have $PUBLISHED_STAMP (new kernel packages needed)"
 
 echo "== 2. both images match the pins and the initramfs"
 fakeroot "$W/root" $GOODL $GOODS "$GOODSTAMP" "$GOODSTAMP"

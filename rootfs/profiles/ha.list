@@ -2,34 +2,6 @@
 # device, MQTT, the voice satellite, the Bluetooth proxy, Sendspin and
 # kiosk-set-token. Format: see console.list.
 
-overlay etc/conf.d/tsx-esphome
-overlay etc/conf.d/tsx-mqtt
-overlay etc/init.d/tsx-bt
-overlay etc/init.d/tsx-esphome
-overlay etc/init.d/tsx-mqtt
-overlay etc/init.d/tsx-sendspin
-overlay etc/init.d/tsx-voice
-overlay etc/logrotate.d/tsx-bt
-overlay etc/logrotate.d/tsx-sendspin
-overlay etc/logrotate.d/tsx-voice
-overlay etc/tsx/esphome.conf
-overlay etc/tsx/mqtt.conf
-overlay etc/tsx/sendspin.conf
-overlay etc/tsx/voice.conf
-overlay usr/local/bin/kiosk-set-token
-overlay usr/local/bin/tsx-esphome-run
-overlay usr/local/bin/tsx-voice
-overlay usr/local/bin/tsx-voice-hook
-overlay usr/local/bin/tsx-voice-run
-overlay usr/local/sbin/tsx-mqtt
-overlay usr/local/share/tsx/esphome.d/camera.py
-overlay usr/local/share/tsx/setup.d/camera.py
-overlay usr/local/share/tsx/setup.d/ha.py
-
-tree /opt/lva
-built /usr/local/bin/linux-voice-assistant
-built /usr/bin/sendspin-cli
-built /usr/local/bin/sendspin-cli
 step sendspin
 step lva
 

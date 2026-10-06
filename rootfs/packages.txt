@@ -26,9 +26,10 @@ openssh-client-default
 # kiosk: seat, compositor, browser, input
 seatd
 seatd-openrc
-# cage itself is built from source by mkrootfs.sh: 0.3.1 (fixes Chromium --kiosk
-# fullscreen. 0.3.0 in v3.24 ignores the request made before the window maps)
-# + src/cage-0.3.1-argb8888-fallback.patch (Meson8 planes have no XRGB8888).
+# cage itself comes from the package tsx-xx60-board-kiosk. The package builds
+# 0.3.1 from source (fixes Chromium --kiosk fullscreen. 0.3.0 in v3.24 ignores
+# the request made before the window maps) + src/cage-0.3.1-argb8888-fallback.patch
+# (Meson8 planes have no XRGB8888).
 wlroots0.20
 # on-screen keyboard (KIOSK_OSK): sway has the layer-shell / input-method-v2 /
 # text-input-v3 protocols cage lacks. Dbus for squeekboard's session API
@@ -38,7 +39,7 @@ swaybg
 squeekboard
 wvkbd-mobintl
 dbus
-# tsx-overlay (quick-settings overlay, built by mkrootfs.sh): libraries it links
+# tsx-overlay (quick-settings overlay, from the package tsx-kiosk): libraries it links
 cairo
 wayland-libs-client
 # chromium pulls in icu-data-full (31 MiB) as a hard dependency (its APKBUILD
@@ -48,14 +49,11 @@ wayland-libs-client
 # (verified with `apk add --simulate` against this Alpine release). Keep it.
 #
 # Pinned to the exact build src/chromium-es2/sigs.json has a signature for
-# ("alpine-v3.24-armv7-chromium-152.0.7977.82-r0"): apk records this "="
-# constraint in the rootfs's own /etc/apk/world, so `apk upgrade` on the
-# panel can never silently move chromium past what the ES2 patch covers --
-# it would refuse (no candidate satisfies the world constraint) rather than
-# ship an unpatched, software-rendered browser. To move the pin: derive a
-# new sigs.json entry for the target version first (src/chromium-es2/README.md,
-# "Re-deriving for a new Chromium package"), then bump the version here and
-# rebuild.
+# ("alpine-v3.24-armv7-chromium-152.0.7977.82-r0"). The image build drops this
+# line, because the package tsx-xx60-chromium provides chromium (the ES2 patch
+# is built into that package). To move the pin: derive a new sigs.json entry
+# for the target version first (src/chromium-es2/README.md, "Re-deriving for a
+# new Chromium package"), then bump the version here and in tsx-aports.
 chromium=152.0.7977.82-r0
 font-dejavu
 libinput

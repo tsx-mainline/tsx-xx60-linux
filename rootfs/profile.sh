@@ -7,13 +7,10 @@
 #   profile.sh has PROFILE KIND NAME    exit 0 if the profile has that entry
 #   profile.sh packages PROFILE FILE    the lines of a package file (packages.txt,
 #                                       packages-tsx.txt) that the profile installs
-#   profile.sh stage PROFILE ROOTFS     copy the overlay into ROOTFS, minus the
-#                                       files of the profiles that build on PROFILE,
-#                                       plus the files of profiles/PROFILE/overlay
-#   profile.sh stage-image PROFILE ROOTFS  the same as stage, but copy only the
-#                                       files that profiles/image.list names (the
-#                                       package path: the packages own the rest)
-#   profile.sh unclassified             list overlay files that no list names
+#   profile.sh stage PROFILE ROOTFS     copy the files that profiles/image.list names
+#                                       into ROOTFS (the packages own all other files).
+#                                       A file of profiles/PROFILE/overlay wins over
+#                                       the file of the same path in overlay
 #
 # The profiles are console, kiosk and ha. Each one holds all the earlier ones.
 # profiles/<name>.list holds the entries that the profile adds. mkrootfs.sh and
@@ -45,12 +42,6 @@ entries() {
 	done
 }
 
-# others PROFILE: the profiles that are not in effect
-others() {
-	inc=" $(includes "$1") "
-	for l in $ALL; do case "$inc" in *" $l "*) ;; *) echo "$l";; esac; done
-}
-
 cmd=${1:-}; [ $# -gt 0 ] && shift
 case "$cmd" in
 includes) [ $# = 1 ] || die "usage: includes PROFILE"; includes "$1";;
@@ -71,38 +62,18 @@ stage)
 	[ $# = 2 ] || die "usage: stage PROFILE ROOTFS"
 	p=$1; R=$2
 	includes "$p" >/dev/null
-	mkdir -p "$R"
-	cp -a "$OV"/. "$R"/
-	for o in $(others "$p"); do
-		awk '$1 == "overlay" { print $2 }' "$PD/$o.list" | while read -r f; do
-			rm -f "$R/$f"
-			# drop directories that this removal left empty
-			d=$(dirname "$f")
-			while [ "$d" != . ]; do rmdir "$R/$d" 2>/dev/null || break; d=$(dirname "$d"); done
-		done
-	done
-	# the files that only this profile has. A symbolic link is followed, so
-	# the image holds the file and not a link into the repository.
-	[ -d "$PD/$p/overlay" ] && cp -aL "$PD/$p/overlay"/. "$R"/
-	exit 0;;
-stage-image)
-	[ $# = 2 ] || die "usage: stage-image PROFILE ROOTFS"
-	p=$1; R=$2
 	[ -r "$PD/image.list" ] || die "no $PD/image.list"
-	t=$(mktemp -d "${TMPDIR:-/tmp}/profile-stage.XXXXXX")
-	sh "$0" stage "$p" "$t"
 	mkdir -p "$R"
 	awk '/^[ \t]*(#|$)/ { next } $1 == "image" { print $2 }' "$PD/image.list" | while read -r f; do
-		[ -e "$t/$f" ] || continue
+		# A file of the profile wins over the file of the overlay. A symbolic
+		# link is followed, so the image holds the file and not a link into
+		# the repository.
+		if [ -e "$PD/$p/overlay/$f" ]; then src=$PD/$p/overlay/$f
+		elif [ -e "$OV/$f" ]; then src=$OV/$f
+		else continue; fi
 		mkdir -p "$R/$(dirname "$f")"
-		cp -a "$t/$f" "$R/$f"
+		cp -aL "$src" "$R/$f"
 	done
-	rm -rf "$t"
 	exit 0;;
-unclassified)
-	( cd "$OV" && find . \( -type f -o -type l \) | sed 's|^\./||' | grep -v '__pycache__' | sort ) > "${TMPDIR:-/tmp}/profile-ov.$$"
-	for l in $ALL; do awk '$1 == "overlay" { print $2 }' "$PD/$l.list"; done | sort > "${TMPDIR:-/tmp}/profile-ls.$$"
-	comm -23 "${TMPDIR:-/tmp}/profile-ov.$$" "${TMPDIR:-/tmp}/profile-ls.$$"
-	rm -f "${TMPDIR:-/tmp}/profile-ov.$$" "${TMPDIR:-/tmp}/profile-ls.$$";;
-*) sed -n '2,22p' "$0" >&2; exit 2;;
+*) sed -n '2,16p' "$0" >&2; exit 2;;
 esac
