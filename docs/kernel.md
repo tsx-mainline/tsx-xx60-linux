@@ -20,13 +20,15 @@ The parent of the fork is `torvalds/linux`. The fork is `github.com/tsx-mainline
 | Branch | `tsx-xx60-lts` | `tsx-xx60-stable` |
 | Upstream track | `v6.18.y` | `v7.2.y` |
 | Pin file | `kernel/KERNEL_REV.lts` | `kernel/KERNEL_REV.stable` |
-| Pinned commit | `4906e367d4cd` | `4015a085d1a4` |
-| Base | `v6.18.54` plus 56 `xdarklight` commits plus the commits that this port adds | `v7.2.8` plus 54 `xdarklight` commits plus the commits that this port adds (`git describe`: `v7.2.8-117-g4015a085d1a4`) |
-| `kernelrelease` | `6.18.54-00119-g4906e367d4cd` | |
+| Pinned commit | `58619999fb5f` | `eddf71e798ef` |
+| Base | `v6.18.54` plus 56 `xdarklight` commits plus the commits that this port adds | `v7.2.8` plus 54 `xdarklight` commits plus the commits that this port adds (`git describe`: `v7.2.8-119-geddf71e798ef`) |
+| `kernelrelease` | `6.18.54-00121-g58619999fb5f` | `7.2.8-00119-geddf71e798ef` |
 | Use | The long-term support kernel. `tsx-install-mainline` installs it by default | The newest stable kernel, on a newer upstream base |
 | Package | `tsx-xx60-kernel-lts` | `tsx-xx60-kernel-stable` |
 
 Both branches carry the same board-support commits (DTS, config fragment, drivers) on top of their own base.
+
+- **Watchdog.** The hardware watchdog is the PMIC watchdog (`rn5t618-wdt`). The kernel command line sets `rn5t618_wdt.early=1`. The driver then starts the watchdog at probe, about 1.7 s into the boot, and keeps it on through a restart. A freeze after that point resets the panel within 32 s. A halt or a power-off turns the watchdog off.
 
 - **Pins.** Each pin file is a text file with one commit hash. CI and local builds check out the fork at that commit for the flavor that they build. The pins do not follow the latest commit. To move a flavor to a later kernel commit, change its pin.
 - **Change order.** A change goes to `stable` first. Then a cherry-pick or a rebase takes it to `lts`. The `lts` kernel moves only when its pin changes.
