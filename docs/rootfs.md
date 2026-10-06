@@ -240,7 +240,7 @@ The base system does not need the layers above it. A call to a missing part does
 ### The seam: tsx-panelctl
 
 The Home Assistant layer reaches the buttons, the light sensor, the LED bar, the volume and the
-display power only through `tsx-panelctl` (`rootfs/overlay/usr/local/sbin/tsx-panelctl`). The
+display power only through `tsx-panelctl` (`usr/local/sbin/tsx-panelctl` of tsx-linux-common). The
 base system owns it. `tsx_panel` and `tsx-mqtt` never call `tsx-ledbar`, `tsx-keypad`, `tsx-blank`,
 `tsx-als`, `amixer` or the backlight device.
 
@@ -270,7 +270,7 @@ The whitelisted commands are:
 
 The state files `/run/tsx/buttons.state`, `als.state`, `ledbar.state` and `/run/tsx-idled.state`
 are the event interface. The base daemons write them. `tsx-mqtt` and `tsx_panel` read them.
-`rootfs/tests/test-panelctl.sh` checks the whitelisted commands and the rejection of bad lines.
+`tests/test-panelctl.sh` of tsx-linux-common checks the whitelisted commands and the rejection of bad lines.
 
 ### Setup page fields
 
@@ -419,7 +419,7 @@ The panel has no RTC.
 
 The script logs a value other than normal.
 
-`rootfs/tests/test-initscripts.sh` sources the init scripts under `busybox sh` with stand-ins for
+`rootfs/tests/common/test-initscripts.sh` sources the init scripts under `busybox sh` with stand-ins for
 the OpenRC functions. It checks that a script starts and fails nothing on a panel that lacks its
 part. It also checks `tsx-emmc-state` (fake sysfs, `TSX_EMMC_DIR`) and `tsx-fstrim`.
 
@@ -505,7 +505,7 @@ back into an offset.
 | Floor | `BACKLIGHT_MIN` is 1. Blanking still sets the backlight to 0. The slider has 24 linear steps. |
 | Ramp | `RAMP_SLIDER_MS` for the slider, `RAMP_AUTO_MS` for light, schedule and reload. 0 is a jump. |
 | Learning | `tsx-als` runs `tsx_brightness.py als-daemon`. An offset that stays the same for 8 s becomes a point of the curve. The curve goes to `/run/tsx/als-curve` and replaces `ALS_CURVE`. The offset returns to 0. Up to 12 points stay in `/data/tsx/brightness-learn.json`. Remove them with `tsx-panelctl send brightness-learn-reset` or the setup page button. `BRIGHTNESS_LEARN=off` turns learning off. |
-| Overlay | `tsx-overlay` (`rootfs/src/tsx-overlay.c`) is a `wlr-layer-shell` client that sway starts with the kiosk. It draws with cairo, stays resident (a few MB) and has no wakeups while hidden. It takes no keyboard focus, so the on-screen keyboard keeps working. Touches outside it reach the page. `tsx-idled` shows it on the five-finger tap through the FIFO `/run/tsx/overlay.ctl` (group `kiosk`). From a shell: `tsx-keypad overlay full\|slider\|hide\|toggle`. It runs as `kiosk` and acts only through `tsx-panelctl`. |
+| Overlay | `tsx-overlay` (`kiosk/src/tsx-overlay.c` of tsx-linux-common) is a `wlr-layer-shell` client that sway starts with the kiosk. It draws with cairo, stays resident (a few MB) and has no wakeups while hidden. It takes no keyboard focus, so the on-screen keyboard keeps working. Touches outside it reach the page. `tsx-idled` shows it on the five-finger tap through the FIFO `/run/tsx/overlay.ctl` (group `kiosk`). From a shell: `tsx-keypad overlay full\|slider\|hide\|toggle`. It runs as `kiosk` and acts only through `tsx-panelctl`. |
 | cage | There is no overlay, so the five-finger tap does nothing. |
 
 ### Screen blanking
@@ -645,7 +645,7 @@ Set it with `tsx-config set ORIENTATION NAME` and `tsx-config apply`, with the s
 the Home Assistant *Orientation* select. `tsx-config apply` keeps `/etc/tsx/orientation`
 (world-readable, absent for `landscape`) and turns the running kiosk when the value changes.
 
-`tsx-orientation` (`rootfs/overlay/usr/local/bin/tsx-orientation`) holds the table. All numbers
+`tsx-orientation` (`usr/local/bin/tsx-orientation` of tsx-linux-common) holds the table. All numbers
 come from one value per name: the quarter turns clockwise at which the picture is drawn on the
 native landscape LCD. `tsx-orientation info NAME` prints them. `tsx-splash` has the same table in
 C.
@@ -654,7 +654,7 @@ C.
 |---|---|
 | Kiosk (sway) | `kiosk-session` writes `output * transform N` and `input type:touch calibration_matrix ...` into the sway config. On a change, `tsx-orientation apply` sends both commands over the sway IPC socket. There is no restart and no page reload. The touch matrix is the identity in every orientation, because sway maps the touchscreen to the output and wlroots turns the touches. Chromium, the keyboard and the overlay get the new output size. squeekboard picks its portrait layout. wvkbd keeps `KIOSK_OSK_HEIGHT`. |
 | cage (`KIOSK_OSK=off`) | Stays landscape. `kiosk-session` logs this. |
-| Overlay | Stays at the right edge, centered, no higher than on the 10-inch landscape panel (720 px full, 600 px slider). Layout: `rootfs/src/tsx-overlay-layout.h`. |
+| Overlay | Stays at the right edge, centered, no higher than on the 10-inch landscape panel (720 px full, 600 px slider). Layout: `kiosk/src/tsx-overlay-layout.h` of tsx-linux-common. |
 | Front keys | They are keys, not coordinates, so they work in every orientation. The name of a key belongs to the physical key. Only the slide changes. The slide is off by default. `tsx-buttons` reads `/etc/tsx/orientation` at each slide step and turns the direction. So a slide up (landscape) or to the right (portrait) makes the screen brighter. |
 | Boot splash, text console | They turn from the root mount on (about 1 s after the splash first shows). See [boot.md](boot.md). |
 | Always landscape | The vendor U-Boot logo, the first second of the splash, the cage session and the rescue system (it never depends on the setting). |
@@ -785,10 +785,10 @@ states.
 
 | Part | Detail |
 |---|---|
-| Sendspin (`sendspin-cli`) | A network-audio receiver. It announces itself over mDNS and Music Assistant finds it as a media player. It applies the player software volume itself, so the volume slider works end to end. Alpine has no package, and the upstream armv7 binaries need glibc. `rootfs/src/sendspin/build.sh` builds it for musl armv7 (CI runs it before `mkrootfs.sh`). The project package `sendspin-cli` replaces the local build. Service `tsx-sendspin`, off by default. Turn it on with `tsx-audio enable sendspin` after the audio path works. |
-| linux-voice-assistant | The Assist voice satellite. `rootfs/voice/install-lva.sh` installs it under `/opt/lva` (pinned, checksummed). It speaks the ESPHome native API on port 6053, so Home Assistant adds it through the ESPHome integration. |
+| Sendspin (`sendspin-cli`) | A network-audio receiver. It announces itself over mDNS and Music Assistant finds it as a media player. It applies the player software volume itself, so the volume slider works end to end. Alpine has no package, and the upstream armv7 binaries need glibc. The project package `sendspin-cli` builds it for musl armv7. Service `tsx-sendspin`, off by default. Turn it on with `tsx-audio enable sendspin` after the audio path works. |
+| linux-voice-assistant | The Assist voice satellite. `install-lva.sh` of the package `tsx-ha` installs it under `/opt/lva` (pinned, checksummed). The image build runs it. It speaks the ESPHome native API on port 6053, so Home Assistant adds it through the ESPHome integration. |
 | Wake word | Runs on the panel with TensorFlow Lite C, built from source for musl armv7 without NEON (`tensorflow-lite-c`). The default model is microWakeWord. openWakeWord is several times heavier on this CPU and not recommended next to the browser. Push-to-talk (a front-key action) skips wake-word inference. |
-| Shim (`voice/shim/`) | Connects a local push-to-talk FIFO and the voice-state events to the satellite peripheral API, ducks the "Media" ALSA volume during a conversation, and drives the LED bar and key LEDs on wake. |
+| Shim (`ha/voice/shim/` of tsx-linux-common) | Connects a local push-to-talk FIFO and the voice-state events to the satellite peripheral API, ducks the "Media" ALSA volume during a conversation, and drives the LED bar and key LEDs on wake. |
 | `tsx-voice` | Service and CLI (`ptt`, `stop`, `mute`, `status`, ...). See [ha.md](ha.md) for the pairing and the wake word choice. |
 
 ## What lives on the data partition
@@ -817,7 +817,7 @@ and login, time zone, voice and MQTT settings, kernel flavor and root login. It 
 partition and survives a rootfs reinstall. It is a plain `KEY="value"` file with one setting per
 line, `#` comments, mode 600. `installer/panel.conf.example` is a commented copy.
 
-`tsx-config` (`rootfs/overlay/usr/local/sbin/tsx-config`, busybox ash) is the only program that
+`tsx-config` (`usr/local/sbin/tsx-config` of tsx-linux-common, busybox ash) is the only program that
 reads or writes the file.
 
 | Command | Effect |
@@ -964,7 +964,7 @@ page then opens for `TSX_SETUP_WINDOW` seconds without a change to `KIOSK_URL`. 
 
 | Part | Role |
 |---|---|
-| `tsx-setupd` (`rootfs/overlay/usr/local/sbin/tsx-setupd`) | A Python HTTP server (standard library). It runs in the default runlevel of the `kiosk` and `ha` profiles, as the unprivileged user `tsx-setup`. |
+| `tsx-setupd` (`usr/local/sbin/tsx-setupd` of tsx-linux-common) | A Python HTTP server (standard library). It runs in the default runlevel of the `kiosk` and `ha` profiles, as the unprivileged user `tsx-setup`. |
 | `tsx-setup-helper` (`.../sbin/tsx-setup-helper`) | A root daemon with its own FIFO (group `tsx-setup`) and a whitelisted line command set: `show`, `rev`, `set KEY VALUE`, `unset KEY`, `apply`, `setup`, `kiosk-restart`, `brightness-learn-reset`, `clear-setup-open` and `rootpw PASSWORD`. `rev` gives the revision of `panel.conf`: the sha256 of a salt and the file content. The salt is in `/run/tsx/setup-helper.salt` (mode 600). Each boot makes a new salt, and a restart of the helper keeps it. The helper never sends the salt. A request can start with a tag `#TAG`. The reply then starts with the same tag, and `tsx-setupd` reads only the reply with its own tag. |
 | `tsx-kiosk-url` (`.../bin/tsx-kiosk-url`) | Called by `kiosk-session`. It returns the setup page URL when the configured URL is empty, or when `/run/tsx/setup-open` is younger than `TSX_SETUP_WINDOW`. Otherwise it returns the configured URL. Host test: `tests/test-setup.sh` in tsx-linux-common. |
 
@@ -1056,7 +1056,7 @@ Bluetooth) at boot into `/run/tsx/hw.conf`.
 ### Tests with tsx-linux-common
 
 The tests in `rootfs/tests/common/` run the shared software of tsx-linux-common with the real board
-files of this repository. These files are `rootfs/overlay/usr/local/lib/tsx/board.sh`,
+files of this repository. The tests of the shared software alone are in tsx-linux-common. These files are `rootfs/overlay/usr/local/lib/tsx/board.sh`,
 `rootfs/overlay/etc/tsx/panel-board.conf` and `rootfs/overlay/etc/tsx/buttons-board.conf`. The tests hold
 no copy of a board file.
 
@@ -1071,6 +1071,9 @@ path on the panel. The CI job `common-tests` checks out tsx-linux-common and run
 
 | Test | What it checks with the xx60 board files |
 |---|---|
+| `test-als.sh` | `tsx-als` of the board with a fake light sensor and backlight, and the light sensor entities of `tsx-mqtt` |
+| `test-audio-miccheck.sh` | `tsx-audio mic-check` with a fake echo canceller: the raw microphone beside the gated capture |
+| `test-initscripts.sh` | The start logic of the init scripts of the board and of tsx-linux-common, `tsx-emmc-state` and the weekly `tsx-fstrim` |
 | `mqtt-dry.sh` | The five key events from `buttons-board.conf`, the Key LEDs light, the backlight range 1 to 23 and the model in `tsx-mqtt` |
 | `test-buttons-xx60.sh` | The real board layer with the template of `buttons.conf`: five keys, `tsx:keypad` and `tsx:key1` to 5, `SLIDE_STEP=0`. Each press fires the HA event and the last line. No overlay, home, reload, blank, brightness change or slide. Home Assistant sets the key LEDs and the screen-off level. The test compiles `tsx-buttons`. |
 | `test-board-xx60.sh` | The board values, the meson and lima renderer selection with the kiosk hook `es2.sh`, the browser flags of the hook, the volume entity, the Home Assistant model, `tsx-bt` with the CSR8811 chip file, the kernel package name and `ttyAML0` |
@@ -1094,7 +1097,7 @@ chromium, which the project package replaces). Others float with the `ALPINE` br
 build time.
 
 A running panel updates its packages with `apk upgrade`. The stable Alpine branch gets security
-updates and fixes. `tsx-autoupdate` (`rootfs/overlay/usr/local/sbin/tsx-autoupdate`) runs the
+updates and fixes. `tsx-autoupdate` (`usr/local/sbin/tsx-autoupdate` of tsx-linux-common) runs the
 upgrade through `crond` every 15 minutes.
 
 ### Autoupdate behavior (`/etc/tsx/autoupdate.conf`)
@@ -1104,18 +1107,17 @@ upgrade through `crond` every 15 minutes.
 | `ENABLED` | 1 | Turn autoupdate on or off |
 | `WINDOW` | `03:00-05:00` | Local time window for installs and reboots |
 | `REBOOT` | `auto` | `never` disables the reboot. The status then shows "reboot pending" until you reboot. |
-| `HOLD_DAYS` | 7 | Days to hold an unknown Chromium build |
 
 | Step | Behavior |
 |---|---|
 | Daily check | `apk update` and `apk upgrade --simulate` list the pending packages and whether any needs a reboot (a kernel, `musl`, `openrc`, `busybox` or init package). |
 | Install | Only inside `WINDOW` and only while the screen is idle (it uses the `tsx-idled` state). A needed reboot also waits for the window. `tsx-autoupdate now` installs at once. The window and the idle state then gate only the reboot. The Home Assistant Install button runs this command. |
-| Chromium | `tsx-xx60-chromium` is a normal package. A rootfs built without the project repository pins the Alpine build in `/etc/apk/world`. For a newer Alpine build, `tsx-autoupdate` checks the signature list that comes with `patch-chromium.py` (`/usr/local/share/tsx/chromium-es2/`). It upgrades and patches a known signature at once. It holds an unknown signature (status "held since ...") for `HOLD_DAYS`. Then it installs the build unpatched with software rendering and logs this. |
+| Chromium | `tsx-xx60-chromium` is a normal package with the ES2 patch built in. It provides `chromium`, so `apk upgrade` never moves to the unpatched Alpine build. A new Alpine Chromium needs a new signature in `sigs.json` and a new `tsx-xx60-chromium` (see `rootfs/src/chromium-es2/README.md`). |
 | Health check | After a reboot it checks the kiosk service and the reachability of `KIOSK_URL` and records the result. |
 | Status | `tsx-autoupdate status`, or `/run/tsx/update.json`. A persistent copy is in `/var/lib/tsx/autoupdate`. |
 
 The status has: the installed version (an `apk info -v` fingerprint, plus `/etc/tsx/build-id` if
-present), the pending count and list, reboot pending, the Chromium hold state, and the time and
+present), the pending count and list, reboot pending, and the time and
 result of the last check and install. The ESPHome device and `tsx-mqtt` publish a Home Assistant
 `update` entity from it ([ha.md](ha.md)).
 

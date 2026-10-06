@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build regdump (ARM, static musl) from regdump.c in an Alpine armv7 container
-# (qemu-user, same approach as rootfs/src/sendspin/build.sh). The static
+# (qemu-user, the same approach as rootfs/build-rootfs.sh). The static
 # binary runs on the stock Android shell and on mainline.
 #
 #   tools/regs/build.sh          -> tools/regs/regdump

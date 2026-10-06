@@ -157,7 +157,7 @@ tsx_mkfs_tsxdata() {
 #      journal. The caller may repair it with e2fsck -fp and ask again.
 # The label and type come from the plain blkid output. Busybox and util-linux
 # both print it as `DEV: LABEL="x" UUID="y" TYPE="z"`. Busybox ignores -s and
-# -o (see rootfs/overlay/etc/init.d/tsx-data).
+# -o (see etc/init.d/tsx-data of tsx-linux-common).
 tsx_tsxdata_keepable() {
 	local dev=$1 id label type rc
 	id=$(blkid "$dev" 2>/dev/null) || id=

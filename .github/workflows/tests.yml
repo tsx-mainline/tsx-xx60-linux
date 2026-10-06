@@ -24,8 +24,8 @@ jobs:
   # (it checks CAPTURES_DIR / PUF_FILE / SYSIMG and prints "SKIPPED ..."). No
   # such input is provided here, so those tests report skipped, not failed.
   #
-  # This job stays on x86. The tools it installs (gcc, libmpv2, busybox, cpio)
-  # all exist for arm64. But installer/tests/test-tsx-data.sh and
+  # This job stays on x86. The tools it installs (busybox, cpio, gawk,
+  # u-boot-tools) all exist for arm64. But installer/tests/test-boot-ok.sh and
   # installer/emmc/tests/test-root-fallback.sh run linux/amd64 containers,
   # and an arm64 runner has no x86 emulation.
   host-tests:
@@ -43,8 +43,8 @@ jobs:
           path: tsx-linux-common
       # gawk: test-tsx-tfa.sh checks the CRC with the awk of the host, and mawk (the
       # awk of the runner) cannot. u-boot-tools: mkimage for test-aml-dt.sh.
-      - name: install build deps (gcc for the fake-sysfs tests, libmpv for test-esphome.sh, busybox + cpio + gawk for test-tsx-tfa.sh, u-boot-tools for test-aml-dt.sh)
-        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends gcc libmpv2 busybox cpio gawk u-boot-tools
+      - name: install build deps (busybox + cpio + gawk for test-tsx-tfa.sh, u-boot-tools for test-aml-dt.sh)
+        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends busybox cpio gawk u-boot-tools
       # The panels run busybox ash. The sh of the runner is dash. It has no
       # read -t and other parts that the panel scripts use. The steps below that
       # run "sh TEST", and the tests that start sh, need the same sh as the
@@ -62,62 +62,20 @@ jobs:
           [ "$(command -v sh)" = "$RUNNER_TEMP/sh-busybox/sh" ]
       - name: kernel/tests/test-aml-dt.sh - SKIP lines for the vendor files that the public tree does not have
         run: kernel/tests/test-aml-dt.sh
-      - name: rootfs/tests/test-idled.sh
-        run: rootfs/tests/test-idled.sh
-      - name: rootfs/tests/test-idled-als.sh
-        run: rootfs/tests/test-idled-als.sh
-      - name: rootfs/tests/test-idled-runtime.sh - brightness offset, blank-timeout override, last-input
-        run: rootfs/tests/test-idled-runtime.sh
-      - name: rootfs/tests/test-idled-display.sh - display output off while blank (tsx-display-power)
-        run: rootfs/tests/test-idled-display.sh
-      - name: rootfs/tests/test-clock.sh - network time (chrony, DHCP NTP servers, boot clock floor)
-        run: sh rootfs/tests/test-clock.sh
-      - name: rootfs/tests/test-autoupdate-logic.sh
-        run: sh rootfs/tests/test-autoupdate-logic.sh
-      - name: rootfs/tests/test-autoupdate-flow.sh
-        run: sh rootfs/tests/test-autoupdate-flow.sh
-      - name: rootfs/tests/mqtt-dry.sh
-        run: sh rootfs/tests/mqtt-dry.sh
-      - name: rootfs/tests/test-buttons.sh
-        run: rootfs/tests/test-buttons.sh
-      - name: rootfs/tests/test-voice-esphome-run.sh - panel.conf PANEL_NAME override (tsx-voice-run, tsx-esphome-run)
-        run: sh rootfs/tests/test-voice-esphome-run.sh
-      - name: rootfs/tests/test-splash.sh - boot splash frames (image, status line, progress bar)
-        run: sh rootfs/tests/test-splash.sh
       - name: rootfs/tests/test-confont.sh - console font by screen size, TSX - LINUX banners
         run: sh rootfs/tests/test-confont.sh
       - name: rootfs/tests/test-rescue-screen.sh - rescue screen (idle, operation, widths, Enter for a shell)
         run: sh rootfs/tests/test-rescue-screen.sh
-      - name: rootfs/tests/test-orientation.sh - screen orientation (table, sway/touch, turned splash, overlay layout)
-        run: sh rootfs/tests/test-orientation.sh
-      - name: rootfs/tests/test-tsx-config.sh
-        run: rootfs/tests/test-tsx-config.sh
-      - name: rootfs/tests/test-tsx-config-apply.sh
-        run: rootfs/tests/test-tsx-config-apply.sh
+      - name: rootfs/tests/test-rescue-login.sh - rescue login (key, hash or one-time password, no fixed password)
+        run: sh rootfs/tests/test-rescue-login.sh
+      - name: rootfs/tests/test-rescue-backlight.sh - rescue backlight level from the board file
+        run: sh rootfs/tests/test-rescue-backlight.sh
       - name: rootfs/tests/test-tsx-setup-mac.sh - eth0 MAC selection matches the rescue system's
         run: rootfs/tests/test-tsx-setup-mac.sh
-      - name: rootfs/tests/test-panelctl.sh - reject hostile/malformed FIFO input
-        run: rootfs/tests/test-panelctl.sh
-      - name: rootfs/tests/test-setup.sh - on-panel setup page, LAN pairing, form validation, secrets never echoed
-        run: rootfs/tests/test-setup.sh
-      - name: rootfs/tests/test-esphome.sh - one Home Assistant device over the ESPHome API, plaintext and encrypted, both front ends, Bluetooth proxy
-        run: rootfs/tests/test-esphome.sh
-      - name: rootfs/tests/ledbar-host-test.sh - LED bar packets, sysfs backend, state file
-        run: sh rootfs/tests/ledbar-host-test.sh
-      - name: rootfs/tests/test-ledbard.sh - LED bar start check, restart of the STM32 and load from bootloader mode (fake console, fake package tool)
-        run: sh rootfs/tests/test-ledbard.sh
       - name: rootfs/tests/test-hw.sh - the panel parts from the government flag (/run/tsx/hw.conf)
         run: rootfs/tests/test-hw.sh
-      - name: rootfs/tests/test-board-xx60.sh - the board file of the xx60 and tsx-board
-        run: rootfs/tests/test-board-xx60.sh
       - name: rootfs/tests/test-profiles.sh - the file list of each image profile (console, kiosk, ha)
         run: sh rootfs/tests/test-profiles.sh
-      - name: rootfs/tests/test-root-login.sh - no fixed root password, first boot apply, expired state, banner
-        run: sh rootfs/tests/test-root-login.sh
-      - name: rootfs/tests/test-board-fake.sh - the shared software on a fake board file
-        run: rootfs/tests/test-board-fake.sh
-      - name: rootfs/tests/test-bt.sh - Bluetooth bring-up (PSR upload to a fake chip, tsx-bt with fake sysfs, passive scanner with a fake controller)
-        run: rootfs/tests/test-bt.sh
       - name: rootfs/tests/test-build-modules.sh - both flavors' module trees staged
         run: rootfs/tests/test-build-modules.sh
       - name: rootfs/tests/test-boot-images.sh - kernel pins and initramfs stamp of the kernel packages
@@ -130,8 +88,6 @@ jobs:
         run: tools/build/tests/test-no-pull.sh
       - name: tools/build/tests/test-send-guard.sh - remote build refuses ignored and proprietary files
         run: tools/build/tests/test-send-guard.sh
-      - name: rootfs/tests/mqtt-stop-timeout.sh - tsx-mqtt stops quickly with an unreachable broker
-        run: sh rootfs/tests/mqtt-stop-timeout.sh
       - name: rootfs/tests/test-install.sh - docker --privileged, loop device
         run: rootfs/tests/test-install.sh
       - name: installer/tests/check-android-tools.sh
@@ -158,8 +114,6 @@ jobs:
         run: installer/tests/test-tsxdata-keep.sh
       - name: installer/tests/test-boot-ok.sh - docker --privileged, loop device
         run: installer/tests/test-boot-ok.sh
-      - name: installer/tests/test-tsx-data.sh - docker --privileged, loop device
-        run: installer/tests/test-tsx-data.sh
       - name: installer/emmc/tests/test-root-fallback.sh - docker --privileged, loop device
         run: installer/emmc/tests/test-root-fallback.sh
       # The next two tests need the fw_printenv and fw_setenv of U-Boot. Ubuntu

@@ -32,8 +32,10 @@ start)
 ttyAMA0::respawn:/sbin/getty -L 115200 ttyAMA0 vt100
 ::shutdown:/sbin/openrc shutdown
 I
-	sed -e "s|^BLANK_TIMEOUT=.*|BLANK_TIMEOUT=${BLANK_TIMEOUT:-600}|" -e "s|^KIOSK_URL=.*|KIOSK_URL=\"${KIOSK_URL:-https://ha.example.org}\"|" \
-		"$HERE/rootfs/overlay/etc/kiosk.conf" > "$W/kiosk.conf"
+	# the test kiosk.conf starts from the one in the image (the tsx-kiosk package owns it)
+	debugfs -R 'cat /etc/kiosk.conf' "$W/disk.raw" 2>/dev/null \
+		| sed -e "s|^BLANK_TIMEOUT=.*|BLANK_TIMEOUT=${BLANK_TIMEOUT:-600}|" -e "s|^KIOSK_URL=.*|KIOSK_URL=\"${KIOSK_URL:-https://ha.example.org}\"|" > "$W/kiosk.conf"
+	[ -s "$W/kiosk.conf" ] || { echo "no /etc/kiosk.conf in $HERE/out/rootfs.ext4 (build the kiosk or ha profile)" >&2; exit 1; }
 	[ -n "${KIOSK_EXTRA:-}" ] && printf '%s\n' "$KIOSK_EXTRA" >> "$W/kiosk.conf"
 	debugfs -w "$W/disk.raw" -f - >/dev/null <<D
 rm /etc/inittab

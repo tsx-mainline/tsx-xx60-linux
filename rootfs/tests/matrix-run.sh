@@ -7,7 +7,8 @@
 #  - the head of kiosk.log
 #  - chrome://gpu and a benchmark (perf-bench.sh)
 #  - a grim screenshot of the dashboard and one of cards.html
-#  - the OSK check
+#  - the OSK check (tests/osk-check.sh of tsx-linux-common, found through
+#    TSX_COMMON)
 #  - after 5 minutes of running, the GPU-process crash count (chrome://gpu
 #    and the log)
 set -u
@@ -38,7 +39,7 @@ p "$LAST | grep -vE 'dbus|Gtk|squeekboard' | head -40; ps -o pid,args | grep -c 
 shot dashboard
 "$HERE/perf-bench.sh" "$CFG" "$IP" 2>&1 | tail -2 | tee -a "$L"
 python3 $HERE/../../rootfs/tests/cdp.py 9222 nav file:///tmp/tsx-perf/cards.html >/dev/null 2>&1; sleep 3; shot cards
-"$HERE/osk-check.sh" "$CFG" "$IP" >/dev/null 2>&1; tail -4 "$R/perf-$CFG-osk.txt" | tee -a "$L"
+"${TSX_COMMON:-$HERE/../../../tsx-linux-common}/tests/osk-check.sh" "$CFG" "$IP" >/dev/null 2>&1; tail -4 "$R/perf-$CFG-osk.txt" | tee -a "$L"
 el=$(( $(date +%s) - t0 )); [ $el -lt 300 ] && sleep $((300 - el))
 echo "--- after $(( $(date +%s) - t0 )) s:" | tee -a "$L"
 $CDP gpu "$R/perf-$CFG-gpu-5min.txt" >/dev/null 2>&1

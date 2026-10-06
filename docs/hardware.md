@@ -347,7 +347,7 @@ The DSP configuration survives amplifier power-down (`SBSL`, `CFE` and `AMPC` pe
 
 These are the BCSP defaults of the chip. The vendor PSR file leaves `PSKEY_UART_CONFIG_BCSP` (`&01bf`) commented out, so the default `0x0806` (parity on, even, no RTS/CTS) applies. `hciattach ... bcsp` sets this line. `btattach -P bcsp` sets no parity and does not work with this chip.
 
-The kernel has the BCSP protocol of `hci_uart` (`CONFIG_BT_HCIUART_BCSP`). It has no driver that loads the PSR and no serdev driver for a BCSP chip. The bring-up is a userspace sequence. `tsx-bt up` runs it (`rootfs/overlay/usr/local/sbin/tsx-bt`):
+The kernel has the BCSP protocol of `hci_uart` (`CONFIG_BT_HCIUART_BCSP`). It has no driver that loads the PSR and no serdev driver for a BCSP chip. The bring-up is a userspace sequence. `tsx-bt up` runs it (`usr/local/sbin/tsx-bt` of tsx-linux-common):
 
 1. It blocks and unblocks the `bt-dev` rfkill. This pulses the reset line.
 2. It uploads the PSR over BCSP with `csr_psload.py` (`/usr/local/lib/tsx/`). The script establishes the BCSP link, sends one BCCMD SETREQ for each PS key into PSRAM (store `0x0008`) in file order, and then does a warm reset. It does the job of `bccmd psload`. BlueZ 5.66 and later do not have `bccmd psload`, and Alpine does not ship it.
@@ -547,7 +547,7 @@ These programs read `hw.conf`, not the command line:
 
 If the chip does not answer on a panel with `government=0`, the failure reason names the flag.
 
-Host tests: `rootfs/tests/test-hw.sh`, and the government cases in `rootfs/tests/test-bt.sh` and `rootfs/tests/common/test-bt-csr8811.sh`, `test-tsx-config-apply.sh`, `test-esphome.sh`, `test-setup.sh` and `installer/lib/tests/test-tsx-psr.sh`.
+Host tests: `rootfs/tests/test-hw.sh`, and the government cases in `rootfs/tests/common/test-bt-csr8811.sh`, `rootfs/tests/common/test-tsx-config-apply.sh` and `installer/lib/tests/test-tsx-psr.sh`. The tests of tsx-linux-common cover the other cases (`test-bt.sh`, `test-esphome.sh`, `test-setup.sh`).
 
 ## Model differences
 

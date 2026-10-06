@@ -49,7 +49,7 @@ Read [docs/recovery.md](docs/recovery.md) when an install fails or when you want
 |---|---|
 | `docs/` | The documentation pages. |
 | `kernel/` | The pinned kernel commit for each flavor (`KERNEL_REV.lts`, `KERNEL_REV.stable`) and the boot image tool. |
-| `rootfs/` | The Alpine root file system build, the profiles, the overlay and the voice files. |
+| `rootfs/` | The image build from packages, the profiles, the board files (`overlay/`) and the rescue initramfs. |
 | `installer/` | The install and factory restore tools, the payload, the rescue system and their tests. |
 | `provision/` | Home Assistant and panel provisioning scripts. |
 | `tools/` | Bench, register, DSP, build and release tools. |

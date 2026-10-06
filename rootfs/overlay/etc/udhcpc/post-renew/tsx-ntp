@@ -1,3 +1,0 @@
-#!/bin/sh
-# NTP servers from the DHCP lease -> chrony (see the script)
-exec /usr/local/sbin/tsx-dhcp-ntp

@@ -325,16 +325,16 @@ For a turned console (fbcon `rotate` 1 or 3), `tsx-confont` swaps the width and 
 
 When the text console is on screen, `/init` writes `/sys/class/graphics/fbcon/rotate_all` (3 for portrait, 1 for portrait-flipped, 2 for landscape-flipped) and runs `tsx-confont` again. The kernel has `CONFIG_FRAMEBUFFER_CONSOLE_ROTATION`. The rotation stays after `switch_root`. The rescue system always sets it to 0, so the rescue screen is landscape.
 
-**Artwork** (`rootfs/splash/`):
+**Artwork** (`splash/` of tsx-linux-common):
 
 | File | Content |
 |---|---|
 | `tsx-linux-mark.svg` | The word mark "TSX-LINUX" in JetBrains Mono Bold (SIL OFL 1.1), two tones |
-| `tux-80.png` | The 80x80 boot logo of the kernel (`drivers/video/logo/logo_linux_clut224.ppm`). Larry Ewing drew Tux with The GIMP. GPL-2.0 like the kernel. See `rootfs/splash/ATTRIBUTION` |
+| `tux-80.png` | The 80x80 boot logo of the kernel (`drivers/video/logo/logo_linux_clut224.ppm`). Larry Ewing drew Tux with The GIMP. GPL-2.0 like the kernel. See `splash/ATTRIBUTION` of tsx-linux-common |
 
 `mksplash.sh` renders one full-screen frame for each panel size at build time, in the build container. The sizes are 1280x800 (TSW-1060, TSS-10), 1024x600 (TSW-760) and the same two upright for portrait (800x1280 and 600x1024). Tux is at 2x, nearest neighbor. The script needs `rsvg-convert`, Pillow and `font-jetbrains-mono`. It stops if fontconfig does not find the font. It also produces two Terminus console fonts for the status line. The repository holds no font and no generated file.
 
-`tsx-splash` picks the frame for the framebuffer size at run time. For another size, it centers the closest smaller frame on black. `rootfs/tests/test-splash.sh` checks the frames on the host. The rescue screen and `/etc/motd` show the name as ASCII art next to an ASCII Tux (`figlet -f smslant "TSX - LINUX"`, 63 columns with Tux).
+`tsx-splash` picks the frame for the framebuffer size at run time. For another size, it centers the closest smaller frame on black. `tests/test-splash.sh` of tsx-linux-common checks the frames on the host. The rescue screen and `/etc/motd` show the name as ASCII art next to an ASCII Tux (`figlet -f smslant "TSX - LINUX"`, 63 columns with Tux).
 
 ### U-Boot USB needs VBUS held before enumeration
 

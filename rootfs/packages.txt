@@ -80,9 +80,9 @@ alsa-utils
 avahi
 avahi-compat-libdns_sd
 # voice : Assist satellite linux-voice-assistant (ESPHome API,
-# installed by voice/install-lva.sh): python3 +
+# installed by install-lva.sh of the package tsx-ha): python3 +
 # zeroconf, numpy, protobuf, cryptography (aioesphomeapi imports. Also the
-# ESPHome API encryption, rootfs/voice/shim/tsx_panel/noise.py), tzlocal,
+# ESPHome API encryption, ha/voice/shim/tsx_panel/noise.py of tsx-linux-common), tzlocal,
 # aiohappyeyeballs, libmpv via python-mpv (TTS / media playback on ALSA)
 python3
 py3-zeroconf
@@ -97,10 +97,10 @@ mpv-libs
 libturbojpeg
 # ha-esphome : the panel as one Home Assistant device over the ESPHome
 # native API (docs/ha.md "One Home Assistant device").
-# No new packages: tsx-esphome (rootfs/voice/shim/tsx_panel/, standalone,
+# No new packages: tsx-esphome (ha/voice/shim/tsx_panel/ of tsx-linux-common, standalone,
 # used when VOICE=off) and the voice satellite's own plugin (VOICE=on) both
 # run with the "voice" packages above (installed unconditionally by
-# rootfs/voice/install-lva.sh regardless of VOICE) plus getmac and
+# install-lva.sh of the package tsx-ha regardless of VOICE) plus getmac and
 # aioesphomeapi, which install-lva.sh already vendors into /opt/lva/lib as
 # pinned wheels -- there is nothing here to add.
 # Bluetooth proxy (BT_PROXY, docs/ha.md "Bluetooth proxy"): hciattach (BCSP

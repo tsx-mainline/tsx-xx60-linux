@@ -75,11 +75,11 @@ boot() {   # boot NAME INITRD MODE(root|rescue) [DISK] [full] [DATADISK]
 					# `ssh-keygen -A` host-key generation of sshd (ENOSPC). So sshd
 					# never starts and ssh is unreachable on THIS image, whatever
 					# /data/tsx-data holds. This does not count as a tsx-data failure.
-					# tests/test-tsx-data.sh (chroot, no ssh needed) covers the move
+					# tests/test-tsx-data-chroot.sh of tsx-linux-common (chroot, no ssh needed) covers the move
 					# and bind logic of tsx-data. The test reports the problem as a
 					# finding and does not swallow it.
 					grep -ai "ssh-keygen\|sshd.*hostkeys\|ERROR: sshd" "$W/serial.log" | sed 's/^/    /'
-					echo "  note: $1: ssh unreachable (the first-boot host-key generation of sshd hits ENOSPC on this p2 with about 14 MiB free). tests/test-tsx-data.sh has the bind-mount and marker checks"
+					echo "  note: $1: ssh unreachable (the first-boot host-key generation of sshd hits ENOSPC on this p2 with about 14 MiB free). tests/test-tsx-data-chroot.sh of tsx-linux-common has the bind-mount and marker checks"
 				fi
 			fi
 		fi

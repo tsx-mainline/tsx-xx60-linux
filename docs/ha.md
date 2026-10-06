@@ -213,7 +213,7 @@ Typical entity IDs. The panel name replaces `<panel>`.
 
 **eMMC health.** `tsx-emmc-state` copies `life_time` and `pre_eol_info` of the eMMC into `/run/tsx/emmc.state`. It runs at boot (from the `tsx-config` service, before `tsx-mqtt` and `tsx-esphome`) and every hour (`/etc/periodic/hourly`). The file has the lines `life_a`, `life_b` and `eol`, as hex codes. If the eMMC standard version is below 5.0, the file does not exist and the entities do not appear. The same holds if the eMMC reports `0x00` in every field (as on the TSS-10).
 
-**Device name.** Both servers use the same ESPHome name and friendly name (`rootfs/voice/shim/tsx_panel/naming.py`):
+**Device name.** Both servers use the same ESPHome name and friendly name (`ha/voice/shim/tsx_panel/naming.py` in tsx-linux-common):
 
 - The ESPHome name is `PANEL_NAME` in lowercase, with every character other than `[a-z0-9-]` changed to `-` (`TSS-10-ABCDEF` becomes `tss-10-abcdef`). Without `PANEL_NAME` it is `tsx-<mac>`.
 - The friendly name is `PANEL_NAME` as you typed it. Otherwise it is `NAME` in `/etc/tsx/esphome.conf` or `voice.conf`, and the default is the hostname.
@@ -224,16 +224,16 @@ The plugin `tsx_lva` replaces the `lva-<mac>` name of linux-voice-assistant. A c
 
 | `VOICE` | Process | Behavior |
 |---|---|---|
-| `on` | `tsx-voice` (`linux-voice-assistant`) | One process serves the voice entities and the panel entities. The plugin `rootfs/voice/shim/tsx_lva` appends the panel entities to `ServerState.entities` at connection time. Home Assistant sees one device. |
-| `off` | `tsx-esphome` (`rootfs/voice/shim/tsx_panel/esphome_server.py`) | A standalone server on the same port. |
+| `on` | `tsx-voice` (`linux-voice-assistant`) | One process serves the voice entities and the panel entities. The plugin `ha/voice/shim/tsx_lva` appends the panel entities to `ServerState.entities` at connection time. Home Assistant sees one device. |
+| `off` | `tsx-esphome` (`ha/voice/shim/tsx_panel/esphome_server.py`) | A standalone server on the same port. |
 
 Exactly one of the two runs. `tsx-audio enable voice` stops `tsx-esphome` and starts `tsx-voice`. `tsx-audio disable voice` does the reverse. `tsx-config apply` calls both for `VOICE`. `tsx-esphome` does not start at boot while `tsx-voice` is in the default runlevel. `tsx-voice` stops `tsx-esphome` when it starts. If `tsx-voice` cannot start (no microphone or no wake word library), `tsx-esphome` serves the entities.
 
 A panel with a microphone announces the voice feature of the satellite in both modes (`voice_assistant_feature_flags` is `VOICE_ASSISTANT` with `VOICE=off`). Home Assistant makes the voice selects only when it sets up the config entry, and only if the device announces the voice feature at that time. With the same announcement in both modes, a change of `VOICE` needs no reload of the integration. See "Voice satellite".
 
-Both share one backend (`rootfs/voice/shim/tsx_panel/`) and the same state files and tools (`/run/tsx/*.state`, `tsx-ledbar`, `tsx-keypad`, `tsx-blank`, `tsx-als`, `amixer`). `tsx-mqtt` is a POSIX shell script, because it also runs in the Alpine build and rescue environment.
+Both share one backend (`ha/voice/shim/tsx_panel/`) and the same state files and tools (`/run/tsx/*.state`, `tsx-ledbar`, `tsx-keypad`, `tsx-blank`, `tsx-als`, `amixer`). `tsx-mqtt` is a POSIX shell script, because it also runs in the Alpine build and rescue environment.
 
-**Privileged helper.** Blank and wake the screen, the backlight override, `tsx-ledbar`, `tsx-keypad`, `tsx-config apply` and reboot need root. The Home Assistant layer does none of these itself. `tsx-panelctl` is the one interface to the hardware for `tsx-esphome`, `tsx-mqtt` and the voice satellite (see [rootfs.md](rootfs.md) "Profiles" and "The seam: tsx-panelctl"). The voice satellite runs as the `kiosk` user (groups `kiosk` and `audio`), not as root. The plugin, `tsx-esphome` and `tsx-mqtt` write one whitelisted command to the FIFO `/run/tsx/panelctl` (root and group `kiosk`, mode 660). The root service `tsx-panelctl` runs it. The volume comes from `tsx-panelctl get volume` and the LED bar check from `tsx-panelctl has ledbar`. The checks of the bar firmware (`has ledbar-fx`, `has ledbar-leds`) read `/run/tsx/ledbar.fw`. The root service `tsx-ledbar` writes this file, because only root can ask the bar for `CAPS`. The whitelist is in `rootfs/voice/shim/tsx_panel/backend.py` and `rootfs/overlay/usr/local/sbin/tsx-panelctl`.
+**Privileged helper.** Blank and wake the screen, the backlight override, `tsx-ledbar`, `tsx-keypad`, `tsx-config apply` and reboot need root. The Home Assistant layer does none of these itself. `tsx-panelctl` is the one interface to the hardware for `tsx-esphome`, `tsx-mqtt` and the voice satellite (see [rootfs.md](rootfs.md) "Profiles" and "The seam: tsx-panelctl"). The voice satellite runs as the `kiosk` user (groups `kiosk` and `audio`), not as root. The plugin, `tsx-esphome` and `tsx-mqtt` write one whitelisted command to the FIFO `/run/tsx/panelctl` (root and group `kiosk`, mode 660). The root service `tsx-panelctl` runs it. The volume comes from `tsx-panelctl get volume` and the LED bar check from `tsx-panelctl has ledbar`. The checks of the bar firmware (`has ledbar-fx`, `has ledbar-leds`) read `/run/tsx/ledbar.fw`. The root service `tsx-ledbar` writes this file, because only root can ask the bar for `CAPS`. The whitelist is in `ha/voice/shim/tsx_panel/backend.py` and `usr/local/sbin/tsx-panelctl`.
 
 ### LED bar light
 
@@ -383,7 +383,7 @@ Feature flags that the device announces:
 
 - `tsx-bt` (OpenRC service, root) brings the controller up and runs `tsx-btscan` (`/usr/local/lib/tsx/btscan.py` and `btgatt.py`) under `supervise-daemon`. `supervise-daemon` restarts `tsx-btscan` after 2 s if it stops. The chip-dependent steps are in one chip file.
 - `tsx-btscan` opens a raw HCI socket on `hci0` and runs an LE scan (100 ms window every 100 ms, no duplicate filter). It scans only while a client is connected. It passes each advertising report to the ESPHome server over `/run/tsx/bt-adv.sock`. It also holds the BLE links of the active proxy and runs GATT over them. The ESPHome server reaches that part over `/run/tsx/bt-gatt.sock`. Both sockets have mode 660 and group `kiosk`.
-- The ESPHome server (`rootfs/voice/shim/tsx_panel/bluetooth.py`, in both front ends) announces `bluetooth_proxy_feature_flags` and `bluetooth_mac_address`. It sends reports in `BluetoothLERawAdvertisementsResponse` messages (at most 16 advertisements, at most every 100 ms). At most 512 advertisements wait to go out. If the ESPHome event loop is slow, the oldest ones drop. One flush sends at most 8 messages.
+- The ESPHome server (`ha/voice/shim/tsx_panel/bluetooth.py`, in both front ends) announces `bluetooth_proxy_feature_flags` and `bluetooth_mac_address`. It sends reports in `BluetoothLERawAdvertisementsResponse` messages (at most 16 advertisements, at most every 100 ms). At most 512 advertisements wait to go out. If the ESPHome event loop is slow, the oldest ones drop. One flush sends at most 8 messages.
 
 The scanner uses a raw HCI socket and not BlueZ. It needs only the Python standard library, with no `bluetoothd` and no D-Bus. `hciconfig` and `btmgmt` can see the controller. The scanner runs as root, because the voice satellite (user `kiosk`) cannot open an HCI socket.
 
@@ -441,7 +441,7 @@ The camera works on the TSW-1060 and the TSS-10. The TSW-760 has the same camera
 
 ### Security
 
-The ESPHome native API exposes a Reboot button and the kiosk URL, next to the voice satellite entities. Two settings in `panel.conf` protect them. One module enforces both for both front ends (`rootfs/voice/shim/tsx_panel/security.py`, patched into the shared `APIServer` base class).
+The ESPHome native API exposes a Reboot button and the kiosk URL, next to the voice satellite entities. Two settings in `panel.conf` protect them. One module enforces both for both front ends (`ha/voice/shim/tsx_panel/security.py`, patched into the shared `APIServer` base class).
 
 | Key | Values | Default | Meaning |
 |---|---|---|---|
@@ -458,7 +458,7 @@ The `kiosk` user runs Chromium without a sandbox on this hardware. The `kiosk` g
 - It compares enum arguments with `=` and never passes them on as a CLI option.
 - A `config-url` value must start with `http://` or `https://`.
 
-It logs anything else (control characters stripped, text truncated) and drops it. `rootfs/tests/test-panelctl.sh` tests these checks with a glob, a leading-dash "option", wrong argument counts, an out-of-range number and an overlong numeric string.
+It logs anything else (control characters stripped, text truncated) and drops it. `tests/test-panelctl.sh` of tsx-linux-common tests these checks with a glob, a leading-dash "option", wrong argument counts, an out-of-range number and an overlong numeric string.
 
 ### MQTT
 
@@ -492,7 +492,7 @@ The bridge uses a last-will-and-testament availability topic. It publishes its d
 
 ### Update entity
 
-`tsx-autoupdate` (see [rootfs.md](rootfs.md) "Updates") publishes its status as a Home Assistant `update` entity on the ESPHome device and on the MQTT bridge. Both read `$TSX_RUN_DIR/update-ha-state.json` (`UpdateEntity` in `rootfs/voice/shim/tsx_panel/entities.py`), so they agree. The entity shows:
+`tsx-autoupdate` (see [rootfs.md](rootfs.md) "Updates") publishes its status as a Home Assistant `update` entity on the ESPHome device and on the MQTT bridge. Both read `$TSX_RUN_DIR/update-ha-state.json` (`UpdateEntity` in `ha/voice/shim/tsx_panel/entities.py`), so they agree. The entity shows:
 
 - the installed and the latest version
 - a release summary with the pending package list and these notes:

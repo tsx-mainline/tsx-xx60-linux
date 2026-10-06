@@ -1,5 +1,5 @@
 #!/bin/bash
-# Host test: the eth0-MAC selection in rootfs/overlay/etc/init.d/tsx-setup
+# Host test: the eth0-MAC selection in etc/init.d/tsx-setup of tsx-linux-common
 # (docs/recovery.md "Random MAC in the rescue, and the fix"). The test runs the
 # same script that the panel runs. It uses the TSX_MMCBLK0 and
 # TSX_ETH0_MAC_FILE host-test hooks (the same idea as TSX_APPLY_PREFIX of

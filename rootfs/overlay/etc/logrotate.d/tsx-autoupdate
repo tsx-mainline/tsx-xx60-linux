@@ -1,8 +1,0 @@
-/var/log/tsx-autoupdate.log {
-	size 1M
-	rotate 4
-	compress
-	missingok
-	notifempty
-	copytruncate
-}
