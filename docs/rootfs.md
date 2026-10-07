@@ -32,6 +32,12 @@ tree and compiles nothing.
    installed versions), a size report and checksums. `build-rootfs.sh all` also makes the rescue
    initramfs.
 
+The build checks the owner and the modes of the files that it owns before it makes the tarball
+(`rootfs/check-image-modes.sh`). `/etc/fstab`, `/etc/inittab`, `/etc/tsx/profile` and the whole
+tree `/lib/modules` must belong to root, and the group and others must not write them. A source
+checkout (umask 002) or a CI archive can give them 664 modes or a foreign owner. The build fixes
+`/lib/modules` and the staged files, and it stops if the check still fails.
+
 Set `PROFILE` to `console`, `kiosk` or `ha` (default `ha`). See "Profiles". The build stops if the
 kernel packages in the tree do not match the pins of `kernel/KERNEL_REV.*` and the initramfs of
 this checkout (see [kernel.md](kernel.md)).

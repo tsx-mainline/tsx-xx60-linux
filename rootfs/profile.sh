@@ -10,7 +10,9 @@
 #   profile.sh stage PROFILE ROOTFS     copy the files that profiles/image.list names
 #                                       into ROOTFS (the packages own all other files).
 #                                       A file of profiles/PROFILE/overlay wins over
-#                                       the file of the same path in overlay
+#                                       the file of the same path in overlay. The
+#                                       files get no write bit for the group or for
+#                                       others, also from a checkout with umask 002
 #
 # The profiles are console, kiosk and ha. Each one holds all the earlier ones.
 # profiles/<name>.list holds the entries that the profile adds. mkrootfs.sh and
@@ -62,6 +64,9 @@ stage)
 	[ $# = 2 ] || die "usage: stage PROFILE ROOTFS"
 	p=$1; R=$2
 	includes "$p" >/dev/null
+	# A source checkout can have group-writable files (umask 002), and a new
+	# folder takes the umask. The image files must not.
+	umask 022
 	[ -r "$PD/image.list" ] || die "no $PD/image.list"
 	mkdir -p "$R"
 	awk '/^[ \t]*(#|$)/ { next } $1 == "image" { print $2 }' "$PD/image.list" | while read -r f; do
@@ -73,6 +78,7 @@ stage)
 		else continue; fi
 		mkdir -p "$R/$(dirname "$f")"
 		cp -aL "$src" "$R/$f"
+		chmod go-w "$R/$f"
 	done
 	exit 0;;
 *) sed -n '2,16p' "$0" >&2; exit 2;;

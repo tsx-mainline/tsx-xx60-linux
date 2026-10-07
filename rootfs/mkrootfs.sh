@@ -318,10 +318,12 @@ for kv in ${KVER:-}; do
 		echo "WARNING: no modules for $kv at /modules/lib/modules/$kv"
 	fi
 done
-if [ "$copied" -gt 0 ]; then
-	chown -R 0:0 $R/lib/modules
-else
-	log "no kernel modules staged (KVER=${KVER:-unset}), the kernel packages have them"
+[ "$copied" -gt 0 ] || log "no kernel modules staged (KVER=${KVER:-unset}), the kernel packages have them"
+# The image owns the module trees, whatever the package or the CI archive had:
+# root, and no write bit for the group or for others.
+if [ -d $R/lib/modules ]; then
+	chown -hR 0:0 $R/lib/modules
+	find $R/lib/modules ! -type l -exec chmod go-w {} +
 fi
 
 # The kernel packages must carry the pinned kernels (kernel/KERNEL_REV.*) and
@@ -335,6 +337,9 @@ else
 	apk add -q --no-cache python3 >/dev/null
 	python3 "$HERE/check-boot-images.py" "$R" "$HERE/../kernel" || { echo "ERROR: the kernel packages in $TSX_APK_LOCAL do not match the kernel pins or the initramfs of this checkout"; exit 1; }
 fi
+
+# The owner and the modes of the files that this build owns.
+sh "$HERE/check-image-modes.sh" $R || { echo "ERROR: the image has files with a wrong owner or mode"; exit 1; }
 
 log "manifest and sizes"
 mkdir -p "$OUT"

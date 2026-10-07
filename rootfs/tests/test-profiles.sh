@@ -104,6 +104,18 @@ for p in kiosk ha; do
 	grep -Eq '^tty[0-9]::' "$T/img-$p/etc/inittab" && bad "$p: getty on tty1" || ok "$p: no getty on tty1 (the browser owns the screen)"
 	grep -Eq '^ttyAML0::respawn:/sbin/getty ' "$T/img-$p/etc/inittab" && ok "$p: serial getty stays" || bad "$p: no serial getty"
 done
+# a checkout with umask 002 has 664 files. The staged files and their new folders must not be writable by the group or others
+mkdir -p "$T/pd2/ha/overlay" "$T/ov2/etc/tsx"; printf 'image etc/fstab\nimage etc/tsx/profile\n' > "$T/pd2/image.list"
+echo fstab > "$T/ov2/etc/fstab"; echo ha > "$T/ov2/etc/tsx/profile"; chmod 664 "$T/ov2/etc/fstab" "$T/ov2/etc/tsx/profile"; chmod 775 "$T/ov2/etc/tsx"
+(umask 002; TSX_PROFILE_DIR=$T/pd2 TSX_OVERLAY_DIR=$T/ov2 sh "$PS" stage ha "$T/umask2" >/dev/null)
+eq "$(stat -c %a "$T/umask2/etc/fstab" "$T/umask2/etc/tsx/profile" | tr '\n' ' ')" "644 644 " "stage from a 664 checkout (umask 002): the image files are 644"
+eq "$(stat -c %a "$T/umask2/etc" "$T/umask2/etc/tsx" | tr '\n' ' ')" "755 755 " "stage with umask 002: the new folders are 755"
+# the real image files, staged by a umask 002 run (the case of a build host checkout)
+for p in console kiosk ha; do
+	(umask 002; sh "$PS" stage $p "$T/real2-$p" >/dev/null)
+	bad_modes=$(find "$T/real2-$p" -type f -perm /022 | tr '\n' ' ')
+	eq "$bad_modes" "" "stage $p with umask 002: no image file is writable by the group or others"
+done
 # a profile file wins over a file of the overlay at the same path
 mkdir -p "$T/pd/ha/overlay/etc" "$T/ov/etc"; echo overlay > "$T/ov/etc/fstab"; echo profile > "$T/pd/ha/overlay/etc/fstab"
 printf 'image etc/fstab\nimage etc/missing\n' > "$T/pd/image.list"

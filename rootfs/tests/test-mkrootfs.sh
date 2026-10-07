@@ -6,6 +6,8 @@
 #   - the image ships the swclock file and makes the tsx-setup user
 #   - the check of the kernel packages runs, and the ES2 patch of the browser
 #     package is verified
+#   - the image files and the module trees are owned by root and have no write
+#     bit for the group or others (check-image-modes.sh)
 #   - /init reads the orientation from the mounted root
 # The tools of tsx-linux-common are in tests/common.
 set -u
@@ -69,6 +71,42 @@ grep -q 'adduser -D -H -s /sbin/nologin.*tsx-setup' "$MK" && ok "mkrootfs.sh cre
 for s in tsx-setup-helper tsx-setupd; do
 	sh "$HERE/profile.sh" has kiosk svc "$s" && ok "the kiosk and ha profiles enable $s in the default runlevel" || bad "the kiosk profile does not enable $s in the default runlevel (no setup page on the panel)"
 done
+
+echo "== owner and modes of the image files =="
+CHK=$HERE/check-image-modes.sh
+busybox sh -n "$CHK" && ok "check-image-modes.sh passes busybox sh -n" || bad "check-image-modes.sh: busybox sh -n"
+grep -q 'check-image-modes.sh' "$MK" && ok "mkrootfs.sh runs the check of the owner and the modes" || bad "mkrootfs.sh does not run check-image-modes.sh"
+# the module trees get owner root and no group or other write bit in every case, not only when the build copied a tree
+grep -q 'chown -hR 0:0 \$R/lib/modules' "$MK" && grep -q "chmod go-w" "$MK" && ok "mkrootfs.sh fixes the owner and the modes of /lib/modules" || bad "mkrootfs.sh does not fix /lib/modules"
+# a made-up image tree: the files of image.list and a module tree. The owner of the test is the current user.
+ME=$(id -u); MYGRP=$(id -g)
+mk_img() {
+	rm -rf "$T/chk"; mkdir -p "$T/chk/etc/tsx" "$T/chk/lib/modules/6.18.1/kernel/x"
+	echo fstab > "$T/chk/etc/fstab"; echo inittab > "$T/chk/etc/inittab"; echo console > "$T/chk/etc/tsx/profile"
+	echo ko > "$T/chk/lib/modules/6.18.1/kernel/x/a.ko"; ln -s /nowhere "$T/chk/lib/modules/6.18.1/build"
+	chmod -R 644 "$T/chk/etc/fstab" "$T/chk/etc/inittab" "$T/chk/etc/tsx/profile" "$T/chk/lib/modules/6.18.1/kernel/x/a.ko"
+	find "$T/chk" -type d -exec chmod 755 {} +
+}
+chk() { TSX_IMAGE_UID=$ME TSX_IMAGE_GID=$MYGRP sh "$CHK" "$T/chk" 2>&1; }
+mk_img; out=$(chk); rc=$?
+[ $rc = 0 ] && ok "check-image-modes.sh: a good tree passes" || bad "good tree (rc $rc): $out"
+for f in etc/fstab etc/inittab etc/tsx/profile lib/modules lib/modules/6.18.1/kernel/x/a.ko; do
+	mk_img; chmod g+w "$T/chk/$f"; out=$(chk); rc=$?
+	[ $rc = 1 ] && echo "$out" | grep -q "/$f\$" && ok "check-image-modes.sh: /$f writable by the group is refused" || bad "/$f g+w (rc $rc): $out"
+	mk_img; chmod o+w "$T/chk/$f"; out=$(chk); rc=$?
+	[ $rc = 1 ] && echo "$out" | grep -q "/$f\$" && ok "check-image-modes.sh: /$f writable by others is refused" || bad "/$f o+w (rc $rc): $out"
+done
+mk_img; out=$(TSX_IMAGE_UID=$((ME + 1)) TSX_IMAGE_GID=$MYGRP sh "$CHK" "$T/chk" 2>&1); rc=$?
+[ $rc = 1 ] && echo "$out" | grep -q '/lib/modules$' && echo "$out" | grep -q '/etc/fstab$' && ok "check-image-modes.sh: a wrong owner is refused (/lib/modules, /etc/fstab)" || bad "wrong owner (rc $rc): $out"
+mk_img; rm -rf "$T/chk/lib"; out=$(chk); rc=$?
+[ $rc = 0 ] && ok "check-image-modes.sh: an image with no module tree passes" || bad "no lib/modules (rc $rc): $out"
+# a world-writable file elsewhere is not the business of this check (/tmp, device nodes)
+mk_img; mkdir -p "$T/chk/tmp"; chmod 1777 "$T/chk/tmp"; out=$(chk); rc=$?
+[ $rc = 0 ] && ok "check-image-modes.sh: /tmp (1777) is not checked" || bad "/tmp (rc $rc): $out"
+# the real image files, staged by a umask 002 run, pass the check
+rm -rf "$T/real"; (umask 002; sh "$HERE/profile.sh" stage console "$T/real" >/dev/null)
+out=$(TSX_IMAGE_UID=$ME TSX_IMAGE_GID=$MYGRP sh "$CHK" "$T/real" 2>&1); rc=$?
+[ $rc = 0 ] && ok "the staged image files (umask 002) pass the check" || bad "staged files (rc $rc): $out"
 
 echo "== initramfs =="
 grep -q 'tsx-orientation -f /newroot/etc/tsx/orientation info' "$HERE/initramfs/overlay/init" && ok "/init reads the orientation from the mounted root" || bad "/init does not read the orientation"
