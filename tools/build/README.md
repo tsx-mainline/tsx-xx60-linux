@@ -203,3 +203,14 @@ For a local or `BUILD_HOST` package build of a kernel that has no tag, use
 `kernel/restore-vendor-asm.sh` restores the missing `.S` files from the GPL
 drop of the vendor 3.10 kernel. You need it only to work on that tree, not on
 the mainline port.
+
+### Rebuild the images of a release (images only)
+
+A tag starts `release.yml`, which builds the images from the packages that are live at that time. The packages of the same release go live in tsx-aports later, because their recipes need the tag archives and the kernel bundles. So the payloads of a new release can have the packages of the previous release.
+
+Do not rerun the whole release run for this. The `kbundle` job would pack the kernel bundles again with new sha512 sums, and the kernel recipes in tsx-aports would no longer match them. Use the images-only run instead:
+
+1. Make sure that the tsx-aports packages of the release are live.
+2. Run `gh workflow run release.yml -f tag=<tag>`, for example `-f tag=v0.2.1`.
+
+The run checks out the tag and builds the kernels, the rootfs, the rescue image and both payloads from the packages that are live now. The `kbundle` job does not run. The run replaces only `tsx-xx60-lts-payload.tar.zst`, `tsx-xx60-stable-payload.tar.zst` and their two lines in `SHA256SUMS`. The kernel bundles and the other kernel files of the release stay as they are.

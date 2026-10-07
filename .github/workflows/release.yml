@@ -3,6 +3,18 @@ on:
   push:
     tags:
       - 'v*'
+  # Images only: build the rootfs, the rescue image and the payloads of an
+  # existing release tag again from the packages that are live now, and
+  # replace only the two payload assets and their lines in SHA256SUMS. The
+  # kbundle job does not run, so the kernel bundles (pinned by sha512 in
+  # tsx-aports) and the kernel files of the release stay as they are. Use it
+  # after the tsx-aports packages of a release went live.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'An existing release tag (for example v0.2.1)'
+        required: true
+        type: string
 
 # Nothing here downloads or bundles a Crestron file: the boot images, the
 # rootfs, the rescue image and the v2 install payload come from this repo's own
@@ -36,6 +48,8 @@ jobs:
         flavor: [lts, stable]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: cache the kernel fork checkout (${{ matrix.flavor }})
         uses: actions/cache@v4
@@ -94,6 +108,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       # The stage 2 initramfs takes the packages of rootfs/initramfs/packages.pin
       # from the published apk tree of this project.
@@ -145,6 +161,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       # The image comes from packages. The published apk tree of this project
       # (https://tsx-aports.unexceptional.net) holds them. The cache keeps the
@@ -240,6 +258,8 @@ jobs:
         flavor: [lts, stable]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/download-artifact@v4
         with:
@@ -299,6 +319,7 @@ jobs:
   # just renamed here to match what stage-kernel.sh has always called it).
   kbundle:
     needs: [kernel, payload]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -401,6 +422,8 @@ jobs:
 
   publish:
     needs: [kernel, bundle, kbundle]
+    # kbundle is skipped in the images-only run (workflow_dispatch).
+    if: ${{ !cancelled() && needs.kernel.result == 'success' && needs.bundle.result == 'success' && (needs.kbundle.result == 'success' || (github.event_name == 'workflow_dispatch' && needs.kbundle.result == 'skipped')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -409,11 +432,13 @@ jobs:
         run: mkdir -p release/out release/k-lts release/k-stable
 
       - uses: actions/download-artifact@v4
+        if: github.event_name == 'push'
         with:
           name: kernel-lts
           path: release/k-lts
 
       - uses: actions/download-artifact@v4
+        if: github.event_name == 'push'
         with:
           name: kernel-stable
           path: release/k-stable
@@ -427,16 +452,19 @@ jobs:
       # exactly this asset, pinned by tag + sha512sums) is the only consumer.
       # See the kbundle job above and tools/build/README.md.
       - uses: actions/download-artifact@v4
+        if: github.event_name == 'push'
         with:
           name: kbundle-lts
           path: release/out
 
       - uses: actions/download-artifact@v4
+        if: github.event_name == 'push'
         with:
           name: kbundle-stable
           path: release/out
 
       - name: rename the per-flavor kernel dev files into release/out
+        if: github.event_name == 'push'
         run: |
           set -eu
           for f in lts stable; do
@@ -450,6 +478,7 @@ jobs:
           ls -l release/out
 
       - name: attach the build to the GitHub release for this tag
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -458,3 +487,25 @@ jobs:
           TAG=${{ github.ref_name }}
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes
           gh release upload "$TAG" release/out/* --clobber
+
+      # Images only: the release must exist. Keep every SHA256SUMS line of
+      # the other assets, and replace the lines of the two payloads.
+      - name: replace the payloads of the release (images only)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          gh release view "$TAG" >/dev/null || { echo "no release $TAG: push the tag first"; exit 1; }
+          mkdir -p release/old
+          gh release download "$TAG" --pattern SHA256SUMS --dir release/old
+          cd release/out
+          ls tsx-xx60-lts-payload.tar.zst tsx-xx60-stable-payload.tar.zst
+          { grep -v -E '  (\./)?tsx-xx60-(lts|stable)-payload\.tar\.zst$' ../old/SHA256SUMS || true
+            sha256sum tsx-xx60-lts-payload.tar.zst tsx-xx60-stable-payload.tar.zst | sed 's|  |  ./|'
+          } | sort -k2 > SHA256SUMS.new
+          mv SHA256SUMS.new SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" tsx-xx60-lts-payload.tar.zst tsx-xx60-stable-payload.tar.zst SHA256SUMS --clobber
