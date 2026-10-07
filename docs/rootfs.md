@@ -1119,7 +1119,7 @@ upgrade through `crond` every 15 minutes.
 
 | Step | Behavior |
 |---|---|
-| Daily check | `apk update` and `apk upgrade --simulate` list the pending packages and whether any needs a reboot (a kernel, `musl`, `openrc`, `busybox` or init package). |
+| Daily check | `apk update` and `apk upgrade --simulate` list the pending packages and whether any needs a reboot (a kernel, `musl`, `openrc`, `busybox`, init or `tsx-*` package, except `tsx-keys` and `tsx-ledbar-fw`). |
 | Install | Only inside `WINDOW` and only while the screen is idle (it uses the `tsx-idled` state). A needed reboot also waits for the window. `tsx-autoupdate now` installs at once. The window and the idle state then gate only the reboot. The Home Assistant Install button runs this command. |
 | Chromium | `tsx-xx60-chromium` is a normal package with the ES2 patch built in. It provides `chromium`, so `apk upgrade` never moves to the unpatched Alpine build. A new Alpine Chromium needs a new signature in `sigs.json` and a new `tsx-xx60-chromium` (see `rootfs/src/chromium-es2/README.md`). |
 | Health check | After a reboot it checks the kiosk service and the reachability of `KIOSK_URL` and records the result. |

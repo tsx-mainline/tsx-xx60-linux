@@ -214,7 +214,10 @@ BIN=$(P usr/local/sbin/tsx-autoupdate)
 for p in tsx-xx60-kernel-lts tsx-xx60-kernel-stable; do
 	TSX_BOARD_CONF=$BOARD busybox sh "$BIN" __needs_reboot "$p"; eq $? 0 "$p needs a reboot"
 done
-TSX_BOARD_CONF=$BOARD busybox sh "$BIN" __needs_reboot "tsx-base"; eq $? 1 "tsx-base needs no reboot"
+TSX_BOARD_CONF=$BOARD busybox sh "$BIN" __needs_reboot "tsx-base"; eq $? 0 "tsx-base needs a reboot (the services keep the old code)"
+TSX_BOARD_CONF=$BOARD busybox sh "$BIN" __needs_reboot "tsx-xx60-board"; eq $? 0 "tsx-xx60-board needs a reboot"
+TSX_BOARD_CONF=$BOARD busybox sh "$BIN" __needs_reboot "tsx-keys"; eq $? 1 "tsx-keys needs no reboot"
+TSX_BOARD_CONF=$BOARD busybox sh "$BIN" __needs_reboot "tsx-other-kernel-lts"; eq $? 1 "the kernel package of another family needs no reboot"
 
 echo "== the serial console =="
 eq "$(env -i PATH="$PATH" sh -c ". '$BOARD'; . '$(P usr/local/lib/tsx/serial.sh)'; echo \"\$TSX_SERIAL_CONSOLE\"")" ttyAML0 "the board gives the serial console to serial.sh"

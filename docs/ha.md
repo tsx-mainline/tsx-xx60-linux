@@ -496,7 +496,7 @@ The bridge uses a last-will-and-testament availability topic. It publishes its d
 
 - the installed and the latest version
 - a release summary with the pending package list and these notes:
-  - "reboot pending" shows if a kernel, musl, openrc or busybox upgrade waits for the night window.
+  - "reboot pending" shows if a kernel, musl, openrc, busybox or tsx-* package upgrade waits for the night window.
   - "Chromium held since ..." shows while a newer, unsigned Chromium build is on hold.
 - whether an install is in progress
 
