@@ -13,7 +13,7 @@
 #   - the Home Assistant model, the keys and the backlight range in the ESPHome shim
 #   - tsx-bt with the CSR8811 chip file, on a panel with and without the module
 #   - the kernel package name in tsx-autoupdate
-#   - the serial console, and its line in securetty (the step of the tsx-config service)
+#   - the serial console, and its line in the securetty file of the board package
 #   - the service order that the board gives in /etc/conf.d
 #   - the helper file of the rescue system that board.sh loads
 # The test needs no panel and no compiler.
@@ -218,24 +218,27 @@ TSX_BOARD_CONF=$BOARD busybox sh "$BIN" __needs_reboot "tsx-base"; eq $? 1 "tsx-
 
 echo "== the serial console =="
 eq "$(env -i PATH="$PATH" sh -c ". '$BOARD'; . '$(P usr/local/lib/tsx/serial.sh)'; echo \"\$TSX_SERIAL_CONSOLE\"")" ttyAML0 "the board gives the serial console to serial.sh"
-# tsx-linux-common lists no board console in /etc/securetty. The start of the
-# tsx-config service adds the console of the board file (serial.sh). Run the
-# step of the service with the real board file on the securetty file of the
-# common package.
-PKG_TTY=$(P etc/securetty)
-grep -qx ttyAML0 "$PKG_TTY" && bad "the securetty of tsx-linux-common names the console of the xx60" || ok "the securetty of tsx-linux-common names no board console"
-cp "$PKG_TTY" "$T/securetty"
-env -i PATH="$PATH" TSX_BOARD_CONF="$BOARD" TSX_SECURETTY="$T/securetty" busybox sh -c ". '$BOARD'; . '$(P usr/local/lib/tsx/serial.sh)'; tsx_serial_allow_root"
-eq "$(tail -n 1 "$T/securetty")" ttyAML0 "the step adds the console of the xx60 board file to securetty (root login on the serial console)"
-env -i PATH="$PATH" TSX_BOARD_CONF="$BOARD" TSX_SECURETTY="$T/securetty" busybox sh -c ". '$BOARD'; . '$(P usr/local/lib/tsx/serial.sh)'; tsx_serial_allow_root"
-eq "$(grep -cx ttyAML0 "$T/securetty")" 1 "a second run adds no duplicate line"
-# The init script of the service runs the step. A copy with the tool paths moved and the OpenRC helpers stubbed runs start().
+# The board package ships /etc/securetty: the list of the Alpine busybox package
+# plus the serial console of the board file. No boot script edits the file (apk
+# would leave a securetty.apk-new at each upgrade). tsx-linux-common ships no
+# securetty and no script that changes it.
+SEC=$XX60/rootfs/overlay/etc/securetty
+[ -f "$SEC" ] && ok "the board has a securetty file" || bad "no rootfs/overlay/etc/securetty"
+[ -z "$(find "$COMMON" -path "$COMMON/.git" -prune -o -path "$COMMON/tests" -prune -o -name securetty -print)" ] && ok "tsx-linux-common ships no securetty" || bad "tsx-linux-common ships a securetty file"
+for c in $(env -i PATH="$PATH" sh -c ". '$BOARD'; echo \"\$TSX_SERIAL_CONSOLE\""); do
+	eq "$(grep -cx "$c" "$SEC")" 1 "securetty lists the serial console $c of the board file once"
+done
+eq "$(sort "$SEC" | uniq -d | tr '\n' ' ')" "" "securetty has no duplicate line"
+[ -z "$(tail -c 1 "$SEC")" ] && ok "securetty ends with a newline" || bad "securetty has no final newline"
+[ "$(grep -c '^ttyAMA0$' "$SEC")" = 1 ] && grep -qx console "$SEC" && grep -qx tty1 "$SEC" && ok "securetty keeps the generic Alpine names" || bad "securetty lost its generic names"
+grep -q '[[:space:]]' "$SEC" && bad "securetty has a blank or a comment" || ok "securetty has only device names, one on each line"
+# the init script of the service no longer touches it: start() leaves a securetty file as it is
 mkdir -p "$T/svc-bin"
 for tool in tsx-hw tsx-emmc-state tsx-config; do printf '#!/bin/sh\nexit 0\n' > "$T/svc-bin/$tool"; chmod 755 "$T/svc-bin/$tool"; done
-sed -e "s|/usr/local/sbin/|$T/svc-bin/|g" -e "s|/usr/local/lib/tsx/serial.sh|$(P usr/local/lib/tsx/serial.sh)|g" "$(P etc/init.d/tsx-config)" > "$T/tsx-config.init"
-cp "$PKG_TTY" "$T/securetty.init"
+sed -e "s|/usr/local/sbin/|$T/svc-bin/|g" "$(P etc/init.d/tsx-config)" > "$T/tsx-config.init"
+cp "$SEC" "$T/securetty.init"
 out=$(env -i PATH="$PATH" TSX_BOARD_CONF="$BOARD" TSX_SECURETTY="$T/securetty.init" busybox sh -c '. "$1"; checkpath() { :; }; ebegin() { :; }; eend() { :; }; ewarn() { echo "ewarn: $*"; }; start' sh "$T/tsx-config.init" 2>&1)
-[ -z "$out" ] && [ "$(tail -n 1 "$T/securetty.init")" = ttyAML0 ] && ok "start() of the tsx-config service gives ttyAML0 to securetty" || bad "tsx-config start(): '$out', $(tail -n 1 "$T/securetty.init")"
+[ -z "$out" ] && cmp -s "$SEC" "$T/securetty.init" && ok "start() of the tsx-config service leaves securetty as it is" || bad "tsx-config start(): '$out'"
 
 echo "== the service order of the board =="
 # tsx-linux-common names no service of a board. The board package gives the

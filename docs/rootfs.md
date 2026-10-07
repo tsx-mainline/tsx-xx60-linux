@@ -188,7 +188,7 @@ in exactly one list.
 | `tsx-base`, `tsx-setup`, `tsx-autoupdate`, `tsx-buttons`, `tsx-ha`, `tsx-ledbar`, `tsx-rescue-ui`, `tsx-splash` | the common software (tsx-linux-common) |
 | `tsx-idled` | `tsx-idled`, its init script, `tsx-blank`, `tsx-display-power`. Every profile runs them. |
 | `tsx-kiosk` | the kiosk session, `tsx-overlay`, the blank cursor theme `/usr/share/tsx/cursors` |
-| `tsx-xx60-board` | `board.sh`, `panel-board.conf`, `motd.board`, `tsx-hw`, `tsx-als`, `tsx-cpufreqd`, `tsx-audio`, `tsx-tfa-dsp`, `tsx-peak`, `tsx-boot-ok`, `tsx-emmc-state`, `tsx-update-boot`, `uboot-env.conf`, `asound.conf`, the `tsx-config` plugin `config.d/camera.sh` |
+| `tsx-xx60-board` | `board.sh`, `panel-board.conf`, `motd.board`, `securetty`, `tsx-hw`, `tsx-als`, `tsx-cpufreqd`, `tsx-audio`, `tsx-tfa-dsp`, `tsx-peak`, `tsx-boot-ok`, `tsx-emmc-state`, `tsx-update-boot`, `uboot-env.conf`, `asound.conf`, the `tsx-config` plugin `config.d/camera.sh` |
 | `tsx-xx60-board-kiosk` | the patched `cage`, `tsx-chromium-es2` and its patch tool, the kiosk hook `kiosk.d/es2.sh` |
 | `tsx-xx60-board-ha` | the camera plugins `esphome.d/camera.py` and `setup.d/camera.py` (see [camera.md](camera.md)) |
 
@@ -214,6 +214,10 @@ The panel boots to a text login on the screen.
   Both show the Tux and `TSX - LINUX` art, the model, the IP address, `SSH is on` and the root
   password case. `/etc/local.d/tsx-banner.start` writes them at boot. The hook
   `/etc/udhcpc/post-bound/tsx-banner` writes them again at each DHCP lease.
+- Root can log in on the serial port because `/etc/securetty` lists `ttyAML0`. The package
+  `tsx-xx60-board` ships this file (the list of the Alpine `busybox` package plus `ttyAML0`).
+  No boot script edits it. The same holds for `/etc/motd`, which no TSX package ships. A script that
+  changes the file of a package makes `apk` write a `.apk-new` file at each upgrade of that package.
 - There is no `/etc/kiosk.conf`. `tsx-idled` and `tsx-buttons` use built-in defaults: blank after
   300 s, brightness 17 by day and 8 by night, night from 22 to 7. `tsx-idled` logs
   `no /etc/kiosk.conf, using defaults` at start. This is normal. To change the blank time, run
@@ -1081,7 +1085,7 @@ path on the panel. The CI job `common-tests` checks out tsx-linux-common and run
 | `test-initscripts.sh` | The start logic of the init scripts of the board and of tsx-linux-common, `tsx-emmc-state` and the weekly `tsx-fstrim` |
 | `mqtt-dry.sh` | The five key events from `buttons-board.conf`, the Key LEDs light, the backlight range 1 to 23 and the model in `tsx-mqtt` |
 | `test-buttons-xx60.sh` | The real board layer with the template of `buttons.conf`: five keys, `tsx:keypad` and `tsx:key1` to 5, `SLIDE_STEP=0`. Each press fires the HA event and the last line. No overlay, home, reload, blank, brightness change or slide. Home Assistant sets the key LEDs and the screen-off level. The test compiles `tsx-buttons`. |
-| `test-board-xx60.sh` | The board values, the meson and lima renderer selection with the kiosk hook `es2.sh`, the browser flags of the hook, the volume entity, the Home Assistant model, `tsx-bt` with the CSR8811 chip file, the kernel package name and `ttyAML0` |
+| `test-board-xx60.sh` | The board values, the meson and lima renderer selection with the kiosk hook `es2.sh`, the browser flags of the hook, the volume entity, the Home Assistant model, `tsx-bt` with the CSR8811 chip file, the kernel package name, `ttyAML0` and the securetty file of the board |
 | `test-bt-csr8811.sh` | The CSR8811 bring-up: `csr_psload.py` against a fake BlueCore (`bt-fake-bluecore.py`), `tsx-bt` with the chip file, the PSR kinds, the failure reasons, and `state=absent` with the `REASON` text on a TSW-760-NC (from the real `tsx-hw`) |
 | `test-camera.sh` | The three camera plugins with the real files of this repository: the key `CAMERA` of `tsx-config` (`config.d/camera.sh`: values, `apply`, `camera.conf`, the restart of the ESPHome services, the warning with the `REASON` text on a TSW-760-NC from the real `tsx-hw`), the camera field of the setup page (`setup.d/camera.py`), the camera entities and the image requests (`esphome.d/camera.py`) in `tsx-esphome` and in the voice satellite, and the command line of the plugin file. The JPEG part needs numpy and libturbojpeg on the host |
 | `test-ledbar-xx60.sh` | `tsx_board_ledbar_map`: the TSW-1060-LB map for the TSW-1060, the TSW-1060-NC and the TSS-10, no map for the TSW-760. The map that the real `tsx-ledbard` sends for each model. The real `tsx-hw` writes `LEDBAR=yes` for every model, and the real `tsx-panelctl` answers `has ledbar` from it |
