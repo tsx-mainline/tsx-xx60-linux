@@ -1,10 +1,11 @@
-# Packages that the rescue initramfs takes its files from when it is built with
-# TSX_FROM_PACKAGES=1 (name=version-release). The build fetches exactly these
-# versions from the local apk tree. The stamp of the initramfs covers this
-# file, so a new version here needs new kernel packages. The initramfs needs
-# only a few files of tsx-kiosk (tsx-orientation) and tsx-xx60-board (the board
-# file, tsx-boot-ok and uboot-env.conf), not the packages themselves.
-tsx-rescue-ui=0.1.2-r0
-tsx-splash=0.1.2-r0
-tsx-xx60-board=0.1.0-r1
-tsx-kiosk=0.1.2-r0
+# Packages that the rescue initramfs takes its files from (name=version-release).
+# The build fetches exactly these versions from the local apk tree. Each version
+# must be in the published apk tree, because the release build of the kernel
+# packages uses that tree. The stamp of the initramfs covers this file, so a new
+# version here needs new kernel packages. The initramfs needs only a few files
+# of tsx-kiosk (tsx-orientation) and tsx-xx60-board (the board file,
+# tsx-boot-ok and uboot-env.conf), not the packages themselves.
+tsx-rescue-ui=0.2.0-r1
+tsx-splash=0.2.0-r1
+tsx-xx60-board=0.2.0-r1
+tsx-kiosk=0.2.0-r1

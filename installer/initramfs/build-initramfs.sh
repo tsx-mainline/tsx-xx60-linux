@@ -19,8 +19,8 @@ ALPINE=${ALPINE:-v3.24}
 [ -d "$TSX_APK_LOCAL/$ALPINE" ] || { echo "TSX_APK_LOCAL=$TSX_APK_LOCAL has no $ALPINE/ (a tsx-aports published tree)" >&2; exit 1; }
 APK_DIR=$(cd "$TSX_APK_LOCAL" && pwd)
 # mkinitramfs-switchroot.sh takes the rescue tools, the splash and the board files
-# from the packages of rootfs/initramfs/packages.pin when TSX_FROM_PACKAGES is 1.
-docker run --rm --platform linux/arm/v7 -v "$ROOTFS_DIR:/w:ro" -v "$OD:/o" -v "$APK_DIR:/aports:ro" -e TSX_APK_LOCAL=/aports -e TSX_FROM_PACKAGES=1 -e ALPINE="$ALPINE" -e TSX_DEV_RESCUE_HASH="${TSX_DEV_RESCUE_HASH:-}" alpine:3.24 sh -euc "
+# from the packages of rootfs/initramfs/packages.pin.
+docker run --rm --platform linux/arm/v7 -v "$ROOTFS_DIR:/w:ro" -v "$OD:/o" -v "$APK_DIR:/aports:ro" -e TSX_APK_LOCAL=/aports -e ALPINE="$ALPINE" -e TSX_DEV_RESCUE_HASH="${TSX_DEV_RESCUE_HASH:-}" alpine:3.24 sh -euc "
 	printf 'https://dl-cdn.alpinelinux.org/alpine/%s/main\nhttps://dl-cdn.alpinelinux.org/alpine/%s/community\n' $ALPINE $ALPINE > /etc/apk/repositories
 	apk add -q --no-cache cpio mkpasswd >/dev/null
 	/w/initramfs/mkinitramfs-switchroot.sh /o/$ON /w/authorized_keys

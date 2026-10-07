@@ -207,8 +207,8 @@ cmp -s "$HERE/installer/factory/tsx-factory-restore" "$HERE/rootfs/initramfs/ove
 MK=$HERE/rootfs/initramfs/mkinitramfs-switchroot.sh
 [ -x "$HERE/rootfs/initramfs/overlay/usr/sbin/tsx-rescue" ] && ok "tsx-rescue is in the initramfs overlay" || bad "tsx-rescue missing in the initramfs overlay"
 [ ! -e "$HERE/installer/rescue/overlay/usr/sbin/tsx-rescue" ] && ok "no second tsx-rescue in the rescue overlay" || bad "installer/rescue/overlay has its own tsx-rescue again"
-grep -q 'overlay/usr/local/sbin/tsx-boot-ok" \$R/usr/local/sbin/tsx-boot-ok' "$MK" && ok "mkinitramfs installs tsx-boot-ok from the rootfs overlay" || bad "mkinitramfs does not install tsx-boot-ok"
-grep -q 'overlay/etc/tsx/uboot-env.conf" \$R/etc/tsx/uboot-env.conf' "$MK" && ok "mkinitramfs installs uboot-env.conf from the rootfs overlay" || bad "mkinitramfs does not install uboot-env.conf"
+grep -q '"\$BOARD/usr/local/sbin/tsx-boot-ok" \$R/usr/local/sbin/tsx-boot-ok' "$MK" && ok "mkinitramfs installs tsx-boot-ok from tsx-xx60-board" || bad "mkinitramfs does not install tsx-boot-ok"
+grep -q '"\$BOARD/etc/tsx/uboot-env.conf" \$R/etc/tsx/uboot-env.conf' "$MK" && ok "mkinitramfs installs uboot-env.conf from tsx-xx60-board" || bad "mkinitramfs does not install uboot-env.conf"
 grep -q 'tsx-boot-ok\|uboot-env.conf' "$HERE/installer/rescue/mkrescue.sh" && ! grep -q '^install .*tsx-boot-ok\|^install .*uboot-env.conf' "$HERE/installer/rescue/mkrescue.sh" \
 	&& ok "mkrescue.sh checks the tools in BASE and adds no copy" || bad "mkrescue.sh copies tsx-boot-ok or uboot-env.conf, or does not check BASE"
 

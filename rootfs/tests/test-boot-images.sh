@@ -76,7 +76,7 @@ echo "# changed" >> "$W/copy3/overlay/usr/local/lib/tsx/board.sh"
 # The kernel packages in the published apk tree carry an initramfs with this stamp.
 # A changed file under rootfs/initramfs (or install.sh, tsx-disk.sh) needs new kernel
 # packages. Change this value together with the new packages.
-PUBLISHED_STAMP=f43442ff7650
+PUBLISHED_STAMP=c406788b5722
 [ "${GOODSTAMP:0:12}" = "$PUBLISHED_STAMP" ] && ok "the stamp is the stamp of the published kernel packages ($PUBLISHED_STAMP)" || bad "the stamp is ${GOODSTAMP:0:12}, the published kernel packages have $PUBLISHED_STAMP (new kernel packages needed)"
 
 echo "== 2. both images match the pins and the initramfs"

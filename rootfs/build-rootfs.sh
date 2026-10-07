@@ -149,10 +149,8 @@ initramfs() {
 	local mnt=()
 	mnt+=(-v "$(cd "$TSX_APK_LOCAL" && pwd):/aports:ro")
 	# initramfs/mkinitramfs-switchroot.sh takes the rescue tools, the splash and the
-	# board files from the packages of initramfs/packages.pin when TSX_FROM_PACKAGES
-	# is 1. The stamp of the initramfs covers that script, so the script keeps its
-	# old switch until the next release of the kernel packages.
-	docker run --rm --platform linux/arm/v7 -v "$HERE:/w" "${mnt[@]}" -e TSX_APK_LOCAL=/aports -e ALPINE="$ALPINE" -e TSX_FROM_PACKAGES=1 -e TSX_DEV_RESCUE_HASH="${TSX_DEV_RESCUE_HASH:-}" "$IMAGE" sh -c "
+	# board files from the packages of initramfs/packages.pin.
+	docker run --rm --platform linux/arm/v7 -v "$HERE:/w" "${mnt[@]}" -e TSX_APK_LOCAL=/aports -e ALPINE="$ALPINE" -e TSX_DEV_RESCUE_HASH="${TSX_DEV_RESCUE_HASH:-}" "$IMAGE" sh -c "
 		printf 'https://dl-cdn.alpinelinux.org/alpine/%s/main\nhttps://dl-cdn.alpinelinux.org/alpine/%s/community\n' $ALPINE $ALPINE > /etc/apk/repositories
 		apk add -q --no-cache cpio mkpasswd >/dev/null
 		/w/initramfs/mkinitramfs-switchroot.sh /w/out/initramfs-switchroot.cpio.gz /w/authorized_keys

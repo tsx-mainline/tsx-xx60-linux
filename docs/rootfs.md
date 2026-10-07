@@ -193,9 +193,8 @@ The initramfs uses the same packages. `mkinitramfs-switchroot.sh` fetches the ve
 `tsx-boot-ok` and `uboot-env.conf` from `tsx-xx60-board`, and `tsx-orientation` from `tsx-kiosk`.
 The initramfs stamp (`initramfs-stamp.sh`) covers `packages.pin`. Each kernel package carries an
 initramfs with this stamp. Do not change a file of `rootfs/initramfs`, `install.sh` or
-`tsx-disk.sh` without new kernel packages. `mkinitramfs-switchroot.sh` still has a branch for a
-build without packages (`TSX_FROM_PACKAGES=0`). `build-rootfs.sh` never uses it. Remove it with the
-next release of the kernel packages.
+`tsx-disk.sh` without new kernel packages. Each version in `packages.pin` must be in the published
+apk tree, because the release build of the kernel packages takes the files from that tree.
 
 ### The console profile
 

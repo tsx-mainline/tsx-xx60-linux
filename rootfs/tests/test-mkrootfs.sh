@@ -33,8 +33,13 @@ done
 grep -q CHROMIUM_ES2_PATCH "$HERE/build-rootfs.sh" && bad "the old build is still in build-rootfs.sh: CHROMIUM_ES2_PATCH" || ok "no CHROMIUM_ES2_PATCH in build-rootfs.sh"
 # a release build stages the modules of its own kernel, and the image takes a tree that no package has
 grep -q 'KVER' "$MK" && grep -q 'KVER' "$HERE/build-rootfs.sh" && ok "the build keeps the staged module trees (KVER)" || bad "KVER is gone"
-# only the initramfs build keeps the switch, because the stamp covers its script
-[ "$(grep -c 'TSX_FROM_PACKAGES=1' "$HERE/build-rootfs.sh")" = 1 ] && ok "build-rootfs.sh sets TSX_FROM_PACKAGES=1 for the initramfs only" || bad "TSX_FROM_PACKAGES in build-rootfs.sh"
+# the initramfs takes its files only from the packages of packages.pin
+for f in "$HERE/build-rootfs.sh" "$HERE/initramfs/mkinitramfs-switchroot.sh" "$HERE/../installer/initramfs/build-initramfs.sh"; do
+	grep -q TSX_FROM_PACKAGES "$f" && bad "the old switch is still in ${f#"$HERE/"}: TSX_FROM_PACKAGES" || ok "no TSX_FROM_PACKAGES in ${f#"$HERE/"}"
+done
+for w in "gcc " build-base mksplash.sh '../overlay/usr/local'; do
+	grep -q "$w" "$HERE/initramfs/mkinitramfs-switchroot.sh" && bad "the source build is still in mkinitramfs-switchroot.sh: $w" || ok "no $w in mkinitramfs-switchroot.sh"
+done
 grep -q 'check-boot-images.py' "$MK" && ok "mkrootfs.sh runs the check of the kernel packages" || bad "mkrootfs.sh does not run the check"
 grep -q 'patch-chromium.py" --check' "$MK" && ok "mkrootfs.sh verifies the ES2 patch of tsx-xx60-chromium" || bad "mkrootfs.sh does not verify the ES2 patch"
 
