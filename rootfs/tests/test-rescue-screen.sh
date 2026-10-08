@@ -15,8 +15,12 @@
 #   - the network line before rcS has set the MAC: "starting" and the MAC from
 #     the U-Boot env, never the random kernel MAC or "no address yet".
 #   - tsx-rescue and tsx-boot-ok are in the base initramfs (one source each).
-# The test runs under busybox or dash sh and needs no compiler.
+# The test needs busybox and no compiler. It runs the screen script with
+# busybox sh, as the rescue system does: the script uses read -t, which the
+# dash sh of Debian and Ubuntu does not have. Without busybox the test skips.
 set -eu
+command -v busybox >/dev/null 2>&1 || { echo "SKIPPED test-rescue-screen: no busybox on this host (the screen script needs busybox sh; on Debian or Ubuntu install the package busybox)"; exit 0; }
+SH="busybox sh"
 # The board file (rootfs/overlay/usr/local/lib/tsx/board.sh) for the scripts that read it.
 export TSX_BOARD_CONF=$(cd "$(dirname "$0")/.." && pwd)/overlay/usr/local/lib/tsx/board.sh
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
@@ -61,7 +65,7 @@ export TSX_RUN=$T/run TSX_STATUS_TTY=$T/frame.raw TSX_LIB=$T/lib.sh TSX_VERFILE=
 # render [COLS]: one frame, escape codes stripped
 render() {
 	: > "$T/frame.raw"
-	TSX_STATUS_COLS=${1:-80} sh "$T/rs.sh" once
+	TSX_STATUS_COLS=${1:-80} $SH "$T/rs.sh" once
 	sed 's/\x1b\[[0-9?;]*[A-Za-z]//g' "$T/frame.raw" > "$T/frame"
 }
 has() { grep -q -- "$1" "$T/frame"; }
@@ -176,10 +180,10 @@ clear_op
 printf '#!/bin/sh\necho "$$ shell" >> "%s/shell.calls"\nexit 0\n' "$T" > "$T/shell-stub"; chmod 755 "$T/shell-stub"
 export TSX_STATUS_SHELL=$T/shell-stub TSX_STATUS_LOOPS=2
 : > "$T/keys"; : > "$T/frame.raw"; rm -f "$T/shell.calls"
-sh "$T/rs.sh" loop
+$SH "$T/rs.sh" loop
 [ ! -e "$T/shell.calls" ] && ok "no Enter: no shell" || bad "shell started without Enter"
 echo > "$T/keys"; : > "$T/frame.raw"
-sh "$T/rs.sh" loop
+$SH "$T/rs.sh" loop
 [ "$(wc -l < "$T/shell.calls" 2>/dev/null || echo 0)" -eq 1 ] && ok "Enter: one shell" || bad "Enter: shell calls: $(cat "$T/shell.calls" 2>/dev/null)"
 sed 's/\x1b\[[0-9?;]*[A-Za-z]//g' "$T/frame.raw" > "$T/frame"
 want "Rescue shell on this console (no password)" "shell banner on the screen"
@@ -188,11 +192,11 @@ wantnot 'WARNING' "no warning while idle"
 want '^Press Enter for a rescue shell$' "the screen is drawn again after exit"
 n=$(grep -c '^\\___)=(___/   rescue$' "$T/frame"); [ "$n" -ge 2 ] && ok "frame before and after the shell" || bad "frame drawn $n times"
 running "writing eMMC root (p8)"; echo > "$T/keys"; : > "$T/frame.raw"
-sh "$T/rs.sh" loop
+$SH "$T/rs.sh" loop
 sed 's/\x1b\[[0-9?;]*[A-Za-z]//g' "$T/frame.raw" > "$T/frame"
 want '^WARNING: install is running (writing eMMC root (p8)). DO NOT power off the system\.$' "shell banner warns while an install runs"
 : > "$T/keys"; : > "$T/frame.raw"; rm -f "$T/shell.calls"
-sh "$T/rs.sh" loop && ok "loop exits with its round limit" || bad "loop"
+$SH "$T/rs.sh" loop && ok "loop exits with its round limit" || bad "loop"
 
 echo "== wiring =="
 grep -q '^tty1::respawn:/usr/sbin/tsx-rescue-status loop$' "$HERE/rootfs/initramfs/overlay/etc/inittab" && ok "inittab: the screen on tty1" || bad "inittab does not start the screen on tty1"
