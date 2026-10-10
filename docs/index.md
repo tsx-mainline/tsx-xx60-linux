@@ -12,6 +12,7 @@ Do a job:
 Look up a part. Read Recovery when an install fails or when you want stock Android back:
 
 - [Hardware](hardware.md): the board, SoC, display, touch screen, LED bar and audio parts.
+- [Compatibility](compatibility.md): the support status of each model, board revision and touch glass.
 - [Boot](boot.md): U-Boot, the boot image and the root selection.
 - [Camera](camera.md): the camera modes for Home Assistant, privacy, the defaults and the limits.
 - [Kernel](kernel.md): the kernel flavors, the patches and the build.

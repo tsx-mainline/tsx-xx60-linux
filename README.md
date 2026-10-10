@@ -13,6 +13,8 @@ The panels are Amlogic Meson8m2 boards. The image has a mainline kernel, an Alpi
 | NC models, for example TSW-760-NC | Fully supported. They have no microphone, no camera and no working Bluetooth chip. |
 | TSW-560 (5 inch) | Not supported. It has a MIPI-DSI display, not LVDS. |
 
+The support status of each board revision and touch glass is in [docs/compatibility.md](docs/compatibility.md).
+
 ## Status
 
 | Feature | Status |
