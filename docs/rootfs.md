@@ -63,7 +63,8 @@ or the *Orientation* select of the Home Assistant device. See "Orientation".
 ### Open the setup page again
 
 Run `tsx-config setup` over ssh, or press *Setup* in the quick-settings overlay. The page opens on
-the panel screen and at `http://<panel-ip>:8080/setup` for 15 minutes. See "Setup page".
+the panel screen, and the pairing code works at `http://<panel-ip>:8080/setup`, for 15 minutes. An
+administrator of Home Assistant needs no code. See "Setup page".
 
 ### Set the root login
 
@@ -838,7 +839,7 @@ reads or writes the file.
 | `tsx-config validate KEY VALUE` | Check a pair without root. It uses the same table as `set`, writes nothing and exits with 0 for a valid pair. |
 | `tsx-config apply` | Run as root at boot, or by hand after a `set`. Turns `panel.conf` into the overrides that the services read. |
 | `tsx-config sync-root` | Copy the root password hash into `panel.conf` (see "Root login") |
-| `tsx-config setup` | Open the setup page for 15 minutes |
+| `tsx-config setup` | Show the setup page on the screen, and allow the pairing code, for 15 minutes |
 
 Nothing sources `panel.conf` as shell. The parser reads the literal text after the first `=` of a
 line and removes a `"..."` or `'...'` wrapper. A value with `$(...)`, backticks or a stray quote is
@@ -956,17 +957,23 @@ The *Sensors* section of the setup page has `AUTO_BRIGHTNESS` and `ALS_SCALE`.
 ## Setup page
 
 `/etc/kiosk.conf` ships with an empty `KIOSK_URL`. A panel with an empty URL shows the local setup
-page. The same page opens at `http://<panel-ip>:8080/setup` from a laptop or phone. To open it on a
-configured panel, run `tsx-config setup` (as root, over ssh) or press *Setup* in the overlay. The
-page then opens for `TSX_SETUP_WINDOW` seconds without a change to `KIOSK_URL`. See
-[install.md](install.md) "Configure the panel after install" for the end-user text.
+page. The same page opens at `http://<panel-ip>:8080/setup` from a laptop or phone. On a configured
+panel, an administrator of Home Assistant opens it at any time with *Log in with Home Assistant*
+(the Home Assistant URL is the origin of `KIOSK_URL`, or `HA_URL`). To show the page on the screen
+of a configured panel, run `tsx-config setup` (as root, over ssh) or press *Setup* in the overlay.
+The page then opens for `TSX_SETUP_WINDOW` seconds without a change to `KIOSK_URL`, and the pairing
+code works for that time. See [install.md](install.md) "Configure the panel after install" for the
+end-user text. The login, the sessions, CSRF and the Panel section are in `docs/setup.md` of
+tsx-linux-common.
 
 ### Settings (`/etc/tsx/setup.conf`)
 
 | Key | Default | Meaning |
 |---|---|---|
 | `TSX_SETUP_PORT` | 8080 | The port |
-| `TSX_SETUP_LAN` | `on` | Allow LAN access during the window or while unconfigured |
+| `TSX_SETUP_LAN` | `on` | Allow LAN access: the login with Home Assistant, and the pairing code during the window or while unconfigured |
+| `TSX_SETUP_HA_LOGIN` | `on` | Allow *Log in with Home Assistant* |
+| `TSX_SETUP_SESSION`, `TSX_SETUP_IDLE` | 28800, 3600 | Seconds that a login session lasts, and the idle limit |
 | `TSX_SETUP_WINDOW` | 900 | Seconds that a reopened page stays open |
 
 ### Parts
@@ -974,7 +981,7 @@ page then opens for `TSX_SETUP_WINDOW` seconds without a change to `KIOSK_URL`. 
 | Part | Role |
 |---|---|
 | `tsx-setupd` (`usr/local/sbin/tsx-setupd` of tsx-linux-common) | A Python HTTP server (standard library). It runs in the default runlevel of the `kiosk` and `ha` profiles, as the unprivileged user `tsx-setup`. |
-| `tsx-setup-helper` (`.../sbin/tsx-setup-helper`) | A root daemon with its own FIFO (group `tsx-setup`) and a whitelisted line command set: `show`, `rev`, `set KEY VALUE`, `unset KEY`, `apply`, `setup`, `kiosk-restart`, `brightness-learn-reset`, `clear-setup-open` and `rootpw PASSWORD`. `rev` gives the revision of `panel.conf`: the sha256 of a salt and the file content. The salt is in `/run/tsx/setup-helper.salt` (mode 600). Each boot makes a new salt, and a restart of the helper keeps it. The helper never sends the salt. A request can start with a tag `#TAG`. The reply then starts with the same tag, and `tsx-setupd` reads only the reply with its own tag. |
+| `tsx-setup-helper` (`.../sbin/tsx-setup-helper`) | A root daemon with its own FIFO (group `tsx-setup`) and a whitelisted line command set: `show`, `rev`, `set KEY VALUE`, `unset KEY`, `apply`, `setup`, `kiosk-restart`, `brightness-learn-reset`, `clear-setup-open`, `panel-state`, `panel CMD ARGS` (the live controls, exact forms only) and `rootpw PASSWORD`. `rev` gives the revision of `panel.conf`: the sha256 of a salt and the file content. The salt is in `/run/tsx/setup-helper.salt` (mode 600). Each boot makes a new salt, and a restart of the helper keeps it. The helper never sends the salt. A request can start with a tag `#TAG`. The reply then starts with the same tag, and `tsx-setupd` reads only the reply with its own tag. |
 | `tsx-kiosk-url` (`.../bin/tsx-kiosk-url`) | Called by `kiosk-session`. It returns the setup page URL when the configured URL is empty, or when `/run/tsx/setup-open` is younger than `TSX_SETUP_WINDOW`. Otherwise it returns the configured URL. Host test: `tests/test-setup.sh` in tsx-linux-common. |
 
 - `tsx-setupd` never runs a shell built from form input. It checks each field with
@@ -992,10 +999,12 @@ page then opens for `TSX_SETUP_WINDOW` seconds without a change to `KIOSK_URL`. 
 
 | Rule | Detail |
 |---|---|
-| Who can reach it | The LAN can reach the page only while the panel is unconfigured, or during the reopened window. |
-| Pairing code | A LAN client must type a six-digit code that shows on the panel screen. The panel sends it nowhere else. A correct code pairs the browser with a session cookie, valid for the same window. The page rate-limits wrong codes from one address. |
-| Localhost | The kiosk browser never needs a code. |
-| Listening socket | Outside the window, the server listens on `127.0.0.1` only. In the window or while unconfigured, it listens on `0.0.0.0`. The handler also refuses non-loopback requests when the LAN is not allowed. |
+| Who can reach it | With a Home Assistant URL, the LAN can always reach the page, and every request needs a session. Without one, only while the panel is unconfigured or during the reopened window. |
+| Log in with Home Assistant | The browser logs in at the Home Assistant of the panel. Only an administrator gets a session. The panel revokes the tokens of Home Assistant at once and keeps none. |
+| Pairing code | A LAN client types a six-digit code that shows on the panel screen. The panel sends it nowhere else. A correct code gives a session for the same window. The page rate-limits wrong codes from one address. |
+| Sessions and CSRF | The cookie `tsxsetup` is HttpOnly and SameSite=Strict. The server keeps the list of sessions, so a logout or a revoke ends one at once. Every POST needs JSON, the same Origin and the CSRF token of the session. |
+| Localhost | The kiosk browser never needs a login. Its POST requests also carry a CSRF token. |
+| Listening socket | With no LAN login possible, the server listens on `127.0.0.1` only. Else it listens on `0.0.0.0`. The handler also refuses non-loopback requests when the LAN is not allowed. |
 | Rebind gap | A request in the short gap of a rebind (also from the kiosk) sees a connection reset. The client must retry. The same happens before `tsx-setupd` has bound its port. |
 
 ### Fields
@@ -1009,7 +1018,8 @@ The fields mirror the `panel.conf` keys. Groups: Network, Display, Access, Updat
 | Panel name | |
 | Time zone | A select built from `/usr/share/zoneinfo` |
 | Screen orientation | The kiosk turns when you save |
-| Blank timeout | Under Display |
+| Blank timeout | A live control of the Panel section (with the brightness, the screen, the volume and the LED bar) |
+| Home Assistant URL for the login (`HA_URL`) | Plugin of `tsx-ha`. Empty: the origin of `KIOSK_URL`. |
 | Light sensor | `AUTO_BRIGHTNESS` and `ALS_SCALE`, under Sensors |
 | Root password, SSH public key | |
 | Kernel flavor | Under Updates |
@@ -1028,7 +1038,7 @@ the value of `panel.conf`, also a value that changed after the page loaded.
 | Check | If `panel.conf` changed after the load (`tsx-config`, Home Assistant, another browser), the server refuses the save with HTTP 409. It changes nothing. The page tells the user to reload it. |
 | Write | The server sets or removes only the keys that the page sent. It does not write a value that `panel.conf` already has. |
 | Apply | `tsx-config apply` runs only when a key or the root password changed. |
-| Close | The helper runs `clear-setup-open` and `kiosk-restart`, also after a save with no change. The kiosk loads the configured page at once. |
+| Close | A save from the screen or a pairing session: the helper runs `clear-setup-open` and `kiosk-restart`, also after a save with no change. The kiosk loads the configured page at once. A save from a login session restarts the kiosk only when it changes `KIOSK_URL`, `HA_LOGIN_METHOD` or `HA_TOKEN`. |
 
 The revision covers the whole file, also the secrets that the page never shows. No writer of
 `panel.conf` takes a lock. So the server does not see a change in the few milliseconds between the

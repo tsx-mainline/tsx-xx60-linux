@@ -162,9 +162,9 @@ On the eMMC layout the command saves the previous image (`/data/tsxboot-emmc.pre
 
 If you skipped the configuration prompts, the panel has no `KIOSK_URL`. The kiosk then shows a **setup page** on the touchscreen with the on-screen keyboard. The page has these settings: Home Assistant URL, login method, panel name, time zone, screen orientation, voice and MQTT, and the root password and SSH key (blank when the panel has none).
 
-To use the page from a laptop or phone, open `http://<panel-ip>:8080/setup` and enter the six-digit pairing code from the panel screen. After you configure the panel, the page is not reachable from the network. See [rootfs.md](rootfs.md) "Setup page".
+To use the page from a laptop or phone, open `http://<panel-ip>:8080/setup` and enter the six-digit pairing code from the panel screen. After you configure the panel, an administrator of Home Assistant opens the page from the network at any time: click **Log in with Home Assistant** and log in at the Home Assistant of the panel. No pairing code is necessary. See [rootfs.md](rootfs.md) "Setup page".
 
-To open the page again, run `tsx-config setup` over SSH, or press **Setup** in the quick-settings overlay. The page is available (locally and from the LAN, with a fresh pairing code) for about 15 minutes. The current configuration stays.
+To open the page again, run `tsx-config setup` over SSH, or press **Setup** in the quick-settings overlay. The page shows on the screen, and the pairing code works from the LAN, for about 15 minutes. The current configuration stays.
 
 With `HA_LOGIN_METHOD=token` and a token, the kiosk logs in at first boot. With `trusted`, Home Assistant needs a trusted-network auth provider. To seed or replace a token by hand, run `kiosk-set-token`. [ha.md](ha.md) covers the rest.
 
