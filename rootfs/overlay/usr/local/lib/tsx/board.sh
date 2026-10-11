@@ -41,6 +41,9 @@
 #                          the kiosk hook kiosk.d/es2.sh sets the ES2 flags)
 #   TSX_VOLUME_CMD         a command that prints and sets the volume (none
 #                          here: the volume is the Master control of the card)
+#   TSX_VOLUME_FIXED_CMD   a command that sets the mixer to its fixed level
+#                          while the Sendspin player owns the volume (none
+#                          here: Master stays at its level, 100 % by default)
 #   TSX_RESCUE_BACKLIGHT   percent of max_brightness that the rescue system
 #                          sets at start (default 50, at most 80), so the
 #                          screen is not at the boot level, which can be full

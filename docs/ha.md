@@ -146,7 +146,9 @@ The installer offers to generate a key (default yes), keeps the existing key on 
 
 ### Play music (Music Assistant)
 
-The panel is a Sendspin network-audio receiver. Music Assistant finds it over mDNS as a media player. Configure nothing in Home Assistant. Music Assistant and its mDNS discovery must be on the same network. The Sendspin client applies the volume that you set in Music Assistant or with a `media_player` volume call, whatever the ALSA volume of the panel is.
+The panel is a Sendspin network-audio receiver. Music Assistant finds it over mDNS as a media player. Configure nothing in Home Assistant. Music Assistant and its mDNS discovery must be on the same network.
+
+The panel has one volume. While the player runs, the volume of the panel is the player volume of Music Assistant. The number "Volume" of the panel, the setup page and a `media_player` volume call show and set the same value, and so does Music Assistant. An announcement of Music Assistant plays at the announcement volume of the player. The ALSA "Master" control stays at its level (100 % by default) and nothing changes it. See [sendspin.md of tsx-linux-common](https://github.com/tsx-mainline/tsx-linux-common/blob/main/docs/sendspin.md), "Audio and volume".
 
 ### Trigger an automation from a front key
 
@@ -179,7 +181,7 @@ The ESPHome device has these entities. The exact entity IDs depend on your Home 
 | Kiosk URL | Text | Sets the dashboard URL. Also updates `panel.conf` (`KIOSK_URL`), so it survives a reboot or reinstall. |
 | Reload page | Button | Reloads the dashboard. |
 | Reboot | Button | Reboots the panel. |
-| Volume | Number, 0 to 100 % | Sets the volume. Only with the TSW1060 sound card. |
+| Volume | Number, 0 to 100 % | Sets the volume: the player volume of Music Assistant while the Sendspin player runs, else the ALSA "Master" volume. Only with the TSW1060 sound card. |
 | Each front key | Event (`press`, `long`) | Fires on a key press. The entity also lists `double`, which the panel never sends. Only with front keys. |
 | CPU temperature | Sensor | The CPU temperature. |
 | Uptime | Sensor | The time since boot. |
@@ -484,7 +486,7 @@ MQTT entities:
 | Each front key | Event and device triggers | The event entity has the types short, long and hold. The device triggers are short press and long press. |
 | Illuminance | Sensor | The lux. Only with the ambient light sensor. |
 | Auto brightness | Switch | As on the ESPHome device. Only with the ambient light sensor. |
-| Volume | Number, 0 to 100 % | The ALSA "Master" volume. Only with the sound card. |
+| Volume | Number, 0 to 100 % | The player volume of Music Assistant while the Sendspin player runs, else the ALSA "Master" volume. Only with the sound card. |
 | eMMC life used A and B, eMMC end of life | Diagnostic sensors | As on the ESPHome device. Only with `/run/tsx/emmc.state`. |
 | Update | Update entity | Status of `tsx-autoupdate`. |
 
