@@ -55,13 +55,17 @@ for f in "$I"/*; do
 done
 ok "each script passes busybox sh -n, uses openrc-run, is executable and has a description"
 # every script is in a runlevel of the ha profile (profiles/*.list), except the
-# ones that a user turns on (tsx-voice: "tsx-audio enable voice")
+# ones that a user turns on (tsx-voice: "tsx-audio enable voice") and the ones
+# that the xx60 image does not ship (tsx-panel-app: the xx60 panels use the
+# browser kiosk, docs/panel-app.md of tsx-linux-common). The folder panel-app
+# of tsx-linux-common is in TSX_PKGS, so the script is in this list, but no
+# profile installs the package.
 for f in "$I"/*; do
 	n=${f##*/}
-	case $n in tsx-voice) continue;; esac
+	case $n in tsx-voice|tsx-panel-app) continue;; esac
 	sh "$HERE/profile.sh" has ha svc "$n" || bad "$n is in no runlevel of the profile lists"
 done
-ok "each script, except tsx-voice, is in a runlevel of the ha profile"
+ok "each script, except tsx-voice and tsx-panel-app, is in a runlevel of the ha profile"
 # the services in depend() exist: in this overlay, or on the Alpine list
 alpine="localmount net udev udev-settle udev-postmount crond sshd dbus avahi-daemon seatd chronyd networking syslog bootmisc hostname root swclock modules sysctl sysinit"
 for f in "$I"/*; do
