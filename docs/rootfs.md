@@ -151,7 +151,7 @@ three.
 |---|---|---|
 | `console` | SSH, `tsx-config`, the rescue tools, `tsx-autoupdate`, audio, the front keys, the light sensor, the Bluetooth tools | A text login. A USB keyboard works. |
 | `kiosk` | The Chromium kiosk on any URL (`KIOSK_URL`), screen blanking, the on-screen keyboard, the setup page | The browser. No getty on tty1. |
-| `ha` (default) | The Home Assistant layer (`tsx-ha`): the ESPHome device, the MQTT bridge, the voice satellite, the Bluetooth proxy, Sendspin, `kiosk-set-token`, the Home Assistant fields of the setup page | The browser |
+| `ha` (default) | The Home Assistant layer (`tsx-ha`): the ESPHome device, the MQTT bridge, the voice satellite, the Bluetooth proxy, Sendspin (the package `tsx-sendspin`, a dependency of `tsx-ha`), `kiosk-set-token`, the Home Assistant fields of the setup page | The browser |
 
 `rootfs/profiles/console.list`, `kiosk.list` and `ha.list` name what each profile adds.
 `rootfs/profile.sh` reads them. One line names one thing:
@@ -795,7 +795,7 @@ states.
 
 | Part | Detail |
 |---|---|
-| Sendspin (`sendspin-cli`) | A network-audio receiver. It announces itself over mDNS and Music Assistant finds it as a media player. It applies the player software volume itself, so the volume slider works end to end. Alpine has no package, and the upstream armv7 binaries need glibc. The project package `sendspin-cli` builds it for musl armv7. Service `tsx-sendspin`, off by default. Turn it on with `tsx-audio enable sendspin` after the audio path works. |
+| Sendspin (`sendspin-cli`) | A network-audio receiver. It announces itself over mDNS and Music Assistant finds it as a media player. It applies the player software volume itself, so the volume slider works end to end. Alpine has no package, and the upstream armv7 binaries need glibc. The project package `sendspin-cli` builds it for musl armv7. Service `tsx-sendspin` of the package `tsx-sendspin`, off by default. It runs as the user `tsx-sendspin` (group `audio`). Turn it on with `tsx-audio enable sendspin` after the audio path works, or with `tsx-config set SENDSPIN on` and `tsx-config apply`. |
 | linux-voice-assistant | The Assist voice satellite. `install-lva.sh` of the package `tsx-ha` installs it under `/opt/lva` (pinned, checksummed). The image build runs it. It speaks the ESPHome native API on port 6053, so Home Assistant adds it through the ESPHome integration. |
 | Wake word | Runs on the panel with TensorFlow Lite C, built from source for musl armv7 without NEON (`tensorflow-lite-c`). The default model is microWakeWord. openWakeWord is several times heavier on this CPU and not recommended next to the browser. Push-to-talk (a front-key action) skips wake-word inference. |
 | Shim (`ha/voice/shim/` of tsx-linux-common) | Connects a local push-to-talk FIFO and the voice-state events to the satellite peripheral API, ducks the "Media" ALSA volume during a conversation, and drives the LED bar and key LEDs on wake. |
