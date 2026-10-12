@@ -180,7 +180,7 @@ The ESPHome device has these entities. The exact entity IDs depend on your Home 
 | Orientation | Select: `landscape`, `portrait`, `landscape-flipped`, `portrait-flipped` | Sets how the panel hangs ([rootfs.md](rootfs.md) "Orientation"). Stored in `panel.conf` (`ORIENTATION`). The kiosk turns at once. The boot splash turns from the next boot. |
 | Kiosk URL | Text | Sets the dashboard URL. Also updates `panel.conf` (`KIOSK_URL`), so it survives a reboot or reinstall. |
 | Reload page | Button | Reloads the dashboard. |
-| Reboot | Button | Reboots the panel. |
+| Restart | Button | Restarts the panel. |
 | Volume | Number, 0 to 100 % | Sets the volume: the player volume of Music Assistant while the Sendspin player runs, else the ALSA "Master" volume. Only with the TSW1060 sound card. |
 | Each front key | Event (`press`, `long`) | Fires on a key press. The entity also lists `double`, which the panel never sends. Only with front keys. |
 | CPU temperature | Sensor | The CPU temperature. |
@@ -193,6 +193,9 @@ The ESPHome device has these entities. The exact entity IDs depend on your Home 
 | eMMC end of life | Sensor (text), diagnostic | `normal`, `warning` or `urgent`. |
 | Verbose boot | Switch | On shows kernel and boot text on the LCD instead of the splash, from the next boot. Stored in `panel.conf` (`BOOT_VERBOSE`). |
 | Update | Update entity | Status and Install action of `tsx-autoupdate` (see "Update entity"). |
+| Restart required | Binary sensor | On while an installed update waits for a restart. |
+| Update mode | Select: `auto`, `manual` | Sets when the panel installs updates. Stored in `panel.conf` (`UPDATE_MODE`). |
+| Automatic restart | Switch | On restarts the panel right after an install that needs a restart. Stored in `panel.conf` (`UPDATE_AUTO_RESTART`). |
 | Voice entities | See "Voice satellite" | On the same device. A panel with a microphone shows the voice selects and an idle assist satellite also with voice off. |
 | Camera, Take snapshot, Last snapshot | Camera, button, timestamp sensor | The panel camera. All three with `CAMERA=snapshot`, only Camera with `CAMERA=live`, none with `off` (the default). The plugin `esphome.d/camera.py` adds them. See "Camera". |
 
@@ -210,7 +213,7 @@ Typical entity IDs. The panel name replaces `<panel>`.
 - `binary_sensor.<panel>_touched_recently`
 - `event.<panel>_key_<name>` (one for each front key, for example `event.<panel>_key_power`)
 - `sensor.<panel>_emmc_life_used_a`, `sensor.<panel>_emmc_life_used_b`, `sensor.<panel>_emmc_end_of_life`
-- `update.<panel>_update`
+- `update.<panel>_update`, `binary_sensor.<panel>_restart_required`, `select.<panel>_update_mode`, `switch.<panel>_automatic_restart`
 - `camera.<panel>_camera`, `button.<panel>_take_snapshot`, `sensor.<panel>_last_snapshot`
 
 **eMMC health.** `tsx-emmc-state` copies `life_time` and `pre_eol_info` of the eMMC into `/run/tsx/emmc.state`. It runs at boot (from the `tsx-config` service, before `tsx-mqtt` and `tsx-esphome`) and every hour (`/etc/periodic/hourly`). The file has the lines `life_a`, `life_b` and `eol`, as hex codes. If the eMMC standard version is below 5.0, the file does not exist and the entities do not appear. The same holds if the eMMC reports `0x00` in every field (as on the TSS-10).
@@ -489,6 +492,10 @@ MQTT entities:
 | Volume | Number, 0 to 100 % | The player volume of Music Assistant while the Sendspin player runs, else the ALSA "Master" volume. Only with the sound card. |
 | eMMC life used A and B, eMMC end of life | Diagnostic sensors | As on the ESPHome device. Only with `/run/tsx/emmc.state`. |
 | Update | Update entity | Status of `tsx-autoupdate`. |
+| Restart required | Binary sensor | As on the ESPHome device. |
+| Restart | Button | Restarts the panel. |
+| Update mode | Select | As on the ESPHome device. |
+| Automatic restart | Switch | As on the ESPHome device. |
 
 The bridge uses a last-will-and-testament availability topic. It publishes its discovery payloads again whenever the MQTT integration of Home Assistant restarts.
 
@@ -496,9 +503,11 @@ The bridge uses a last-will-and-testament availability topic. It publishes its d
 
 `tsx-autoupdate` (see [rootfs.md](rootfs.md) "Updates") publishes its status as a Home Assistant `update` entity on the ESPHome device and on the MQTT bridge. Both read `$TSX_RUN_DIR/update-ha-state.json` (`UpdateEntity` in `ha/voice/shim/tsx_panel/entities.py`), so they agree. The entity shows:
 
-- the installed and the latest version
+- the installed version: the release that runs, the version of `tsx-xx60-board`
+- the latest version: the release of the pending update, or `<release> + N packages` when only other packages are pending
 - a release summary with the pending package list and these notes:
-  - "reboot pending" shows if a kernel, musl, openrc, busybox or tsx-* package upgrade waits for the night window.
+  - "restart needed after install" shows if a kernel, musl, openrc, busybox or tsx-* package upgrade needs a restart.
+  - "installed, restart required" shows after an install that needs a restart, while the panel has not restarted.
   - "Chromium held since ..." shows while a newer, unsigned Chromium build is on hold.
 - whether an install is in progress
 
@@ -509,7 +518,12 @@ type: update-entity
 entity: update.example_panel_update
 ```
 
-**Install** (on the card, or `payload_install` over MQTT) runs `tsx-autoupdate now` at once, not in the night window. It uses the `update-install` command of `tsx-panelctl`, which runs `tsx-autoupdate now` in the background. The window and the idle checks still apply to the reboot. An update that needs a reboot reports "reboot pending" until the panel is in the window and idle.
+**Install** (on the card, or `payload_install` over MQTT) runs `tsx-autoupdate now` at once, in both modes, not in the night window. It uses the `update-install` command of `tsx-panelctl`, which runs `tsx-autoupdate now` in the background.
+
+- Automatic restart on: the panel restarts right after the install, also outside the night window.
+- Automatic restart off: the panel stays up. The entity keeps its entry in Settings → Updates. It shows the running release as installed and the new release as latest, with the summary "installed, restart required". The binary sensor Restart required is on. Install on that entry restarts the panel, and so does the Restart button. The state ends at the next boot.
+
+The mode `manual` (entity Update mode) installs nothing by itself. The entity shows the update, and Install starts it.
 
 ## Troubleshooting
 

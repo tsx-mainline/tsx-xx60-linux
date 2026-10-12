@@ -33,7 +33,11 @@ PATH=$T/bin:$PATH TSX_MQTT_DRY=1 TSX_MQTT_CONF=$T/mqtt.conf TSX_RUN_DIR=$T/run T
 fail=0
 chk() { grep -qF -- "$1" "$T/out" || { echo "FAIL: missing: $1"; fail=1; }; }
 n=0; grep '/config ' "$T/out" | while read -r _ _ t j; do echo "$j" | jq -e . >/dev/null || { echo "FAIL: bad JSON $t"; exit 1; }; done
-n=$(grep -c '/config ' "$T/out"); [ "$n" = 22 ] || { echo "FAIL: $n discovery configs, want 22"; fail=1; }
+n=$(grep -c '/config ' "$T/out"); [ "$n" = 26 ] || { echo "FAIL: $n discovery configs, want 26"; fail=1; }
+# the update entities: Restart required, Restart, Update mode, Automatic restart
+for e in binary_sensor/tsx-kiosk/restart_required button/tsx-kiosk/restart select/tsx-kiosk/update_mode switch/tsx-kiosk/auto_restart; do
+	chk "PUB (retained) homeassistant/$e/config {"
+done
 
 # the five keys of the xx60 front panel, top to bottom
 for k in power home lights up down; do

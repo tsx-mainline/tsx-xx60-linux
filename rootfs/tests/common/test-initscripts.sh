@@ -190,15 +190,17 @@ for c in tsx-hw tsx-emmc-state tsx-config; do printf '#!/bin/sh\necho "%s $*" >>
 sed -n '/^depend()/,/^}/p' "$I/tsx-config" | grep -q 'before .*tsx-mqtt' && ok "depend: before tsx-mqtt (it reads emmc.state at start)" || bad "tsx-config depend()"
 
 echo "== tsx-autoupdate =="
-printf '#!/bin/sh\nexit 0\n' > "$T/sbin/tsx-autoupdate"; chmod +x "$T/sbin/tsx-autoupdate"
+printf '#!/bin/sh\necho "$*" >> %s/au.log\nexit 0\n' "$T" > "$T/sbin/tsx-autoupdate"; chmod +x "$T/sbin/tsx-autoupdate"
 printf '0 4 * * * other job\n' > "$T/etc/crontabs/root"
 out=$(run_start tsx-autoupdate HEALTH_DELAY=0 CHECK_DELAY=0); rc=$?
 [ $rc = 0 ] && grep -q '# tsx-autoupdate$' "$T/etc/crontabs/root" && grep -q 'other job' "$T/etc/crontabs/root" && ok "start adds its cron line and keeps the others" || bad "cron add (rc $rc): $(cat "$T/etc/crontabs/root")"
 run_start tsx-autoupdate HEALTH_DELAY=0 CHECK_DELAY=0 >/dev/null
 [ "$(grep -c '# tsx-autoupdate$' "$T/etc/crontabs/root")" = 1 ] && ok "a second start keeps one line" || bad "duplicate cron line"
-echo 'ENABLED=0' > "$T/etc/tsx/autoupdate.conf"
+# Both modes check on the schedule: the manual mode keeps the line.
+printf 'MODE=manual\nENABLED=0\n' > "$T/etc/tsx/autoupdate.conf"
 run_start tsx-autoupdate HEALTH_DELAY=0 CHECK_DELAY=0 >/dev/null
-! grep -q '# tsx-autoupdate$' "$T/etc/crontabs/root" && ok "ENABLED=0 removes the line" || bad "ENABLED=0 left the line"
+grep -q '# tsx-autoupdate$' "$T/etc/crontabs/root" && ok "the manual mode keeps the cron line (both modes check)" || bad "the manual mode removed the line"
+grep -qx 'boot' "$T/au.log" && ok "start records the running release (tsx-autoupdate boot)" || bad "start did not run tsx-autoupdate boot: $(cat "$T/au.log" 2>/dev/null)"
 rm -f "$T/etc/tsx/autoupdate.conf"
 
 echo "== supervised services =="

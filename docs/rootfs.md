@@ -76,8 +76,10 @@ See "Root login".
 
 ### Update the panel
 
-The panel updates itself (`tsx-autoupdate`). To install at once, run `tsx-autoupdate now`. To read
-the state, run `tsx-autoupdate status`. See "Updates".
+The panel checks for updates every 15 minutes (`tsx-autoupdate`). In the mode `auto` it installs
+them inside the update window. In the mode `manual` it only shows them in Home Assistant. To install
+at once in both modes, run `tsx-autoupdate now`. To read the state, run `tsx-autoupdate status`. See
+"Updates".
 
 ## Build reference
 
@@ -1123,21 +1125,25 @@ upgrade through `crond` every 15 minutes.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `ENABLED` | 1 | Turn autoupdate on or off |
-| `WINDOW` | `03:00-05:00` | Local time window for installs and reboots |
-| `REBOOT` | `auto` | `never` disables the reboot. The status then shows "reboot pending" until you reboot. |
+| `MODE` | `auto` | `auto` installs inside `WINDOW` while the screen is idle. `manual` never installs by itself. Both modes check on the schedule. |
+| `WINDOW` | `03:00-05:00` | Local time window for an automatic install and its restart |
+| `AUTO_RESTART` | `on` | `on` restarts the panel right after an install that needs a restart. `off` keeps the panel up. Home Assistant then shows "Restart required" until the panel restarts. |
+
+The Home Assistant entities "Update mode" and "Automatic restart" and the Panel section of the setup page
+save `UPDATE_MODE` and `UPDATE_AUTO_RESTART` in `panel.conf`. These values win over the file. The
+older keys `ENABLED=0` and `REBOOT=never` still work when `MODE` and `AUTO_RESTART` are not set.
 
 | Step | Behavior |
 |---|---|
-| Daily check | `apk update` and `apk upgrade --simulate` list the pending packages and whether any needs a reboot (a kernel, `musl`, `openrc`, `busybox`, init or `tsx-*` package, except `tsx-keys` and `tsx-ledbar-fw`). |
-| Install | Only inside `WINDOW` and only while the screen is idle (it uses the `tsx-idled` state). A needed reboot also waits for the window. `tsx-autoupdate now` installs at once. The window and the idle state then gate only the reboot. The Home Assistant Install button runs this command. |
+| Check | `apk update` and `apk upgrade --simulate` list the pending packages and whether any needs a restart (a kernel, `musl`, `openrc`, `busybox`, init or `tsx-*` package, except `tsx-keys` and `tsx-ledbar-fw`). |
+| Install | In the mode `auto`: only inside `WINDOW` and only while the screen is idle (it uses the `tsx-idled` state). `tsx-autoupdate now` installs at once in both modes, and the Home Assistant Install button runs this command. With `AUTO_RESTART=on`, the panel then restarts right after the install, also outside the window. |
 | Chromium | `tsx-xx60-chromium` is a normal package with the ES2 patch built in. It provides `chromium`, so `apk upgrade` never moves to the unpatched Alpine build. A new Alpine Chromium needs a new signature in `sigs.json` and a new `tsx-xx60-chromium` (see `rootfs/src/chromium-es2/README.md`). |
-| Health check | After a reboot it checks the kiosk service and the reachability of `KIOSK_URL` and records the result. |
+| Health check | After an update restart it checks the kiosk service and the reachability of `KIOSK_URL` and records the result. |
 | Status | `tsx-autoupdate status`, or `/run/tsx/update.json`. A persistent copy is in `/var/lib/tsx/autoupdate`. |
 
-The status has: the installed version (an `apk info -v` fingerprint, plus `/etc/tsx/build-id` if
-present), the pending count and list, reboot pending, and the time and
-result of the last check and install. The ESPHome device and `tsx-mqtt` publish a Home Assistant
+The status has: the installed version (the release that runs, the version of `tsx-xx60-board`), the
+latest version, the pending count and list, "restart required", and the time and result of the last
+check and install. The ESPHome device and `tsx-mqtt` publish a Home Assistant
 `update` entity from it ([ha.md](ha.md)).
 
 ### The project apk repository
@@ -1165,7 +1171,7 @@ packages, `xx60/` for this board). `apk upgrade` updates them with the Alpine pa
   `tsx-update-boot`, with backup and readback verify) only when its flavor is the selected one
   (`KERNEL_FLAVOR`) and the image differs from the partition. `tsx-kernel-flavor lts|stable` switches
   the flavor ([install.md](install.md) "Change the kernel flavor or the boot image"). A kernel
-  update counts as "needs a reboot".
+  update counts as "needs a restart".
 - **Unreachable repository.** `apk` refuses every upgrade while a listed repository is unavailable.
   If only the project repositories are unreachable, `tsx-autoupdate` records a warning (status
   "repositories:", `repo_warning` in `update.json`, the update entity summary) and installs the Alpine
