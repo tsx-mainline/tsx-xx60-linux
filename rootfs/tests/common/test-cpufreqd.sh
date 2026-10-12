@@ -23,6 +23,10 @@ for u in sleep cat grep date head tail sed awk; do
 	printf '#!/bin/sh\necho %s >> "%s/cnt.log"\nexec "%s" "$@"\n' "$u" "$T" "$r" > "$T/cnt/$u"; chmod +x "$T/cnt/$u"
 done
 printf 'CPUFREQ_AWAKE=performance\nCPUFREQ_BLANK=powersave\n' > "$T/kiosk.conf"
+# Some busybox builds (Debian, Ubuntu) run sleep as a built-in applet and never search PATH for it,
+# so the wrapper in front of PATH cannot count it. Find out which kind this busybox is.
+: > "$T/cnt.log"; PATH=$T/cnt:$PATH sh -c 'sleep 0'; [ -s "$T/cnt.log" ] && SEES_SLEEP=1 || SEES_SLEEP=
+: > "$T/cnt.log"
 start() {  # start [PATH-prefix]: run the daemon in the background
 	PATH=${1:+$1:}$T/cnt:$PATH TSX_CPUFREQ_SYS=$T/sys TSX_IDLED_STATE=$T/state TSX_KIOSK_CONF=$T/kiosk.conf \
 	TSX_PANEL_BOARD_CONF=$T/none TSX_RUN_DIR=$T/run TSX_CPUFREQ_NAP=0.2 sh "$CPUFREQD" >> "$T/log" 2>&1 &
@@ -66,6 +70,10 @@ printf 'CPUFREQ_AWAKE=performance\nCPUFREQ_BLANK=powersave\n' > "$T/kiosk.conf";
 mkdir -p "$T/nofifo"; printf '#!/bin/sh\nexit 1\n' > "$T/nofifo/mkfifo"; chmod +x "$T/nofifo/mkfifo"
 : > "$T/cnt.log"; start "$T/nofifo"
 waitfor "powersave powersave" && ok "no FIFO: the governor still follows the state" || bad "no FIFO: $(gov)"
-sleep 0.6; grep -q '^sleep$' "$T/cnt.log" && ok "no FIFO: sleep is the wait" || bad "no FIFO: no sleep started"
+if [ -n "$SEES_SLEEP" ]; then
+	sleep 0.6; grep -q '^sleep$' "$T/cnt.log" && ok "no FIFO: sleep is the wait" || bad "no FIFO: no sleep started"
+else
+	echo "skip no FIFO: sleep is the wait (this busybox runs sleep as an applet, so the count cannot see it)"
+fi
 kill "$DPID"; wait "$DPID" 2>/dev/null || true; DPID=
 [ $fail = 0 ] && echo "PASS tsx-cpufreqd" || { echo "--- log"; cat "$T/log"; exit 1; }
