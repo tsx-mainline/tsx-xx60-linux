@@ -944,7 +944,8 @@ scaled reading.
 
 | Item | Detail |
 |---|---|
-| Settings source | `/etc/tsx/als.conf`, `/etc/kiosk.conf` and `/etc/tsx/panel-board.conf` (the last one wins). `tsx-als` rereads them and `/run/tsx/als.panel` every 5 readings and logs the values it uses. |
+| Settings source | `/etc/tsx/als.conf`, `/etc/kiosk.conf` and `/etc/tsx/panel-board.conf` (the last one wins). Every 5 readings, `tsx-als` looks whether `/run/tsx/als.panel`, `kiosk.conf` or the board file is new, gone or changed. If so, it reads the settings again and logs the values it uses. |
+| Process starts | The loop starts no process while the light is steady. It reads the files with the shell, waits with `read -t` on a FIFO that it holds open, and writes `als-level` and `als.state` only when the content changes. It writes `als-level` again every 15 s (`tsx-idled` uses the file only while it is less than 30 s old) and `als.state` every 60 s. |
 | `ALS_SCALE` | A value outside 0.01 to 1000 is logged and counts as 1.0. |
 | `auto` | `tsx-als auto on\|off` rewrites the `auto` line of `als.state` at once (so `tsx-panelctl get als-auto` and the MQTT switch change at once). A backlight ramp ends when auto turns off. A change through `panel.conf` shows after at most 5 readings. |
 | `ALS_PERIOD_S` | 0.8 s. It is never below `ALS_MIN_PERIOD_S` (0.8 s), the sensor update period. |

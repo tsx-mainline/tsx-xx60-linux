@@ -53,9 +53,18 @@
 # State for tsx-mqtt: /run/tsx/als.state ("lux N", "raw N", "report N",
 # "level N", "auto on|off"). Lux values are integers.
 #
+# Process starts: the loop starts no process while the light is steady. It
+# reads the sensor, the backlight and the state files with the shell command
+# read, and waits with read -t on a FIFO that it holds open. It writes
+# als-level and als.state only when the content changes. It also writes
+# als-level every 15 s, because tsx-idled uses the file only while it is less
+# than 30 s old, and als.state every 60 s. It reads the settings files again
+# only when one of them changed.
+#
 # Env overrides for tests: TSX_ALS_CONF, TSX_ALS_PANEL, TSX_CONFIG_BIN, TSX_KIOSK_CONF, TSX_RUN_DIR,
 # TSX_IIO_DIR, TSX_BACKLIGHT_DIR, TSX_LEARN_MOD (the path of tsx_brightness.py), TSX_IDLED_STATE, TSX_ALS_LOOPS (stop after N
-# readings), TSX_ALS_NOW (fixed epoch seconds per reading: start value).
+# readings), TSX_ALS_NOW (fixed epoch seconds per reading: start value), TSX_ALS_NAP
+# (a command that runs with the wait in microseconds, in place of the wait).
 set -u
 CONF=${TSX_ALS_CONF:-/etc/tsx/als.conf}
 KCONF=${TSX_KIOSK_CONF:-/etc/kiosk.conf}
@@ -142,29 +151,60 @@ scale_dlux() { echo $(( ($1 * SCALE_MILLI + 500) / 1000 )); }
 find_dev() {
 	if [ "$ALS_DEVICE" != auto ]; then echo "$ALS_DEVICE"; return; fi
 	for d in "$IIO"/iio:device*; do
-		[ -r "$d/name" ] && [ "$(cat "$d/name")" = max44009 ] && { echo "$d"; return; }
+		fd_n=
+		[ -r "$d/name" ] && { read -r fd_n < "$d/name"; } 2>/dev/null
+		[ "$fd_n" = max44009 ] && { echo "$d"; return; }
 	done
 }
 
-# "12.345000" -> 123 (deci-lux, integer)
+# read_dlux DEV: "12.345000" -> DLUX=123 (deci-lux, integer). It starts no
+# process. It fails when the sensor gives no number.
+DLUX=
 read_dlux() {
-	v=$(cat "$1/in_illuminance_input" 2>/dev/null) || return 1
-	case $v in ''|*[!0-9.]*) return 1;; esac
-	i=${v%%.*}; f=0
-	case $v in *.*) f=${v#*.}; f=${f%"${f#?}"}; [ -n "$f" ] || f=0;; esac
-	echo $(( ${i:-0} * 10 + f ))
+	rd_v=
+	{ read -r rd_v < "$1/in_illuminance_input"; } 2>/dev/null
+	case $rd_v in ''|*[!0-9.]*) return 1;; esac
+	rd_i=${rd_v%%.*}; rd_f=0
+	case $rd_v in *.*) rd_f=${rd_v#*.}; rd_f=${rd_f%"${rd_f#?}"}; [ -n "$rd_f" ] || rd_f=0;; esac
+	DLUX=$(( ${rd_i:-0} * 10 + rd_f ))
+}
+
+# nap MS: wait MS milliseconds without a process. The daemon holds a FIFO open
+# for reading and writing (file descriptor 9), and read -t on it times out.
+# Without the FIFO, usleep waits. TSX_ALS_NAP replaces the wait in tests.
+NAP_OK= napped=0
+nap_init() {
+	[ -z "${TSX_ALS_NAP:-}" ] || return 0
+	ni_f=$R/.als-nap.$$
+	if mkfifo "$ni_f" 2>/dev/null && exec 9<>"$ni_f"; then NAP_OK=1; fi
+	rm -f "$ni_f"
+}
+nap() {
+	napped=$(( napped + $1 ))
+	if [ -n "${TSX_ALS_NAP:-}" ]; then "$TSX_ALS_NAP" $(( $1 * 1000 )); return; fi
+	if [ -n "$NAP_OK" ]; then
+		nap_f=$(( $1 % 1000 + 1000 ))
+		read -r -t "$(( $1 / 1000 )).${nap_f#1}" nap_x <&9
+		return 0
+	fi
+	usleep $(( $1 * 1000 ))
 }
 
 # The learned curve (als-curve of the learning daemon), or empty
-USE_CURVE= curve_changed=
+# The check with grep runs only when the file has new content.
+USE_CURVE= curve_changed= curve_raw=
 load_curve() {
 	c=
 	[ -r "$R/als-curve" ] && read -r c < "$R/als-curve"
+	[ "$c" != "$curve_raw" ] || return 0
+	curve_raw=$c
 	if [ -n "$c" ] && ! printf '%s' "$c" | grep -Eq '^[0-9]+:[0-9]+( [0-9]+:[0-9]+)*$'; then c=; fi
 	if [ "$c" != "$USE_CURVE" ]; then USE_CURVE=$c; curve_changed=1; fi
 }
 
-# deci-lux -> step (piecewise linear on the learned curve, else ALS_CURVE)
+# deci-lux -> step (piecewise linear on the learned curve, else ALS_CURVE).
+# The step is in CURVE_OUT.
+CURVE_OUT=
 curve_level() {
 	x=$1; pl=; ps=; out=
 	for p in ${USE_CURVE:-$ALS_CURVE}; do
@@ -177,12 +217,12 @@ curve_level() {
 		pl=$l; ps=$s
 	done
 	[ -n "$out" ] || out=${ps:-1}
-	echo "$out"
+	CURVE_OUT=$out
 }
 
 auto_on() {
 	a=${PANEL_AUTO:-$ALS_AUTO}
-	[ -r "$R/als-auto" ] && a=$(cat "$R/als-auto")
+	if [ -r "$R/als-auto" ]; then a=; read -r a < "$R/als-auto"; fi
 	case $a in 1|on|ON|yes) return 0;; esac
 	return 1
 }
@@ -240,18 +280,46 @@ auto)
 	echo "auto ${2}"; exit 0;;
 lux)
 	d=$(find_dev); [ -n "$d" ] || { echo "no max44009 in $IIO" >&2; exit 1; }
-	v=$(read_dlux "$d") || exit 1
-	load_panel; load_scale; v=$(scale_dlux "$v")
+	read_dlux "$d" || exit 1
+	load_panel; load_scale; v=$(scale_dlux "$DLUX")
 	echo "$((v / 10)).$((v % 10))"; exit 0;;
 '') ;;
 *)  echo "usage: tsx-als [status | auto on|off | lux]"; exit 2;;
 esac
 
+# conf_changed: true when the panel file, kiosk.conf or the board file is new
+# or gone since the last call, or has a modification time that is not older
+# than the stamp file (a change in the same second as the stamp counts). It
+# makes the stamp again. The shell tests the files, so a check starts no
+# process. (A read of kiosk.conf with the shell command read costs two system
+# calls for each byte.) If the stamp cannot be made, every call says yes.
+conf_stamp=$R/.als-conf-stamp conf_ex=
+conf_changed() {
+	cc_n= cc_e=
+	for cc_f in "$PANEL" "$KCONF" "$BOARD"; do
+		if [ -e "$cc_f" ]; then
+			cc_e="${cc_e}1"
+			[ "$conf_stamp" -nt "$cc_f" ] || cc_n=1
+		else
+			cc_e="${cc_e}0"
+		fi
+	done
+	[ "$cc_e" = "$conf_ex" ] || cc_n=1
+	[ -n "$cc_n" ] || return 1
+	conf_ex=$cc_e
+	echo 1 > "$conf_stamp" 2>/dev/null || conf_ex=
+	return 0
+}
+
 # ---- daemon ------------------------------------------------------------------
 mkdir -p "$R"
+conf_changed || :
 load_panel; load_scale; load_timing; timing_log
 seen_auto=$PANEL_AUTO
 dev= dl= hist= cur=0 last_dl=-1 last_change=0 last_dir=0 rep=-1 rep_t=0 n=0 warned=
+bd= lvl_w= lvl_t=0 st_w= st_t=0
+nl='
+'
 now_cs=0
 [ -z "${TSX_ALS_NOW:-}" ] || now_cs=$(( TSX_ALS_NOW * 100 ))
 LEARN_PID=
@@ -259,30 +327,37 @@ if [ -z "${TSX_ALS_LOOPS:-}" ] && command -v python3 >/dev/null 2>&1 && [ -r "$L
 	python3 "$LEARN_MOD" als-daemon &
 	LEARN_PID=$!
 fi
-trap 'rm -f "$R/als-level"; [ -n "$LEARN_PID" ] && kill "$LEARN_PID" 2>/dev/null; exit 0' INT TERM
+nap_init
+trap 'rm -f "$R/als-level" "$conf_stamp"; [ -n "$LEARN_PID" ] && kill "$LEARN_PID" 2>/dev/null; exit 0' INT TERM
 
 while :; do
 	if [ -n "${TSX_ALS_LOOPS:-}" ] && [ "$n" -ge "$TSX_ALS_LOOPS" ]; then break; fi
 	n=$((n + 1))
+	# The clock: the shell command read takes two system calls for each byte,
+	# and /proc/uptime costs 7 ms (about as much as the rest of the loop). So
+	# the loop adds its waits to the clock and reads /proc/uptime every 15th loop.
 	if [ -n "${TSX_ALS_NOW:-}" ]; then now_cs=$(( now_cs + PER_MS / 10 ))
-	else read -r up _ < /proc/uptime; f=${up#*.}; now_cs=$(( ${up%.*} * 100 + ${f#0} )); fi
+	elif [ $(( n % 15 )) -ne 1 ]; then now_cs=$(( now_cs + napped / 10 + 1 )); napped=0
+	else read -r up _ < /proc/uptime; f=${up#*.}; now_cs=$(( ${up%.*} * 100 + ${f#0} )); napped=0; fi
 	now=$(( now_cs / 100 ))
 	[ -n "$dev" ] && [ -r "$dev/in_illuminance_input" ] || dev=$(find_dev)
 	if [ -z "$dev" ]; then
 		[ -n "$warned" ] || { log "no max44009 IIO device yet (CONFIG_MAX44009, DT node light-sensor@4a). Waiting"; warned=1; }
-		rm -f "$R/als-level"; sleep 10; continue
+		[ ! -e "$R/als-level" ] || rm -f "$R/als-level"
+		lvl_w=; nap 10000; continue
 	fi
-	if [ $(( n % 5 )) -eq 1 ] && [ "$n" -gt 1 ]; then
+	if [ $(( n % 5 )) -eq 1 ] && [ "$n" -gt 1 ] && conf_changed; then
 		load_panel; load_scale; load_timing; timing_log
 		# AUTO_BRIGHTNESS changed in panel.conf (the setup page): act as "auto on|off"
 		if [ "$PANEL_AUTO" != "$seen_auto" ]; then
 			seen_auto=$PANEL_AUTO
 			case $PANEL_AUTO in 1) w=on;; 0) w=off;; *) w=;; esac
-			cur_a=; [ -r "$R/als-auto" ] && cur_a=$(cat "$R/als-auto")
+			cur_a=; [ -r "$R/als-auto" ] && read -r cur_a < "$R/als-auto"
 			if [ -n "$w" ] && [ "$cur_a" != "$w" ]; then log "panel.conf: AUTO_BRIGHTNESS $w"; do_auto "$w"; fi
 		fi
 	fi
-	raw=$(read_dlux "$dev") || { usleep $(( PER_MS * 1000 )); continue; }
+	read_dlux "$dev" || { nap "$PER_MS"; continue; }
+	raw=$DLUX
 	# Right after a cold boot, the MAX44009 can read 0 lx for several seconds
 	# before its first conversion. If the script took that value at face
 	# value, it dimmed the boot splash to the darkest step and back up 10-20 s
@@ -290,16 +365,18 @@ while :; do
 	# readings). There is no als-level yet, so tsx-idled keeps the level on
 	# the glass (boot hold).
 	if [ "$raw" -le 0 ] && [ "$cur" -eq 0 ] && [ "$n" -le "$ALS_START_WAIT" ]; then
-		usleep $(( PER_MS * 1000 ))
+		nap "$PER_MS"
 		continue
 	fi
 	[ -n "$warned" ] && { log "sensor $dev: $((raw / 10)) lx"; warned=; }
 
 	# Compensate for the own backlight
-	bd=$(bl_dir); bl=0
-	[ -n "$bd" ] && bl=$(cat "$bd/brightness" 2>/dev/null || echo 0)
+	if [ -z "$bd" ] || [ ! -w "$bd/brightness" ]; then bd=$(bl_dir); fi
+	bl=0
+	[ -z "$bd" ] || { read -r bl < "$bd/brightness"; } 2>/dev/null
+	case $bl in ''|*[!0-9]*) bl=0;; esac
 	amb=$(( raw - ALS_BL_COMP * bl )); [ "$amb" -ge 0 ] || amb=0
-	amb=$(scale_dlux "$amb")
+	amb=$(( (amb * SCALE_MILLI + 500) / 1000 ))
 
 	# Hold the value: keep the readings of the longer time, and look at the
 	# lowest of the brighten time and the highest of the darken time
@@ -322,7 +399,7 @@ while :; do
 
 	# Pick the level. A new learned curve or the first level: no checks
 	load_curve
-	want=$(curve_level "$dl")
+	curve_level "$dl"; want=$CURVE_OUT
 	if [ "$ALS_NIGHT_CAP" -gt 0 ] && is_night && [ "$want" -gt "$ALS_NIGHT_CAP" ]; then want=$ALS_NIGHT_CAP; fi
 	[ "$want" -le "$BACKLIGHT_MAX" ] || want=$BACKLIGHT_MAX
 	[ "$want" -ge "$BACKLIGHT_MIN" ] || want=$BACKLIGHT_MIN
@@ -349,7 +426,12 @@ while :; do
 
 	# Hand over to tsx-idled. Ramp the backlight while it is lit and not overridden.
 	if auto_on; then
-		echo "$cur" > "$R/als-level.tmp" && mv -f "$R/als-level.tmp" "$R/als-level"
+		# only a new level, or the refresh, or no file: tsx-idled needs the file
+		# to be less than 30 s old
+		if [ "$cur" != "$lvl_w" ] || [ $(( now - lvl_t )) -ge 15 ] || [ ! -e "$R/als-level" ]; then
+			echo "$cur" > "$R/als-level.tmp" && mv -f "$R/als-level.tmp" "$R/als-level"
+			lvl_w=$cur lvl_t=$now
+		fi
 		st=; [ -r "$IDLED" ] && read -r st _ < "$IDLED"
 		# The local manual offset, as tsx-idled adds it (clamped 1..BACKLIGHT_MAX)
 		off=0; [ -r "$R/brightness-offset" ] && read -r off _ < "$R/brightness-offset"
@@ -362,7 +444,7 @@ while :; do
 					if [ "$b" -lt "$tgt" ]; then b=$((b + 1)); else b=$((b - 1)); fi
 					echo "$b" > "$bd/brightness" 2>/dev/null || break
 					auto_on || break   # "auto off" came in: stop the ramp
-					[ "$b" -ne "$tgt" ] && usleep $(( ALS_RAMP_MS * 1000 ))
+					[ "$b" -ne "$tgt" ] && nap "$ALS_RAMP_MS"
 				done
 			else
 				echo "$tgt" > "$bd/brightness" 2>/dev/null
@@ -370,7 +452,8 @@ while :; do
 		fi
 		a=on
 	else
-		rm -f "$R/als-level"; a=off
+		[ ! -e "$R/als-level" ] || rm -f "$R/als-level"
+		lvl_w=; a=off
 	fi
 
 	# Report a value for MQTT, with a deadband
@@ -383,8 +466,12 @@ while :; do
 	fi
 	# "auto on|off" may have come in during the ramp: report the state now
 	if auto_on; then a=on; else a=off; fi
-	printf 'lux %s\nraw %s\nreport %s\nlevel %s\nauto %s\n' "$lx" "$(( (raw + 5) / 10 ))" "$rep" "$cur" "$a" > "$R/als.state.tmp" \
-		&& mv -f "$R/als.state.tmp" "$R/als.state"
+	# the state file: only new content, or every 30 s, or no file
+	st_n="lux $lx${nl}raw $(( (raw + 5) / 10 ))${nl}report $rep${nl}level $cur${nl}auto $a"
+	if [ "$st_n" != "$st_w" ] || [ $(( now - st_t )) -ge 60 ] || [ ! -e "$R/als.state" ]; then
+		printf '%s\n' "$st_n" > "$R/als.state.tmp" && mv -f "$R/als.state.tmp" "$R/als.state"
+		st_w=$st_n st_t=$now
+	fi
 
-	usleep $(( PER_MS * 1000 ))
+	nap "$PER_MS"
 done

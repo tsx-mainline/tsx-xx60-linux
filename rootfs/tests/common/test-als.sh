@@ -27,7 +27,7 @@ lux() { echo "$1" > "$T/iio/iio:device0/in_illuminance_input"; }
 run() {  # run LOOPS [extra conf lines]
 	printf 'AUTO_BRIGHTEN_S=0\nAUTO_DARKEN_S=0\nALS_RAMP_MS=10\nALS_START_WAIT=0\n%s\n' "${2:-}" > "$T/als.conf"
 	PATH=$T/bin:$PATH TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_RUN_DIR=$T/run \
-	TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_LOOPS=$1 TSX_ALS_NOW=1000 \
+	TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_LOOPS=$1 TSX_ALS_NOW=1000 TSX_ALS_NAP=usleep \
 		sh "$ALS" >> "$T/log" 2>&1
 }
 st() { sed -n "s/^$1 //p" "$T/run/als.state"; }
@@ -66,7 +66,7 @@ seqrun() {
 	echo 17 > "$T/bl/mp3309c/brightness"
 	SEQ=$SEQ SEQN=$SEQN LV=$LV RUNDIR=$T/run IIODEV=$T/iio/iio:device0/in_illuminance_input PATH=$T/bin2:$T/bin:$PATH \
 		TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_RUN_DIR=$T/run TSX_PANEL_BOARD_CONF=${TSX_PANEL_BOARD_CONF:-$T/none} \
-		TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_LOOPS=$1 TSX_ALS_NOW=1000 sh "$ALS" >> "$T/log" 2>&1
+		TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_LOOPS=$1 TSX_ALS_NOW=1000 TSX_ALS_NAP=usleep sh "$ALS" >> "$T/log" 2>&1
 }
 printf '300.0\n340.0\n340.0\n450.0\n450.0\n' > "$SEQ"
 ZERO='AUTO_BRIGHTEN_S=0
@@ -168,7 +168,7 @@ rm -f "$T/run/"*; echo 17 > "$T/bl/mp3309c/brightness"; lux 20.0; run 1 "ALS_BL_
 rm -f "$T/run/"*; lux 3000.0
 printf 'NIGHT_START=0\nNIGHT_END=0\nBACKLIGHT_MAX=23\n' > "$T/k0"; printf 'NIGHT_START=%s\nNIGHT_END=%s\n' "$(date +%H | sed 's/^0//')" $(( ($(date +%H | sed 's/^0//') + 1) % 24 )) > "$T/k1"
 printf 'AUTO_BRIGHTEN_S=0\nAUTO_DARKEN_S=0\nALS_NIGHT_CAP=8\n' > "$T/als.conf"
-TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$T/k1 TSX_RUN_DIR=$T/run TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_LOOPS=1 PATH=$T/bin:$PATH sh "$ALS" >>"$T/log" 2>&1
+TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$T/k1 TSX_RUN_DIR=$T/run TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_LOOPS=1 TSX_ALS_NAP=usleep PATH=$T/bin:$PATH sh "$ALS" >>"$T/log" 2>&1
 [ "$(cat "$T/run/als-level")" = 8 ] && ok "night cap 8" || bad "night cap level $(cat "$T/run/als-level")"
 # 9. status / lux CLI
 TSX_IIO_DIR=$T/iio sh "$ALS" lux | grep -qx '3000.0' && ok "tsx-als lux" || bad "tsx-als lux"
@@ -213,11 +213,94 @@ printf 'AUTO_BRIGHTEN_S=0\nAUTO_DARKEN_S=0\nALS_RAMP_MS=0\n' > "$T/als.conf"; lu
 printf 'ALS_AUTO="1"\n' > "$PAN"; rm -f "$T/run/"*
 ( i=0; while [ $i -lt 40 ]; do [ -e "$T/run/als.state" ] && break; sleep 0.05; i=$((i+1)); done; printf 'ALS_AUTO="0"\n' > "$PAN" ) &
 PATH=$T/bin:$PATH TSX_ALS_CONF=$T/als.conf TSX_ALS_PANEL=$PAN TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_RUN_DIR=$T/run \
-	TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_NOW=1000 \
+	TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_NOW=1000 TSX_ALS_NAP=usleep \
 	sh -c 'trap "exit 0" TERM; exec sh "$0"' "$ALS" >> "$T/log" 2>&1 &
 P=$!; sleep 1.5; kill $P 2>/dev/null; wait $P 2>/dev/null || true; wait
 [ "$(cat "$T/run/als-auto" 2>/dev/null)" = off ] && ok "als.panel AUTO_BRIGHTNESS change while running: auto off" || bad "panel change not taken: $(cat "$T/run/als-auto" 2>/dev/null)"
 rm -f "$PAN" "$T/run/"*; echo "on 17" > "$T/idled"
+# 9e. Process starts. A steady light starts no helper process in the loop: no
+# cat, grep, sed, awk, date, tail, head, sleep or usleep. The files change only
+# when the content changes: als-level and als.state are written again every
+# 15 s and 60 s of the clock (tsx-idled needs a level file that is less than
+# 30 s old), and at once when the light moves the level.
+CNT=$T/cnt; mkdir -p "$CNT"; : > "$T/cnt.log"
+for u in cat grep sed awk date tail head sleep usleep mv rm mkfifo; do
+	r=$(command -v "$u" 2>/dev/null) || continue
+	printf '#!/bin/sh\necho %s >> "%s/cnt.log"\nexec "%s" "$@"\n' "$u" "$T" "$r" > "$CNT/$u"; chmod +x "$CNT/$u"
+done
+crun() {  # crun LOOPS: the counting wrappers first in PATH, the nap stub is the usleep of $T/bin
+	printf 'AUTO_BRIGHTEN_S=0\nAUTO_DARKEN_S=0\nALS_RAMP_MS=10\nALS_START_WAIT=0\n' > "$T/als.conf"
+	PATH=$CNT:$T/bin:$PATH TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_RUN_DIR=$T/run \
+	TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_LOOPS=$1 TSX_ALS_NOW=1000 \
+	TSX_ALS_NAP=$T/bin/usleep sh "$ALS" >> "$T/log" 2>&1
+}
+rm -f "$T/run/"*; echo 17 > "$T/bl/mp3309c/brightness"; echo "on 17" > "$T/idled"; lux 300.0
+# The start of the daemon runs a few helpers (the settings). One loop shows that
+# part. 76 loops (60 s of the clock) must start no more.
+: > "$T/cnt.log"; rm -f "$T/run/"*; crun 1
+base=$(grep -vc '^mv$' "$T/cnt.log" || true)
+: > "$T/cnt.log"; rm -f "$T/run/"*; crun 76
+starts=$(grep -vc '^mv$' "$T/cnt.log" || true); mvs=$(grep -c '^mv$' "$T/cnt.log" || true)
+[ "$starts" = "$base" ] && ok "steady light, 76 loops (60 s): no helper process in the loop (start: $base)" \
+	|| bad "steady light: $starts helper process starts, $base at start: $(sort "$T/cnt.log" | uniq -c | tr '\n' ' ')"
+# als-level: first write + one more every 15 s (4 refreshes); als.state: first + 1 refresh
+[ "$mvs" -le 8 ] && [ "$mvs" -ge 4 ] && ok "steady light: $mvs file renames in 60 s (first write and the refreshes only)" || bad "steady light: $mvs renames in 60 s"
+[ "$(cat "$T/run/als-level")" = 17 ] && [ "$(st lux)" = 300 ] && ok "steady light: level 17 and 300 lx in the files" || bad "steady light files"
+# a new reading changes the state file in the same loop (the report has a 10 % deadband, raw and level are exact)
+: > "$T/cnt.log"
+cat > "$T/bin2/usleep" <<'STUB'
+#!/bin/sh
+n=$(cat "$SEQN" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "$SEQN"
+[ "$n" != 3 ] || echo 2000.0 > "$IIODEV"
+STUB
+rm -f "$T/run/"* "$SEQN"; lux 300.0
+SEQN=$SEQN IIODEV=$T/iio/iio:device0/in_illuminance_input PATH=$T/bin2:$T/bin:$PATH TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$O/etc/kiosk.conf \
+	TSX_RUN_DIR=$T/run TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_LOOPS=4 TSX_ALS_NOW=1000 TSX_ALS_NAP=usleep \
+	sh "$ALS" >> "$T/log" 2>&1
+[ "$(st raw)" = 2000 ] && [ "$(st level)" = 22 ] && [ "$(cat "$T/run/als-level")" = 22 ] && ok "a new reading is in als.state and als-level in the same loop" || bad "new reading: raw $(st raw) level $(st level)"
+lux 300.0
+# a file that was removed comes back at the next loop
+rm -f "$T/run/"*; crun 2; rm -f "$T/run/als-level" "$T/run/als.state"; crun 1
+[ -e "$T/run/als-level" ] && [ -e "$T/run/als.state" ] && ok "removed als-level and als.state come back" || bad "files did not come back"
+# ALS_SCALE changes in als.panel while the daemon runs: the next reload uses it (5 loops later)
+cat > "$T/bin2/usleep" <<'STUB'
+#!/bin/sh
+n=$(cat "$SEQN" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "$SEQN"
+[ "$n" != 2 ] || printf 'ALS_SCALE="2"\n' > "$PAN"
+STUB
+rm -f "$T/run/"* "$SEQN" "$PAN"; lux 100.0
+SEQN=$SEQN PAN=$PAN PATH=$T/bin2:$T/bin:$PATH TSX_ALS_CONF=$T/als.conf TSX_ALS_PANEL=$PAN TSX_KIOSK_CONF=$O/etc/kiosk.conf \
+	TSX_RUN_DIR=$T/run TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_LOOPS=8 TSX_ALS_NOW=1000 TSX_ALS_NAP=usleep \
+	sh "$ALS" >> "$T/log" 2>&1
+[ "$(st lux)" = 200 ] && ok "ALS_SCALE change in als.panel is used within 5 loops (200 lx)" || bad "scale change: lux $(st lux)"
+rm -f "$PAN" "$T/run/"*
+# a change in kiosk.conf (a copy) while the daemon runs: AUTO_BRIGHTEN_S, taken at the next reload
+cp "$O/etc/kiosk.conf" "$T/kc.conf"
+cat > "$T/bin2/usleep" <<'STUB'
+#!/bin/sh
+n=$(cat "$SEQN" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "$SEQN"
+[ "$n" != 2 ] || printf 'AUTO_BRIGHTEN_S=3\n' >> "$KC"
+STUB
+rm -f "$T/run/"* "$SEQN"; : > "$T/log"; lux 100.0
+printf 'AUTO_BRIGHTEN_S=0\nAUTO_DARKEN_S=0\nALS_START_WAIT=0\n' > "$T/als.conf"
+SEQN=$SEQN KC=$T/kc.conf PATH=$T/bin2:$T/bin:$PATH TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$T/kc.conf \
+	TSX_RUN_DIR=$T/run TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_LOOPS=8 TSX_ALS_NOW=1000 TSX_ALS_NAP=usleep \
+	sh "$ALS" >> "$T/log" 2>&1
+grep -q 'brighter after 3.0 s' "$T/log" && ok "a change in kiosk.conf while running is used within 5 loops" || bad "kiosk.conf change: $(grep response "$T/log" | tr '\n' ' ')"
+# The real wait: no TSX_ALS_NAP. The loop waits with read -t and starts no sleep or
+# usleep. A TERM ends it at once (the wait does not delay the trap).
+: > "$T/cnt.log"; rm -f "$T/run/"*
+PATH=$CNT:$T/bin:$PATH TSX_ALS_CONF=$T/als.conf TSX_KIOSK_CONF=$O/etc/kiosk.conf TSX_RUN_DIR=$T/run \
+	TSX_IIO_DIR=$T/iio TSX_BACKLIGHT_DIR=$T/bl TSX_IDLED_STATE=$T/idled TSX_ALS_NOW=1000 \
+	sh -c 'trap "exit 0" TERM; exec sh "$0"' "$ALS" >> "$T/log" 2>&1 &
+P=$!; sleep 2.2; t0=$(date +%s%N 2>/dev/null || echo 0); kill $P 2>/dev/null; wait $P 2>/dev/null || true
+t1=$(date +%s%N 2>/dev/null || echo 0)
+[ -e "$T/run/als.state" ] && ok "real wait: the daemon runs (als.state written)" || bad "real wait: no als.state"
+grep -qE '^(sleep|usleep)$' "$T/cnt.log" && bad "real wait: started $(grep -E '^(sleep|usleep)$' "$T/cnt.log" | sort | uniq -c | tr '\n' ' ')" \
+	|| ok "real wait: no sleep or usleep process"
+[ $(( (t1 - t0) / 1000000 )) -lt 500 ] && ok "real wait: TERM ends the daemon in $(( (t1 - t0) / 1000000 )) ms" || bad "real wait: TERM took $(( (t1 - t0) / 1000000 )) ms"
+[ ! -e "$T/run/als-level" ] && ok "real wait: als-level removed at the end" || bad "real wait: als-level stays"
+echo 17 > "$T/bl/mp3309c/brightness"; echo "on 17" > "$T/idled"; rm -f "$T/run/"*
 # Every discovery payload is valid JSON. An empty payload clears the topic
 # of an absent part (for example the LED bar), so it is skipped.
 json_ok() {
