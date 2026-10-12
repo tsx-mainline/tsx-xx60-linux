@@ -613,7 +613,8 @@ If the picture is black or garbled, set `KIOSK_GPU=auto` in
 - **CPU governor.** `tsx-cpufreq` follows the state file of `tsx-idled`. It uses
   `CPUFREQ_AWAKE=performance` while the screen is awake and `CPUFREQ_BLANK=schedutil` while it is
   blank. The CPU runs at most at 1608 MHz. 1800 MHz is not stable (see "SoC and CPU" in
-  [hardware.md](hardware.md)).
+  [hardware.md](hardware.md)). The daemon looks at the state file once a second and waits with
+  `read -t` on a FIFO, so the wait starts no process.
 - **Reduced motion.** `KIOSK_REDUCED_MOTION=1` cuts the CPU use of an animated Home Assistant login
   page from about 47% to about 3% of all cores under software rendering.
 - **Boot splash hand-off** (sway session). The compositor background is the boot splash, and the
@@ -1095,6 +1096,7 @@ path on the panel. The CI job `common-tests` checks out tsx-linux-common and run
 | Test | What it checks with the xx60 board files |
 |---|---|
 | `test-als.sh` | `tsx-als` of the board with a fake light sensor and backlight, and the light sensor entities of `tsx-mqtt` |
+| `test-cpufreqd.sh` | `tsx-cpufreqd` with a fake cpufreq folder: the governor follows the state file, a HUP reads the settings, and the wait starts no process |
 | `test-audio-miccheck.sh` | `tsx-audio mic-check` with a fake echo canceller: the raw microphone beside the gated capture |
 | `test-initscripts.sh` | The start logic of the init scripts of the board and of tsx-linux-common, `tsx-emmc-state` and the weekly `tsx-fstrim` |
 | `mqtt-dry.sh` | The five key events from `buttons-board.conf`, the Key LEDs light, the backlight range 1 to 23 and the model in `tsx-mqtt` |

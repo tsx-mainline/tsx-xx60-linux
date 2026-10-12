@@ -10,13 +10,20 @@
 # touching the governor (the schedutil of tsx-setup stays). The daemon never
 # touches cpufreq/boost. The DT no longer has the 1800 MHz boost OPP (not
 # stable, docs/hardware.md).
+#
+# The daemon looks at the state file once a second. It waits with read -t on a
+# FIFO that it holds open, so the wait starts no process (a sleep started 60
+# processes a minute). A HUP ends the wait at once.
+# Env overrides for tests: TSX_IDLED_STATE, TSX_CPUFREQ_SYS, TSX_KIOSK_CONF,
+# TSX_PANEL_BOARD_CONF, TSX_RUN_DIR (the folder of the FIFO), TSX_CPUFREQ_NAP
+# (the seconds between two looks at the state file, default 1).
 STATE=${TSX_IDLED_STATE:-/run/tsx-idled.state}
 SYS=${TSX_CPUFREQ_SYS:-/sys/devices/system/cpu}
 log() { echo "$(date '+%F %T') tsx-cpufreq: $*"; }
 conf() {
 	CPUFREQ_AWAKE=performance CPUFREQ_BLANK=schedutil
-	[ -r /etc/kiosk.conf ] && . /etc/kiosk.conf
-	[ -r /etc/tsx/panel-board.conf ] && . /etc/tsx/panel-board.conf
+	[ -r "${TSX_KIOSK_CONF:-/etc/kiosk.conf}" ] && . "${TSX_KIOSK_CONF:-/etc/kiosk.conf}"
+	[ -r "${TSX_PANEL_BOARD_CONF:-/etc/tsx/panel-board.conf}" ] && . "${TSX_PANEL_BOARD_CONF:-/etc/tsx/panel-board.conf}"
 }
 set_gov() {
 	ok=0
@@ -28,9 +35,22 @@ set_gov() {
 	done
 	[ $ok = 1 ]
 }
+# nap SECONDS: wait without a process. Without a FIFO, a sleep waits.
+NAP_OK=
+nap_init() {
+	ni_f=${TSX_RUN_DIR:-/run}/.tsx-cpufreqd-nap.$$
+	if mkfifo "$ni_f" 2>/dev/null && exec 9<>"$ni_f"; then NAP_OK=1; fi
+	rm -f "$ni_f"
+}
+nap() {
+	if [ -n "$NAP_OK" ]; then read -r -t "$1" nap_x <&9; return 0; fi
+	sleep "$1" &
+	wait $!
+}
 conf
 [ "$CPUFREQ_AWAKE" = off ] && { log "CPUFREQ_AWAKE=off: not managing the governor"; exec sleep 2147483647; }
 trap 'conf; prev=; log "config reloaded"' HUP
+nap_init
 prev=
 while :; do
 	s=
@@ -41,6 +61,5 @@ while :; do
 		set_gov "$gov" && log "screen $s: governor $gov ($(cat "$SYS/cpu0/cpufreq/scaling_cur_freq" 2>/dev/null) kHz)"
 		prev=$s
 	fi
-	sleep 1 &
-	wait $!
+	nap "${TSX_CPUFREQ_NAP:-1}"
 done
