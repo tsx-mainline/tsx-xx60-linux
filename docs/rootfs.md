@@ -335,8 +335,9 @@ boot applies them with `tsx-config apply`.
 - A locked root (key only) never overwrites a saved hash. A new hash in a config file or in the
   prompts replaces it.
 - Nothing prints or logs the hash. `panel.conf` has mode 600. `/root/.ssh` is on `/data`.
-- The banner (`tsx-rootpw note`) shows the case. In the console profile, `tsx-banner watch` checks
-  `/etc/shadow` and `authorized_keys` every 3 s and rewrites the banner after a change.
+- The banner (`tsx-rootpw note`) shows the case. In the console profile, `tsx-banner watch` waits
+  for a change of `/etc/shadow` or `authorized_keys` (busybox `inotifyd` on their folders) and
+  rewrites the banner at once. A check every 5 min covers a change that the watch cannot see.
 - If `tsx-rootpw note` finds a locked field and no key, it says that nobody can log in. Install
   again.
 
