@@ -505,10 +505,11 @@ The bridge uses a last-will-and-testament availability topic. It publishes its d
 
 - the installed version: the release that runs, the version of `tsx-xx60-board`
 - the latest version: the release of the pending update, or `<release> + N packages` when only other packages are pending
-- a release summary with the pending package list and these notes:
-  - "restart needed after install" shows if a kernel, musl, openrc, busybox or tsx-* package upgrade needs a restart.
-  - "installed, restart required" shows after an install that needs a restart, while the panel has not restarted.
+- the release notes, in Markdown, with the pending packages as a list (one package on each line) and these notes:
+  - "Restart needed after install." shows if a kernel, musl, openrc, busybox or tsx-* package upgrade needs a restart.
+  - "Installed. Restart the panel to finish the update." starts the notes after an install that needs a restart, while the panel has not restarted.
   - "Chromium held since ..." shows while a newer, unsigned Chromium build is on hold.
+- a title that says "Restart required to finish <release>" while a restart is required
 - whether an install is in progress
 
 It appears under **Settings → Devices & services → Updates** and on an Update card:
@@ -521,7 +522,7 @@ entity: update.example_panel_update
 **Install** (on the card, or `payload_install` over MQTT) runs `tsx-autoupdate now` at once, in both modes, not in the night window. It uses the `update-install` command of `tsx-panelctl`, which runs `tsx-autoupdate now` in the background.
 
 - Automatic restart on: the panel restarts right after the install, also outside the night window.
-- Automatic restart off: the panel stays up. The entity keeps its entry in Settings → Updates. It shows the running release as installed and the new release as latest, with the summary "installed, restart required". The binary sensor Restart required is on. Install on that entry restarts the panel, and so does the Restart button. The state ends at the next boot.
+- Automatic restart off: the panel stays up. The entity keeps its entry in Settings → Updates. It shows the running release as installed and the new release as latest, with the text "(restart required)", the title "Restart required to finish <release>" and the notes "Installed. Restart the panel to finish the update.". The dialog of an update reads the release notes only when it opens, so the title and the latest version show the change at once. The binary sensor Restart required is on. Install on that entry restarts the panel, and so does the Restart button. The state ends at the next boot.
 
 The mode `manual` (entity Update mode) installs nothing by itself. The entity shows the update, and Install starts it.
 
