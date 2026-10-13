@@ -183,12 +183,12 @@ The ESPHome device has these entities. The exact entity IDs depend on your Home 
 | Restart | Button | Restarts the panel. |
 | Volume | Number, 0 to 100 % | Sets the volume: the player volume of Music Assistant while the Sendspin player runs, else the ALSA "Master" volume. Only with the TSW1060 sound card. |
 | Each front key | Event (`press`, `long`) | Fires on a key press. The entity also lists `double`, which the panel never sends. Only with front keys. |
-| CPU temperature | Sensor | The CPU temperature. |
-| Uptime | Sensor | The time since boot. |
+| CPU temperature | Sensor | The CPU temperature. The panel sends a new state only after a change of more than 1 °C, at most once a minute, and the same state again every 15 min. |
+| Last boot | Sensor (timestamp), diagnostic | The time of the last boot. It replaces the sensor "Uptime" of earlier releases (the entity id changes to `sensor.<device>_last_boot`). It changes at a reboot, and once when NTP steps the clock. |
 | IP address | Sensor | The IP address of the panel. |
 | Touched recently | Binary sensor (motion) | On while the last real input (touch, front key or power key) is less than 30 s old. `tsx-idled` writes the time of the last input to `/run/tsx/last-input`, at most once a second. |
 | Auto brightness | Switch | Writes `AUTO_BRIGHTNESS` in `panel.conf` (`tsx-als auto on\|off`). Only with the ambient light sensor. |
-| Illuminance | Sensor | The lux after `ALS_SCALE` (`panel.conf` only, see [rootfs.md](rootfs.md) "Ambient light sensor"). Only with the ambient light sensor. |
+| Illuminance | Sensor | The lux after `ALS_SCALE` (`panel.conf` only, see [rootfs.md](rootfs.md) "Ambient light sensor"). A new state needs a change of more than 5 lux and 10 %, at most once a minute, and a heartbeat every 15 min. Only with the ambient light sensor. |
 | eMMC life used A, eMMC life used B | Sensors (%), diagnostic | The upper bound of the eMMC wear band, read every hour. Unknown if the eMMC does not report it. |
 | eMMC end of life | Sensor (text), diagnostic | `normal`, `warning` or `urgent`. |
 | Verbose boot | Switch | On shows kernel and boot text on the LCD instead of the splash, from the next boot. Stored in `panel.conf` (`BOOT_VERBOSE`). |
@@ -488,7 +488,8 @@ MQTT entities:
 | Blank timeout | Number (box) | Seconds, `0` = never (`tsx-config set BLANK_TIMEOUT` + `apply`, as on the ESPHome device). |
 | Touched recently | Binary sensor (motion) | Last input less than 30 s ago. |
 | Each front key | Event and device triggers | The event entity has the types short, long and hold. The device triggers are short press and long press. |
-| Illuminance | Sensor | The lux. Only with the ambient light sensor. |
+| Illuminance | Sensor | The lux, with the same rate rules as the ESPHome device. Only with the ambient light sensor. |
+| Last boot | Sensor (timestamp), diagnostic | As on the ESPHome device. |
 | Auto brightness | Switch | As on the ESPHome device. Only with the ambient light sensor. |
 | Volume | Number, 0 to 100 % | The player volume of Music Assistant while the Sendspin player runs, else the ALSA "Master" volume. Only with the sound card. |
 | eMMC life used A and B, eMMC end of life | Diagnostic sensors | As on the ESPHome device. Only with `/run/tsx/emmc.state`. |
