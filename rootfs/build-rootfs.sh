@@ -17,7 +17,8 @@
 # installs the profile meta package (tsx-xx60-console, tsx-xx60-kiosk or
 # tsx-xx60-ha), the packages of packages-tsx.txt and the Alpine packages of
 # packages.txt. The initramfs build takes the packages of initramfs/packages.pin
-# from it. Nothing is compiled. The kernel modules come from the kernel packages.
+# from it. check-apk-pins.sh first checks that the index of the tree lists
+# them. Nothing is compiled. The kernel modules come from the kernel packages.
 # ALPINE (default v3.24).
 # IMG_MB (default 1492).
 # "modules" copies the stripped *.ko files of KBUILD (the kernel build dir, read
@@ -145,7 +146,10 @@ rootfs() {
 }
 
 initramfs() {
-	need_apk_tree; need_armv7
+	need_apk_tree
+	# Each pin must be in the index of the tree, not only a file in a cache.
+	ALPINE=$ALPINE "$HERE/check-apk-pins.sh" "$TSX_APK_LOCAL"
+	need_armv7
 	local mnt=()
 	mnt+=(-v "$(cd "$TSX_APK_LOCAL" && pwd):/aports:ro")
 	# initramfs/mkinitramfs-switchroot.sh takes the rescue tools, the splash and the

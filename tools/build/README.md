@@ -204,6 +204,17 @@ For a local or `BUILD_HOST` package build of a kernel that has no tag, use
 drop of the vendor 3.10 kernel. You need it only to work on that tree, not on
 the mainline port.
 
+### Release tags
+
+Each release of this repo gets two signed tags on the same commit:
+
+- `board-v<version>`: the source archive of the `tsx-xx60-board` package in tsx-aports.
+- `v<version>`: starts `release.yml`. The run attaches the install payloads (`tsx-xx60-lts-payload.tar.zst`, `tsx-xx60-stable-payload.tar.zst`), the kernel bundles and the kernel files to the GitHub release of the tag.
+
+A release without the `v` tag has no install payload, and a fresh install then starts from the payload of an older release. Push the `v` tag after the tsx-aports packages of the release are live, so that the payloads have the packages of the release. If the `v` tag goes out earlier, run the images-only run below after the packages are live.
+
+The run builds new kernel bundles. The kernel recipes of tsx-aports keep their `_kbundle_tag` until `scripts/pin-kernel.sh` of tsx-aports moves them. The release build takes the initramfs packages of `rootfs/initramfs/packages.pin` from the published tree, and tsx-aports keeps these versions (`keep/keep.txt` there, see [rootfs.md](../../docs/rootfs.md)).
+
 ### Rebuild the images of a release (images only)
 
 A tag starts `release.yml`, which builds the images from the packages that are live at that time. The packages of the same release go live in tsx-aports later, because their recipes need the tag archives and the kernel bundles. So the payloads of a new release can have the packages of the previous release.

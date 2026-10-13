@@ -204,6 +204,11 @@ The initramfs stamp (`initramfs-stamp.sh`) covers `packages.pin`. Each kernel pa
 initramfs with this stamp. Do not change a file of `rootfs/initramfs`, `install.sh` or
 `tsx-disk.sh` without new kernel packages. Each version in `packages.pin` must be in the published
 apk tree, because the release build of the kernel packages takes the files from that tree.
+tsx-aports keeps these versions: its `keep/keep.txt` lists them, and its prune never deletes them
+(`scripts/pin-kernel.sh` writes the list for the tag that the kernel packages pin).
+`build-rootfs.sh initramfs` first runs `check-apk-pins.sh`, which stops the build when the index of
+the tree does not list a pinned version. A file that only a cache of the tree still has does not
+count.
 
 ### The console profile
 
