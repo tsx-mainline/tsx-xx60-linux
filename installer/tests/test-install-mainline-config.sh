@@ -318,6 +318,38 @@ run8 'RESCUE_SSH_PW=abc12345; tsx_rescue_ssh_cur root@192.0.2.9 true'
 grep -q 'SSHPASS=abc12345' "$W8LOG" && ok "tsx_rescue_ssh_cur uses RESCUE_SSH_PW" || bad "tsx_rescue_ssh_cur: $(cat "$W8LOG")"
 grep -n 'RPW=tsx\|sshpass -p tsx' "$DRIVER" "$HERE/tsx-restore-factory" "$HERE/lib/tsx-rescue.sh" >/dev/null && bad "a fixed rescue password is still in the installer" || ok "no fixed rescue password in the installer scripts"
 
+echo "== the default of the time zone prompt: the time zone of this computer =="
+hosttz() { TSX_NO_TIMEDATECTL=1 TSX_HOST_TIMEZONE_FILE="$W/none" TSX_HOST_LOCALTIME="$W/none" "$@" bash -c '. "'"$HERE"'/lib/tsx-config-prompt.sh"; _tcp_host_tz' 2>/dev/null; }
+[ "$(hosttz env)" = UTC ] && ok "no host zone: UTC" || bad "no host zone: $(hosttz env)"
+echo "Europe/Berlin" > "$W/etc-timezone"
+[ "$(hosttz env TSX_HOST_TIMEZONE_FILE="$W/etc-timezone")" = Europe/Berlin ] && ok "/etc/timezone gives the default" || bad "/etc/timezone: $(hosttz env TSX_HOST_TIMEZONE_FILE="$W/etc-timezone")"
+ln -s /usr/share/zoneinfo/America/Denver "$W/localtime"
+[ "$(hosttz env TSX_HOST_LOCALTIME="$W/localtime")" = America/Denver ] && ok "a host with no /etc/timezone: the link /etc/localtime gives the default" || bad "localtime link: $(hosttz env TSX_HOST_LOCALTIME="$W/localtime")"
+[ "$(hosttz env TSX_HOST_TIMEZONE_FILE="$W/etc-timezone" TSX_HOST_LOCALTIME="$W/localtime")" = Europe/Berlin ] && ok "/etc/timezone wins over the link" || bad "order of the sources"
+printf 'bad zone\n' > "$W/bad-timezone"
+[ "$(hosttz env TSX_HOST_TIMEZONE_FILE="$W/bad-timezone" TSX_HOST_LOCALTIME="$W/localtime")" = America/Denver ] && ok "a bad name in /etc/timezone is skipped" || bad "bad /etc/timezone"
+# the prompt takes the host zone on Enter
+PCONF5="$W/prompted-tz.conf"
+(cd "$HERE" && TSX_NO_TIMEDATECTL=1 TSX_HOST_LOCALTIME="$W/localtime" TSX_HOST_TIMEZONE_FILE="$W/none" TSX_CONFIG_BIN="$TSX_CONFIG_BIN" bash -c '. lib/tsx-config-prompt.sh; tsx_config_prompt "'"$PCONF5"'" ""' >/dev/null 2>&1 <<'ANS'
+TSS-10-ABCDEF
+https://ha.example.org/lovelace/home
+trusted
+
+off
+
+192.0.2.9
+192.0.2.5
+1883
+tss10
+hunter2
+off
+correct horse
+correct horse
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test@host
+ANS
+)
+[ "$(TSX_CONF="$PCONF5" "$TSX_CONFIG_BIN" get TZ_NAME 2>/dev/null)" = America/Denver ] && ok "Enter at the time zone prompt writes TZ_NAME from the host (the link)" || bad "TZ_NAME from the prompt: '$(TSX_CONF="$PCONF5" "$TSX_CONFIG_BIN" get TZ_NAME 2>/dev/null)'"
+
 echo "== $N ok, $F failed =="
 [ $F = 0 ] && echo PASS test-install-mainline-config || echo FAIL test-install-mainline-config
 exit $F

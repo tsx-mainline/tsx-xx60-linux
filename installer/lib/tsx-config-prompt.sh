@@ -51,6 +51,25 @@ tsx_config_stage() {
 }
 tsx_config_stage || exit 2
 
+# _tcp_host_tz: the time zone of this computer, as the default of the time
+# zone prompt: /etc/timezone, else the link /etc/localtime, else timedatectl,
+# else UTC. (A systemd host has no /etc/timezone. The old code then offered
+# UTC on every such host.) Test hooks: TSX_HOST_TIMEZONE_FILE,
+# TSX_HOST_LOCALTIME, TSX_NO_TIMEDATECTL=1.
+_tcp_host_tz() {
+	local z f
+	f=${TSX_HOST_TIMEZONE_FILE:-/etc/timezone}
+	[ ! -r "$f" ] || z=$(head -n 1 "$f" | tr -d '\r')
+	if ! printf '%s' "${z:-}" | grep -Eq '^[A-Za-z0-9_+/-]{1,64}$'; then
+		z=$(readlink "${TSX_HOST_LOCALTIME:-/etc/localtime}" 2>/dev/null || true)
+		z=${z##*/zoneinfo/}
+	fi
+	if ! printf '%s' "${z:-}" | grep -Eq '^[A-Za-z0-9_+/-]{1,64}$' && [ -z "${TSX_NO_TIMEDATECTL:-}" ] && command -v timedatectl >/dev/null 2>&1; then
+		z=$(timedatectl show -p Timezone --value 2>/dev/null || true)
+	fi
+	if printf '%s' "${z:-}" | grep -Eq '^[A-Za-z0-9_+/-]{1,64}$'; then printf '%s\n' "$z"; else printf 'UTC\n'; fi
+}
+
 _tcp_default() {  # _tcp_default KEY: print the default (empty if unset), never fail
 	local key=$1
 	[ -n "${TCP_DEFAULTS:-}" ] || { echo ""; return 0; }
@@ -179,7 +198,7 @@ tsx_config_prompt() {
 	fi
 
 	while :; do
-		tz=$(_tcp_default TZ_NAME); [ -n "$tz" ] || tz=$(cat /etc/timezone 2>/dev/null || echo UTC)
+		tz=$(_tcp_default TZ_NAME); [ -n "$tz" ] || tz=$(_tcp_host_tz)
 		read -r -p "Time zone (e.g. America/Denver) [$tz]: " ans
 		[ -n "$ans" ] || ans=$tz
 		if [ -d /usr/share/zoneinfo ] && [ ! -f "/usr/share/zoneinfo/$ans" ]; then

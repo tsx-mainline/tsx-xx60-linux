@@ -212,6 +212,8 @@ The installer builds `/data/tsx/panel.conf` after it arms the rescue and before 
 | `--config FILE` | The installer uses `FILE` with no prompts. Use it for scripted and multi-panel installs. |
 | `--yes`, no `--config` | No prompts and no `panel.conf`. A reinstall keeps the file of the panel. |
 
+The time zone prompt offers the zone of the panel file on a reinstall. Otherwise it offers the time zone of the PC (`/etc/timezone`, else the link `/etc/localtime`, else `timedatectl`, else UTC). A new panel without a `panel.conf` (`--yes`, no `--config`) keeps the zone of the image (`America/Denver`). Put `TZ_NAME` in the `--config` file to set another zone.
+
 ### Root password and SSH key
 
 A public image has no fixed root password. The install stops unless it gets a root password or an SSH public key. This holds for the prompts, for `--config` and for `--yes`. With `--yes` and no `--config`, only a reinstall can pass, and the panel's own `panel.conf` must have a hash or a key.
