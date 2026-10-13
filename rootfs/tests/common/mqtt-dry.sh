@@ -14,7 +14,7 @@ T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; mkdir -p "$T/bin" "$T/run" "$T/bl/x"
 cat > "$T/bin/tsx-panelctl" <<'EOF2'
 #!/bin/sh
 case "$1" in
-has) case "$2" in ledbar|keyleds) exit 0;; *) exit 1;; esac;;
+has) case "$2" in ledbar|keyleds|dark-mode) exit 0;; *) exit 1;; esac;;
 get) [ "$2" = backlight-pct ] && { echo 74; exit 0; }; exit 1;;
 send) echo "CALL tsx-panelctl $*" >&2;;
 esac
@@ -35,7 +35,10 @@ PATH=$T/bin:$PATH TSX_MQTT_DRY=1 TSX_MQTT_CONF=$T/mqtt.conf TSX_RUN_DIR=$T/run T
 fail=0
 chk() { grep -qF -- "$1" "$T/out" || { echo "FAIL: missing: $1"; fail=1; }; }
 n=0; grep '/config ' "$T/out" | while read -r _ _ t j; do echo "$j" | jq -e . >/dev/null || { echo "FAIL: bad JSON $t"; exit 1; }; done
-n=$(grep -c '/config ' "$T/out"); [ "$n" = 26 ] || { echo "FAIL: $n discovery configs, want 26"; fail=1; }
+n=$(grep -c '/config ' "$T/out"); [ "$n" = 28 ] || { echo "FAIL: $n discovery configs, want 28 (Last boot and Dark mode are new)"; fail=1; }
+grep -qF 'PUB (retained) homeassistant/sensor/tsx-kiosk/last_boot/config {' "$T/out" || { echo "FAIL: the sensor Last boot is not announced"; fail=1; }
+grep -qF 'PUB (retained) homeassistant/switch/tsx-kiosk/dark_mode/config {' "$T/out" || { echo "FAIL: the switch Dark mode is not announced on a panel with the kiosk"; fail=1; }
+grep -q 'sensor/tsx-kiosk/uptime' "$T/out" && { echo "FAIL: the Uptime sensor is announced"; fail=1; }
 # the update entities: Restart required, Restart, Update mode, Automatic restart
 for e in binary_sensor/tsx-kiosk/restart_required button/tsx-kiosk/restart select/tsx-kiosk/update_mode switch/tsx-kiosk/auto_restart; do
 	chk "PUB (retained) homeassistant/$e/config {"
