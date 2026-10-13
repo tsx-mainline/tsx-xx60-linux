@@ -32,9 +32,19 @@ start() {  # start [PATH-prefix]: run the daemon in the background
 	TSX_PANEL_BOARD_CONF=$T/none TSX_RUN_DIR=$T/run TSX_CPUFREQ_NAP=0.2 sh "$CPUFREQD" >> "$T/log" 2>&1 &
 	DPID=$!
 }
-waitfor() {  # waitfor "governors": up to 3 s
+# waitfor "governors" [N]: up to 3 s. With N, also wait for the Nth log line
+# "screen <state>: governor <name> (...)". The daemon writes the governor
+# first and then starts cat and date for that line, so only the line shows
+# that the daemon has started every process of the change.
+waitfor() {
 	i=0
-	while [ $i -lt 60 ]; do [ "$(gov)" = "$1 " ] && return 0; sleep 0.05; i=$((i + 1)); done
+	while [ $i -lt 60 ]; do
+		if [ "$(gov)" = "$1 " ]; then
+			[ -z "${2:-}" ] && return 0
+			[ "$(grep -c ": governor ${1%% *} (" "$T/log" 2>/dev/null)" -ge "$2" ] && return 0
+		fi
+		sleep 0.05; i=$((i + 1))
+	done
 	return 1
 }
 echo blank > "$T/state"; start
@@ -42,7 +52,7 @@ waitfor "powersave powersave" && ok "blank: governor powersave on both CPUs" || 
 echo "on 17" > "$T/state"
 waitfor "performance performance" && ok "awake: governor performance" || bad "awake: governors $(gov)"
 echo blank > "$T/state"
-waitfor "powersave powersave" && ok "blank again: powersave" || bad "blank again: $(gov)"
+waitfor "powersave powersave" 2 && ok "blank again: powersave" || bad "blank again: $(gov)"
 # 10 looks at the state file (0.2 s each) start no sleep, cat, grep, date, head, tail, sed or awk
 : > "$T/cnt.log"; sleep 2.2
 [ ! -s "$T/cnt.log" ] && ok "the wait starts no process (2.2 s, 10 looks)" || bad "processes in the wait: $(sort "$T/cnt.log" | uniq -c | tr '\n' ' ')"
