@@ -1104,7 +1104,7 @@ path on the panel. The CI job `common-tests` checks out tsx-linux-common and run
 | `test-cpufreqd.sh` | `tsx-cpufreqd` with a fake cpufreq folder: the governor follows the state file, a HUP reads the settings, and the wait starts no process |
 | `test-audio-miccheck.sh` | `tsx-audio mic-check` with a fake echo canceller: the raw microphone beside the gated capture |
 | `test-initscripts.sh` | The start logic of the init scripts of the board and of tsx-linux-common, `tsx-emmc-state` and the weekly `tsx-fstrim` |
-| `mqtt-dry.sh` | The five key events from `buttons-board.conf`, the Key LEDs light, the backlight range 1 to 23 and the model in `tsx-mqtt` |
+| `mqtt-dry.sh` | The five key events from `buttons-board.conf`, the Key LEDs light, the Backlight number in percent (1 to 100) and the model in `tsx-mqtt` |
 | `test-buttons-xx60.sh` | The real board layer with the template of `buttons.conf`: five keys, `tsx:keypad` and `tsx:key1` to 5, `SLIDE_STEP=0`. Each press fires the HA event and the last line. No overlay, home, reload, blank, brightness change or slide. Home Assistant sets the key LEDs and the screen-off level. The test compiles `tsx-buttons`. |
 | `test-board-xx60.sh` | The board values, the meson and lima renderer selection with the kiosk hook `es2.sh`, the browser flags of the hook, the volume entity, the Home Assistant model, `tsx-bt` with the CSR8811 chip file, the kernel package name, `ttyAML0` and the securetty file of the board |
 | `test-bt-csr8811.sh` | The CSR8811 bring-up: `csr_psload.py` against a fake BlueCore (`bt-fake-bluecore.py`), `tsx-bt` with the chip file, the PSR kinds, the failure reasons, and `state=absent` with the `REASON` text on a TSW-760-NC (from the real `tsx-hw`) |

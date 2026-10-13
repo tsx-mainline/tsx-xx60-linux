@@ -1,10 +1,12 @@
 #!/bin/sh
 # Host test of tsx-mqtt (tsx-linux-common) in dry-run mode with the xx60 board
 # files of this repository. The xx60 front panel has five keys with their own
-# LEDs (buttons-board.conf, the board layer), a backlight with the range 1 to
-# 23 and a LED bar tool. The test checks the discovery JSON (jq), the key
-# events, the key LED light and the backlight range that these files give. The
-# stub of tsx-panelctl logs "send". tsx-mqtt does not touch the hardware.
+# LEDs (buttons-board.conf, the board layer) and a LED bar tool. The test
+# checks the discovery JSON (jq), the key events, the key LED light and the
+# backlight number. The backlight is in percent of the slider (1 to 100), as
+# the ESPHome entity: tsx-panelctl maps it to the level of the board. The
+# stub of tsx-panelctl logs "send" and answers "get backlight-pct" with 74.
+# tsx-mqtt does not touch the hardware.
 set -eu
 . "$(dirname "$0")/lib.sh"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; mkdir -p "$T/bin" "$T/run" "$T/bl/x"
@@ -13,7 +15,7 @@ cat > "$T/bin/tsx-panelctl" <<'EOF2'
 #!/bin/sh
 case "$1" in
 has) case "$2" in ledbar|keyleds) exit 0;; *) exit 1;; esac;;
-get) exit 1;;
+get) [ "$2" = backlight-pct ] && { echo 74; exit 0; }; exit 1;;
 send) echo "CALL tsx-panelctl $*" >&2;;
 esac
 EOF2
@@ -56,13 +58,14 @@ chk 'PUB (retained) homeassistant/light/tsx-kiosk/key_leds/config {'
 chk 'PUB (retained) tsx/tsx-kiosk/key_leds/brightness 128'
 chk 'CALL tsx-panelctl send keypad led 40'
 chk 'CALL tsx-panelctl send keypad led off'
-# the backlight range is the one of panel-board.conf (1 to 23)
-grep 'number/tsx-kiosk/backlight/config ' "$T/out" | grep -q '"min":1,"max":23' || { echo "FAIL: the backlight number is not 1..23"; fail=1; }
-chk 'PUB (retained) tsx/tsx-kiosk/backlight/state 17'
-chk 'CALL tsx-panelctl send backlight 23'
-chk 'CALL tsx-panelctl send backlight 12'
-grep -q 'send backlight 30' "$T/out" && { echo "FAIL: a backlight level above 23 was sent"; fail=1; }
-grep -q 'send backlight 0' "$T/out" && { echo "FAIL: backlight 0 was sent (the lowest level is 1)"; fail=1; }
+# the backlight is the percent of the slider, not the level of the board (1 to 23)
+grep 'number/tsx-kiosk/backlight/config ' "$T/out" | grep -q '"min":1,"max":100,"step":1,"unit_of_meas":"%"' || { echo "FAIL: the backlight number is not 1..100 %"; fail=1; }
+chk 'PUB (retained) tsx/tsx-kiosk/backlight/state 74'
+chk 'CALL tsx-panelctl send brightness-pct 30'
+chk 'CALL tsx-panelctl send brightness-pct 1'
+chk 'CALL tsx-panelctl send brightness-pct 12'
+grep -q 'send backlight ' "$T/out" && { echo "FAIL: a raw backlight level was sent"; fail=1; }
+grep -q 'send brightness-pct 0' "$T/out" && { echo "FAIL: backlight 0 was sent (the lowest percent is 1)"; fail=1; }
 chk 'CALL tsx-panelctl send blank on'
 # the LED bar tool is there, so the light is announced
 chk 'PUB (retained) homeassistant/light/tsx-kiosk/ledbar/config {'

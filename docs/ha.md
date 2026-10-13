@@ -483,7 +483,7 @@ MQTT entities:
 | LED bar | RGB light | Sets the bar color. No effects. Only where `tsx-ledbar` is installed. |
 | Key LEDs | Brightness light | Shows the level while the screen is awake. Only where the keys have LEDs. The MQTT device has no screen-off level number. |
 | Screen | Switch | On = awake. |
-| Backlight | Number | Brightness step range of the panel. |
+| Backlight | Number, 1 to 100 % | The brightness in percent of the slider, as on the ESPHome device. The panel maps it to its brightness steps (`tsx-panelctl brightness-pct`). The state is `tsx-panelctl get backlight-pct`, also the waiting level while the screen is blank. |
 | Blank timeout | Number (box) | Seconds, `0` = never (`tsx-config set BLANK_TIMEOUT` + `apply`, as on the ESPHome device). |
 | Touched recently | Binary sensor (motion) | Last input less than 30 s ago. |
 | Each front key | Event and device triggers | The event entity has the types short, long and hold. The device triggers are short press and long press. |
