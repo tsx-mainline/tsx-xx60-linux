@@ -23,7 +23,9 @@
 #
 # psr (read-only, before run): look for the CSR8811 Bluetooth PSR file on the
 # panel itself: the current mainline root on eMMC p8, else the stock Android
-# system partition in the same region (installer/lib/tsx-psr.sh). A valid
+# system partition in the same region (installer/lib/tsx-psr.sh). The Android
+# file system starts 8 MiB into p8 (804 MiB of the eMMC). tsx_ext4_open
+# (installer/lib/tsx-rescue.sh) finds it and gives a read-only loop device. A valid
 # file goes to BUNDLE_DIR/psr/, and "run" deploys it. It stays on the panel.
 # If the panel has no valid file, the host can put the file of the .puf
 # download there instead (rootfs/vendor-fetch.sh --psr). On a panel with
@@ -174,7 +176,9 @@ if [ "$CMD" = psr ]; then
 		tsx_psr_not_needed "$B/psr"
 	else
 		say "looking for the Bluetooth PSR file on this panel (read-only: $EROOT)"
-		tsx_psr_collect "$B/psr" "$EROOT" "$B/psr"
+		OLDROOT=$(tsx_ext4_open "$EROOT") || OLDROOT=$EROOT
+		tsx_psr_collect "$B/psr" "$OLDROOT" "$B/psr"
+		tsx_ext4_close "$EROOT" "$OLDROOT"
 	fi
 	set_state "checked OK"
 	exit 0
@@ -186,7 +190,9 @@ if [ "$CMD" = ledstock ]; then
 	. "$B/tsx-ledstock.sh"
 	set_state "looking for the stock LED bar firmware"
 	say "looking for the stock LED bar firmware image on this panel (read-only: $EROOT)"
-	tsx_ledstock_collect "$B/ledstock" "$EROOT" "$B/ledstock"
+	OLDROOT=$(tsx_ext4_open "$EROOT") || OLDROOT=$EROOT
+	tsx_ledstock_collect "$B/ledstock" "$OLDROOT" "$B/ledstock"
+	tsx_ext4_close "$EROOT" "$OLDROOT"
 	set_state "checked OK"
 	exit 0
 fi

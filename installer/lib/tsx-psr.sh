@@ -16,7 +16,9 @@
 #                   usr/local/share/tsx/csr8811/PSR-CSR8811.psr on eMMC p8
 #   android-system  stock Android: the same eMMC region is the Android system
 #                   partition then (build.prop at its top), with the file at
-#                   bin/PSR-CSR8811.psr
+#                   bin/PSR-CSR8811.psr. Its file system starts 8 MiB into
+#                   p8: the caller gives the device from tsx_ext4_open
+#                   (tsx-rescue.sh)
 #   earlier         a file that an earlier attempt in this same rescue session
 #                   already collected (a re-run after a failed install)
 #

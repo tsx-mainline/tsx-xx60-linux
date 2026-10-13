@@ -15,7 +15,9 @@
 # The sources, in order. The first valid file wins.
 #   android-system  stock Android: the eMMC root region is the Android system
 #                   partition then (build.prop at its top). The file is at
-#                   vendor/firmware/ or system/vendor/firmware/
+#                   vendor/firmware/ or system/vendor/firmware/. The file
+#                   system starts 8 MiB into p8: the caller gives the device
+#                   from tsx_ext4_open (tsx-rescue.sh)
 #   earlier         a file that an earlier attempt in this same rescue session
 #                   already collected (a re-run after a failed install)
 # A mainline root has no copy. On a reinstall, the copy lives on tsxdata

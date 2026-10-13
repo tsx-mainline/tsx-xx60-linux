@@ -211,6 +211,91 @@ tsx_rootinfo_set_flavor() {
 	fi
 }
 
+# ------------------------------------------- the old root file system ------
+# The eMMC root region of mainline (p8, blkdevparts) starts at 796 MiB. The
+# stock Android system partition starts 8 MiB later, at 804 MiB (the table of
+# U-Boot, docs/boot.md), so on a panel with stock Android, p8 holds 8 MiB of
+# zeros and then the Android ext4. A mainline root starts at the first byte of
+# p8. These functions find the ext4 file system in a small window at the start
+# of the region and give a device that mounts it. They only read DEV, and the
+# loop device is read-only.
+
+# tsx_le_uint FILE POS LEN: print the unsigned little-endian number of LEN
+# bytes at byte POS of FILE.
+tsx_le_uint() {
+	local v=0 m=1 b
+	for b in $(od -An -tu1 -j "$2" -N "$3" "$1"); do v=$((v + b * m)); m=$((m * 256)); done
+	echo "$v"
+}
+
+# tsx_dev_bytes DEV: print the size of a block device or a file in bytes.
+tsx_dev_bytes() {
+	local n
+	if [ -b "$1" ]; then
+		n=$(readlink -f "$1"); n=${n##*/}
+		echo $(( $(cat "/sys/class/block/$n/size" 2>/dev/null || echo 0) * 512 ))
+	else
+		wc -c < "$1" | tr -d ' '
+	fi
+}
+
+# tsx_ext4_at DEV OFFSET [SIZE]: return 0 if a primary ext4 superblock is at
+# OFFSET + 1024 of DEV (OFFSET in bytes, a multiple of 1024). The checks: the
+# magic 0xEF53, block group 0 (a backup superblock has another group number,
+# for example the one of a 1 KiB-block file system 8 MiB after its start),
+# a block size of 1 KiB to 64 KiB, and with SIZE (the size of DEV) a file
+# system that fits in DEV after OFFSET.
+tsx_ext4_at() {
+	local sb=${TSX_RUN:-/run}/tsx-ext4-sb.$$ magic grp lbs blocks rc=1
+	dd if="$1" of="$sb" bs=1024 skip=$(($2 / 1024 + 1)) count=1 2>/dev/null
+	if [ "$(wc -c < "$sb" 2>/dev/null | tr -d ' ')" = 1024 ]; then
+		magic=$(tsx_le_uint "$sb" 56 2); grp=$(tsx_le_uint "$sb" 90 2)
+		lbs=$(tsx_le_uint "$sb" 24 4); blocks=$(tsx_le_uint "$sb" 4 4)
+		if [ "$magic" = 61267 ] && [ "$grp" = 0 ] && [ "$lbs" -le 6 ] && [ "$blocks" -gt 0 ]; then
+			if [ -z "${3:-}" ] || [ $((blocks * (1024 << lbs))) -le $(($3 - $2)) ]; then rc=0; fi
+		fi
+	fi
+	rm -f "$sb"
+	return $rc
+}
+
+# tsx_ext4_find DEV [MAX_MIB]: print the byte offset of the first ext4 file
+# system in DEV at 0, 1, 2 ... MAX_MIB MiB (default TSX_EXT4_SCAN_MIB or 32).
+# Return 1 if there is none.
+tsx_ext4_find() {
+	local dev=$1 max=${2:-${TSX_EXT4_SCAN_MIB:-32}} size i=0
+	size=$(tsx_dev_bytes "$dev")
+	[ "${size:-0}" -gt 0 ] || return 1
+	while [ $i -le "$max" ]; do
+		[ $((i * 1048576 + 2048)) -le "$size" ] || break
+		tsx_ext4_at "$dev" $((i * 1048576)) "$size" && { echo $((i * 1048576)); return 0; }
+		i=$((i + 1))
+	done
+	return 1
+}
+
+# tsx_ext4_open DEV: find the ext4 file system in DEV (tsx_ext4_find). Print
+# DEV when it starts at byte 0, else attach a read-only loop device at the
+# offset and print the loop device. Close the loop device with
+# tsx_ext4_close. Return 1 and print nothing if DEV has no ext4 file system
+# in the window. A note on stderr names the offset when it is not 0.
+tsx_ext4_open() {
+	local off l
+	off=$(tsx_ext4_find "$1") || return 1
+	[ "$off" = 0 ] && { echo "$1"; return 0; }
+	l=$(losetup -f 2>/dev/null) && [ -n "$l" ] || { echo "ext4: no free loop device for $1 at $((off / 1048576)) MiB" >&2; return 1; }
+	losetup -r -o "$off" "$l" "$1" 2>/dev/null || { echo "ext4: losetup -r -o $off $l $1 failed" >&2; return 1; }
+	echo "ext4: the file system of $1 starts at $((off / 1048576)) MiB: read-only loop device $l" >&2
+	echo "$l"
+}
+
+# tsx_ext4_close DEV OPENED: detach OPENED if tsx_ext4_open made it (it
+# differs from DEV). Only that one loop device.
+tsx_ext4_close() {
+	[ -n "${2:-}" ] && [ "$2" != "$1" ] || return 0
+	losetup -d "$2" 2>/dev/null || true
+}
+
 # ------------------------------------------------------- rescue discovery ---
 # Adapted from installer/tsx-restore-factory. It has the same problem: the
 # eth0 MAC of the rescue is random, unless the U-Boot ethaddr fix already

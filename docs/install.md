@@ -312,7 +312,7 @@ This layout uses the Android partitions `p5` to `p8` of the card. Android does n
 |---|---|---|
 | `installer/steps/tsx-rescue-arm.sh` | Android root shell | Backs up the env, writes the rescue to `p1`, installs the env hook with `tsx_once=1`, reboots. Never writes `p2` or the MBR. |
 | `installer/steps/tsx-rescue-install` | Rescue | Writes and verifies eMMC `boot` and root, folds the card into `p4`, deploys the DSP, PSR and `KIOSK_URL` files, arms USB recovery, writes `p1:tsxboot.off` so the stock `bootcmd` takes over (`imgread kernel boot` from the eMMC), reboots. |
-| `installer/lib/tsx-rescue.sh` | Host and panel | `pr_dd` (live MiB, percent and rate for a background `dd`), the verified single-write env helper, the MBR fold and the MAC-based rescue discovery that `tsx-restore-factory` also uses. |
+| `installer/lib/tsx-rescue.sh` | Host and panel | `pr_dd` (live MiB, percent and rate for a background `dd`), the verified single-write env helper, the MBR fold, the finder of the old root file system (`tsx_ext4_open`) and the MAC-based rescue discovery that `tsx-restore-factory` also uses. |
 
 ### Speaker DSP files (TFA9890)
 
@@ -344,7 +344,7 @@ A missing DSP set never stops the install. Without it the speakers work, but wit
 The CSR8811 chip needs the file `PSR-CSR8811.psr` (ROM patches and radio setup) from the Crestron firmware. It is never in this repository or in an image. The rescue looks for it on the panel, read-only, before it writes anything (`installer/steps/tsx-rescue-install psr`, `installer/lib/tsx-psr.sh`):
 
 1. The installed mainline root: `/usr/local/share/tsx/csr8811/PSR-CSR8811.psr` on eMMC `p8`.
-2. The system partition of stock Android: `bin/PSR-CSR8811.psr` in the same eMMC region.
+2. The system partition of stock Android: `bin/PSR-CSR8811.psr` in the same eMMC region (see "The old root file system" below).
 3. The `.puf` download (fallback). The host runs `rootfs/vendor-fetch.sh --psr`. It uses the same download and cache as the DSP files, extracts `/bin/PSR-CSR8811.psr` from `system.img` with `debugfs` (no mount, no root) and checks the pinned sha256. The host pushes the file to the rescue. This needs `unzip` and `debugfs` on the host and about 1.1 GB of free temporary space for a short time.
 
 With sources 1 and 2 the file never leaves the panel. The installer accepts the pinned sha256, or another sha256 with a warning if the file is sane PSR text. It prints `Bluetooth PSR source used: ...` and writes the file and a `SOURCE` record to `/usr/local/share/tsx/csr8811/` on the new root.
@@ -362,6 +362,18 @@ The rescue looks for the file in the stock Android system partition, read-only (
 - A reinstall that keeps `/data` keeps the copy.
 - `--wipe-data` and any other format of `tsxdata` remove the copy. Install from Android again to get it back.
 - If the rescue finds no file, the installer prints one line and continues. A panel with no LED bar is not affected.
+
+### The old root file system
+
+The mainline root region `p8` starts at 796 MiB of the eMMC (`blkdevparts=`). The stock Android system partition starts at 804 MiB (the partition table of U-Boot, see [boot.md](boot.md)). So on a panel with stock Android, `p8` starts with 8 MiB of zeros, and the Android file system starts 8 MiB into `p8`. A mainline root starts at the first byte of `p8`. The TSW-1060 and the TSW-760 have the same layout.
+
+Before the `psr` and `ledstock` commands look for their files, the rescue finds the ext4 file system in `p8` (`tsx_ext4_open` in `installer/lib/tsx-rescue.sh`):
+
+- It reads the superblock at 0, 1, 2 ... 32 MiB into `p8`. The first primary ext4 superblock (magic, block group 0, a file system that fits in `p8`) wins.
+- At offset 0 it mounts `p8` itself. At another offset it attaches a read-only loop device at that offset and mounts the loop device read-only.
+- After the look-up it detaches the loop device.
+
+The installer prints a line such as `ext4: the file system of /dev/mmcblk1p8 starts at 8 MiB: read-only loop device /dev/loop0`. The DSP lookup does not need this: it reads the Android boot image in `p7`.
 
 To load the stock firmware into the bar, see [rootfs.md](rootfs.md) "LED bar".
 

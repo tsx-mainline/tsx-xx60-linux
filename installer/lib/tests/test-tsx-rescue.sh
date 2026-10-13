@@ -4,6 +4,7 @@
 # installer/emmc/tests/test-usb-recovery.sh (no loop device, no docker. Env
 # fixtures are bare 64 KiB blocks fw_printenv/fw_setenv accept as a file).
 # Needs fw_printenv/fw_setenv (u-boot-tools), mke2fs/e2fsck/blkid (e2fsprogs).
+# Section 13 tests the finder of the old root file system (tsx_ext4_find).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 . "$HERE/tsx-rescue.sh"
@@ -160,6 +161,41 @@ R=$(sim_once "" 0 1); [ "$R" = "no_rescue " ] && ok "not armed (tsx_once unset):
 # already 0 from that boot. The unit is power-cycled again. tsxboot.img and
 # the golden slot still hold the rescue image.
 R=$(sim_once 0 0 1); [ "$R" = "no_rescue 0" ] && ok "after fallback (tsx_once already spent): stays on stock Android even though tsxboot.img is still there" || bad "after-fallback case: got '$R'"
+
+echo "== 13. the old root file system: an ext4 at the start of p8 or 8 MiB into it (tsx_ext4_find)"
+# A stock panel has the Android system file system 8 MiB into p8 (804 MiB of
+# the eMMC, p8 starts at 796 MiB). A mainline root starts at byte 0 of p8.
+# The fixtures are sparse files. mke2fs -E offset= puts the file system at
+# the offset. Nothing here needs a loop device.
+export TSX_RUN=$W
+mkfsat() {  # mkfsat FILE SIZE_MIB OFFSET_MIB [mke2fs options]: an ext4 at OFFSET in a sparse file
+	local f=$1 size=$2 off=$3; shift 3
+	rm -f "$f"; truncate -s "${size}M" "$f"
+	mke2fs -q -F -t ext4 "$@" -E offset=$((off * 1048576)) "$f" $(( (size - off) * 1024 ))k >/dev/null 2>&1
+}
+mkfsat "$W/p8-android" 128 8
+R=$(tsx_ext4_find "$W/p8-android"); [ "$R" = 8388608 ] && ok "stock layout: the file system 8 MiB into p8 is found" || bad "stock layout: got '$R'"
+mkfsat "$W/p8-mainline" 128 0
+R=$(tsx_ext4_find "$W/p8-mainline"); [ "$R" = 0 ] && ok "mainline root at byte 0 of p8" || bad "mainline root: got '$R'"
+# 1 KiB blocks: the backup superblock of group 1 is 8 MiB + 1 KiB after the
+# start. With the primary superblock gone, the finder must not take it.
+mkfsat "$W/p8-1k" 64 0 -b 1024 -O ^resize_inode
+dd if=/dev/zero of="$W/p8-1k" bs=1024 seek=1 count=1 conv=notrunc 2>/dev/null
+tsx_ext4_find "$W/p8-1k" >/dev/null && bad "a backup superblock was taken for a file system" || ok "a backup superblock (group 1, 8 MiB in) is not a file system"
+truncate -s 64M "$W/p8-zero"
+tsx_ext4_find "$W/p8-zero" >/dev/null && bad "zeros: a file system found" || ok "zeros: no file system"
+mkfsat "$W/p8-far" 128 40
+tsx_ext4_find "$W/p8-far" >/dev/null && bad "40 MiB in: found with the default window of 32 MiB" || ok "40 MiB in: outside the default window of 32 MiB"
+R=$(TSX_EXT4_SCAN_MIB=48 tsx_ext4_find "$W/p8-far"); [ "$R" = 41943040 ] && ok "TSX_EXT4_SCAN_MIB=48 finds it at 40 MiB" || bad "TSX_EXT4_SCAN_MIB=48: got '$R'"
+# A file system that is bigger than the space after its offset is not taken.
+mkfsat "$W/p8-big" 128 8; truncate -s 64M "$W/p8-big"
+tsx_ext4_find "$W/p8-big" >/dev/null && bad "a file system bigger than the device was taken" || ok "a file system bigger than the device is not taken"
+R=$(tsx_ext4_open "$W/p8-mainline" 2>/dev/null); [ "$R" = "$W/p8-mainline" ] && ok "tsx_ext4_open: offset 0 gives the device itself (no loop device)" || bad "tsx_ext4_open offset 0: got '$R'"
+tsx_ext4_open "$W/p8-zero" >/dev/null 2>&1 && bad "tsx_ext4_open: zeros opened" || ok "tsx_ext4_open: no file system, return 1"
+tsx_ext4_close "$W/p8-mainline" "$W/p8-mainline" && ok "tsx_ext4_close: nothing to detach for offset 0" || bad "tsx_ext4_close failed"
+[ -z "$(ls "$W" | grep '^tsx-ext4-sb')" ] && ok "no temporary superblock file is left" || bad "left: $(ls "$W" | grep '^tsx-ext4-sb')"
+rm -f "$W"/p8-*
+unset TSX_RUN
 
 echo "== $N ok, $F failed"
 [ $F = 0 ] && echo PASS test-tsx-rescue || echo FAIL test-tsx-rescue
