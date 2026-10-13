@@ -104,8 +104,9 @@
 # The prompts and the checks of panel.conf use the tsx-config of tsx-linux-common.
 # Set $TSX_COMMON to the top of a checkout. The default is the folder
 # tsx-linux-common next to this repository.
-# Host tools: sshpass ssh python3 curl sha256sum ip. unzip is needed only for
-# the .puf download, and debugfs (e2fsprogs) only for the PSR file from it.
+# Host tools: sshpass ssh python3 curl sha256sum ip. unzip (or busybox with
+# its unzip applet) is needed only for the .puf download, and debugfs
+# (e2fsprogs) only for the PSR file from it.
 # Without that download, a panel that has no DSP files gets no vendor speaker
 # tuning. The panel must be able to connect back to this
 # host (HTTP on ports 8079 and 8081). Rescue login: the root password or key of
@@ -488,7 +489,8 @@ tfa_puf() {  # rootfs/vendor-fetch.sh here, then push the files into /tmp/b/tfa
 	local fetch="$HERE/../rootfs/vendor-fetch.sh" local_dir v n=0
 	local_dir=${TFA_VENDOR_LOCAL:-"$HERE/../rootfs/vendor-local/tfa9890"}
 	log "  TFA9890: rootfs/vendor-fetch.sh on this host (Crestron's .puf, 357 MB, downloaded once and cached). The log is in $RESULTS"
-	command -v unzip >/dev/null || log "  WARNING: no unzip on this host: vendor-fetch.sh will fail unless its files are already cached"
+	command -v unzip >/dev/null || busybox --list 2>/dev/null | grep -x unzip >/dev/null \
+		|| log "  WARNING: no unzip on this host (neither unzip nor busybox unzip): vendor-fetch.sh will fail unless its files are already cached"
 	[ -x "$fetch" ] && "$fetch" >>"$RESULTS" 2>&1 || { log "  WARNING: rootfs/vendor-fetch.sh failed (see $RESULTS)"; return 1; }
 	rm -rf "$STAGE2/tfa"; mkdir -p "$STAGE2/tfa"
 	for v in $TSX_TFA_VARIANTS; do

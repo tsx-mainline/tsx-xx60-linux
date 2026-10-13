@@ -50,7 +50,12 @@
 # Env overrides: TFA_PUF_URL, TFA_PUF_SHA256, TFA_PUF_CACHE (download cache
 # dir), TFA_VENDOR_LOCAL (output dir, the same variable mkrootfs.sh reads),
 # PSR_VENDOR_LOCAL (the output dir of --psr), PSR_SHA256 (the pinned sha256 of
-# the PSR file, for tests with a made-up package).
+# the PSR file, for tests with a made-up package), TSX_UNZIP (unzip or
+# busybox: the zip tool, for tests. The default is unzip, else the unzip
+# applet of busybox).
+#
+# Tools: unzip (Info-ZIP, or the unzip applet of busybox), gzip, cpio, od,
+# curl or wget, and with --psr also debugfs (e2fsprogs).
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 log() { echo "vendor-fetch: $*" >&2; }
@@ -155,7 +160,19 @@ if [ "$MODE" != force ] && do_check > /dev/null 2>&1; then
 	exit 0
 fi
 
-ensure_tool unzip
+# The zip tool: Info-ZIP unzip, else the unzip applet of busybox (for
+# example on a Debian host without the unzip package). Both know -l and -p.
+UZ=${TSX_UNZIP:-}
+if [ -z "$UZ" ]; then
+	if command -v unzip > /dev/null 2>&1; then UZ=unzip
+	elif busybox --list 2>/dev/null | grep -x unzip >/dev/null; then UZ=busybox
+	else ensure_tool unzip; UZ=unzip
+	fi
+fi
+uz() {
+	if [ "$UZ" = busybox ]; then busybox unzip "$@"; else unzip "$@"; fi
+}
+[ "$UZ" = busybox ] && log "no unzip on this host: using the unzip applet of busybox"
 ensure_tool gzip
 ensure_tool cpio
 ensure_tool od
@@ -188,18 +205,18 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/vendor-fetch.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
 zip_entry() { # zip_entry ZIPFILE GREP_PATTERN -> first matching entry name
-	unzip -l "$1" | grep -E "$2" | awk '{print $NF}' | head -n 1
+	uz -l "$1" | grep -E "$2" | awk '{print $NF}' | head -n 1
 }
 
 TSX_NAME=$(zip_entry "$PUF_PATH" 'tsx-.*\.zip$')
 [ -n "$TSX_NAME" ] || die "no tsx-*.zip inside $PUF_PATH"
 log "extracting $TSX_NAME"
-unzip -p "$PUF_PATH" "$TSX_NAME" > "$WORK/tsx.zip"
+uz -p "$PUF_PATH" "$TSX_NAME" > "$WORK/tsx.zip"
 
 IMAGE_NAME=$(zip_entry "$WORK/tsx.zip" 'image_.*\.zip$')
 [ -n "$IMAGE_NAME" ] || die "no image_*.zip inside $TSX_NAME"
 if [ "$WHAT" = psr ]; then log "extracting $IMAGE_NAME"; else log "extracting $IMAGE_NAME (not system.img)"; fi
-unzip -p "$WORK/tsx.zip" "$IMAGE_NAME" > "$WORK/image.zip"
+uz -p "$WORK/tsx.zip" "$IMAGE_NAME" > "$WORK/image.zip"
 rm -f "$WORK/tsx.zip"
 
 if [ "$WHAT" = psr ]; then
@@ -210,7 +227,7 @@ if [ "$WHAT" = psr ]; then
 	for d in /sbin/debugfs /usr/sbin/debugfs; do [ -n "$DEBUGFS" ] || { [ -x "$d" ] && DEBUGFS=$d; }; done
 	if [ -z "$DEBUGFS" ]; then ensure_tool debugfs e2fsprogs-extra; DEBUGFS=$(command -v debugfs); fi
 	log "extracting system.img (650 MB, temporary) to read /bin/$PSR_NAME"
-	unzip -p "$WORK/image.zip" system.img > "$WORK/system.img"
+	uz -p "$WORK/image.zip" system.img > "$WORK/system.img"
 	rm -f "$WORK/image.zip"
 	# ext4 superblock magic 0xEF53 at byte 1080 (little endian: 53 ef)
 	[ "$(od -An -tx1 -j 1080 -N2 "$WORK/system.img" | tr -d ' \n')" = "53ef" ] \
@@ -226,7 +243,7 @@ if [ "$WHAT" = psr ]; then
 	exit 0
 fi
 
-unzip -p "$WORK/image.zip" boot.img > "$WORK/boot.img"
+uz -p "$WORK/image.zip" boot.img > "$WORK/boot.img"
 rm -f "$WORK/image.zip"
 [ "$(head -c 8 "$WORK/boot.img")" = "ANDROID!" ] || die "boot.img is not an Android boot image (bad magic)"
 

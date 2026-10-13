@@ -5,14 +5,18 @@
 # system.img with a made-up /bin/PSR-CSR8811.psr. It never uses the real
 # file or the real package, and it needs no network: the made-up package is
 # already in the download cache, with its sha256 pinned through TFA_PUF_SHA256.
-# Needs: mke2fs and debugfs (e2fsprogs), unzip, python3 (to make the zips).
+# Needs: mke2fs and debugfs (e2fsprogs), python3 (to make the zips), and
+# unzip or the unzip applet of busybox. With both, it runs the package once
+# more with the busybox applet (TSX_UNZIP=busybox).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)   # .../rootfs
 FETCH=$HERE/vendor-fetch.sh
 PATH=$PATH:/sbin:/usr/sbin
-for t in mke2fs debugfs unzip python3; do
+for t in mke2fs debugfs python3; do
 	command -v "$t" >/dev/null 2>&1 || { echo "SKIPPED test-vendor-fetch-psr: no $t on this host"; exit 0; }
 done
+BB_UNZIP=; busybox --list 2>/dev/null | grep -x unzip >/dev/null && BB_UNZIP=1
+command -v unzip >/dev/null 2>&1 || [ -n "$BB_UNZIP" ] || { echo "SKIPPED test-vendor-fetch-psr: no unzip and no busybox unzip on this host"; exit 0; }
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 N=0 F=0
 ok() { echo "  ok: $*"; N=$((N+1)); }
@@ -69,6 +73,18 @@ out=$(PSR_SHA256=$PIN fetch "$W/good.puf" --psr 2>&1); rc=$?
 [ $rc = 0 ] && echo "$out" | grep -q "nothing to do" && ok "a second run does nothing" || bad "re-run: rc $rc, $out"
 out=$(PSR_SHA256=0000 fetch "$W/good.puf" --check --psr 2>&1); rc=$?
 [ $rc = 1 ] && echo "$out" | grep -q "MISMATCH PSR-CSR8811.psr" && ok "--check with another pin: MISMATCH, exit 1" || bad "--check mismatch: rc $rc, $out"
+
+echo "== the unzip applet of busybox (a host without the unzip package)"
+if [ -n "$BB_UNZIP" ]; then
+	rm -rf "$W/out"
+	out=$(TSX_UNZIP=busybox PSR_SHA256=$PIN fetch "$W/good.puf" --psr --force 2>&1); rc=$?
+	[ $rc = 0 ] && cmp -s "$W/out/PSR-CSR8811.psr" "$W/sys/bin/PSR-CSR8811.psr" \
+		&& echo "$out" | grep -q "using the unzip applet of busybox" \
+		&& ok "busybox unzip: the same file, byte for byte" || bad "busybox unzip: rc $rc, $out"
+	[ -z "$(ls -A "$W/tmp")" ] && ok "busybox unzip: the temporary directory is empty again" || bad "busybox unzip: left in TMPDIR: $(ls -A "$W/tmp")"
+else
+	echo "  skip: this busybox has no unzip applet"
+fi
 
 echo "== the pin does not match the file in the package"
 rm -rf "$W/out"

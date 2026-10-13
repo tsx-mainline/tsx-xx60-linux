@@ -14,7 +14,7 @@ Two install methods exist:
 Before you start, make sure these items are ready:
 
 - The panel runs stock Android and the host can reach it over the network.
-- The host has `sshpass`, `ssh`, `python3`, `curl`, `sha256sum` and `ip`. The `.puf` download also needs `unzip`, and the PSR download also needs `debugfs` (e2fsprogs).
+- The host has `sshpass`, `ssh`, `python3`, `curl`, `sha256sum` and `ip`. The `.puf` download also needs `unzip` (or `busybox` with its `unzip` applet), and the PSR download also needs `debugfs` (e2fsprogs).
 - The panel can connect back to the host on TCP ports 8079 and 8081.
 - A root shell over the Crestron sshd works (see "Root over the Crestron sshd").
 - You have a payload (see "Get the payload").
@@ -320,7 +320,7 @@ The TFA9890 tuning files (`.cnt` containers) are Crestron and NXP data. They are
 
 1. The installed mainline root: `/usr/local/share/tsx/tfa9890/<variant>/stereo.cnt` on eMMC `p8`. This also works with `--wipe-data`.
 2. The stock Android boot image in eMMC `p7`. Its ramdisk has the files in `jabil/tfa9890/`. The rescue reads it before it writes the mainline boot image.
-3. The `.puf` download (fallback). The host runs `rootfs/vendor-fetch.sh`, which downloads the public Crestron firmware package (357 MB, cached) and extracts the files. The host pushes them to the rescue. This needs `unzip` on the host.
+3. The `.puf` download (fallback). The host runs `rootfs/vendor-fetch.sh`, which downloads the public Crestron firmware package (357 MB, cached) and extracts the files. The host pushes them to the rescue. This needs `unzip` on the host, or a `busybox` with the `unzip` applet.
 
 With sources 1 and 2 the files never leave the panel. The installer prints `TFA9890 source used: ...`. The panel keeps a record in `/usr/local/share/tsx/tfa9890/SOURCE` with the source, the firmware and the sha256 of each file.
 
@@ -345,7 +345,7 @@ The CSR8811 chip needs the file `PSR-CSR8811.psr` (ROM patches and radio setup) 
 
 1. The installed mainline root: `/usr/local/share/tsx/csr8811/PSR-CSR8811.psr` on eMMC `p8`.
 2. The system partition of stock Android: `bin/PSR-CSR8811.psr` in the same eMMC region (see "The old root file system" below).
-3. The `.puf` download (fallback). The host runs `rootfs/vendor-fetch.sh --psr`. It uses the same download and cache as the DSP files, extracts `/bin/PSR-CSR8811.psr` from `system.img` with `debugfs` (no mount, no root) and checks the pinned sha256. The host pushes the file to the rescue. This needs `unzip` and `debugfs` on the host and about 1.1 GB of free temporary space for a short time.
+3. The `.puf` download (fallback). The host runs `rootfs/vendor-fetch.sh --psr`. It uses the same download and cache as the DSP files, extracts `/bin/PSR-CSR8811.psr` from `system.img` with `debugfs` (no mount, no root) and checks the pinned sha256. The host pushes the file to the rescue. This needs `unzip` (or the `unzip` applet of `busybox`) and `debugfs` on the host and about 1.1 GB of free temporary space for a short time.
 
 With sources 1 and 2 the file never leaves the panel. The installer accepts the pinned sha256, or another sha256 with a warning if the file is sane PSR text. It prints `Bluetooth PSR source used: ...` and writes the file and a `SOURCE` record to `/usr/local/share/tsx/csr8811/` on the new root.
 
