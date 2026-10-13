@@ -192,6 +192,7 @@ The ESPHome device has these entities. The exact entity IDs depend on your Home 
 | eMMC life used A, eMMC life used B | Sensors (%), diagnostic | The upper bound of the eMMC wear band, read every hour. Unknown if the eMMC does not report it. |
 | eMMC end of life | Sensor (text), diagnostic | `normal`, `warning` or `urgent`. |
 | Verbose boot | Switch | On shows kernel and boot text on the LCD instead of the splash, from the next boot. Stored in `panel.conf` (`BOOT_VERBOSE`). |
+| Dark mode | Switch | On makes the kiosk browser use the dark color scheme. Home Assistant then shows its dark theme when the theme of the user profile is "Auto". A change restarts the kiosk browser. Stored in `panel.conf` (`KIOSK_DARK`). |
 | Update | Update entity | Status and Install action of `tsx-autoupdate` (see "Update entity"). |
 | Restart required | Binary sensor | On while an installed update waits for a restart. |
 | Update mode | Select: `auto`, `manual` | Sets when the panel installs updates. Stored in `panel.conf` (`UPDATE_MODE`). |
@@ -496,6 +497,7 @@ MQTT entities:
 | Restart | Button | Restarts the panel. |
 | Update mode | Select | As on the ESPHome device. |
 | Automatic restart | Switch | As on the ESPHome device. |
+| Dark mode | Switch | As on the ESPHome device. |
 
 The bridge uses a last-will-and-testament availability topic. It publishes its discovery payloads again whenever the MQTT integration of Home Assistant restarts.
 

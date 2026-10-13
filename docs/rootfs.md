@@ -458,6 +458,7 @@ part. It also checks `tsx-emmc-state` (fake sysfs, `TSX_EMMC_DIR`) and `tsx-fstr
 | `OVERLAY_GESTURE` | `fivefinger` | The gesture that opens the overlay. `off` turns it off. |
 | `KIOSK_GPU` | `browser` | GPU path. See "GPU path". |
 | `KIOSK_REDUCED_MOTION` | 1 | Tells pages `prefers-reduced-motion` |
+| `KIOSK_DARK` | `off` | `on` tells pages to use the dark color scheme. See "Dark mode". |
 | `KIOSK_DEVTOOLS` | 1 | Chromium DevTools on the loopback of the panel |
 | `KIOSK_PROFILE` | `/var/lib/kiosk/chromium` | The persistent browser profile |
 | `KIOSK_CACHE_DIR` | `/var/cache/kiosk` | HTTP and script cache, on the root filesystem |
@@ -622,6 +623,13 @@ If the picture is black or garbled, set `KIOSK_GPU=auto` in
   `read -t` on a FIFO, so the wait starts no process.
 - **Reduced motion.** `KIOSK_REDUCED_MOTION=1` cuts the CPU use of an animated Home Assistant login
   page from about 47% to about 3% of all cores under software rendering.
+- **Dark mode.** `KIOSK_DARK=on` adds `--force-dark-mode` and `--blink-settings=preferredColorScheme=0`
+  to the browser flags, before `KIOSK_EXTRA_FLAGS`. Home Assistant then shows its dark theme when the
+  theme of the user profile is "Auto", and the page starts on the dark loading screen (`#111111`)
+  and not on a white one. `panel.conf` has the same key, and the setup page and the Home Assistant
+  switch "Dark mode" change it. The browser restarts when the value changes. A panel that got
+  the two flags in `KIOSK_EXTRA_FLAGS` by hand can use `KIOSK_DARK=on` instead. See
+  `docs/setup.md` of tsx-linux-common, "Dark mode of the browser".
 - **Boot splash hand-off** (sway session). The compositor background is the boot splash, and the
   browser window stays transparent until the page has painted (`tsx-kiosk-reveal`, at most
   `KIOSK_REVEAL_TIMEOUT` s). `KIOSK_SPLASH=off` turns it off. See [boot.md](boot.md).
