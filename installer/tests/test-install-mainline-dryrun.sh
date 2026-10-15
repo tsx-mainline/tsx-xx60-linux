@@ -140,6 +140,12 @@ echo "$OUT" | grep -qiE "http|wget" && bad "the reinstall plan still names HTTP 
 OUT=$(TSX_SSH_CIPHERS=aes128-ctr TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run 2>&1)
 echo "$OUT" | grep -q "ssh ciphers for the image streams: aes128-ctr$" && ok "TSX_SSH_CIPHERS sets the cipher list" || bad "TSX_SSH_CIPHERS ignored"
 
+echo "== 11. resume: the same --yes command again while the rescue is up"
+OUT=$(TSX_PANEL_KIND=rescue "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run 2>&1) && ok "resume with --yes and no --config: exits 0" || bad "resume refused: $OUT"
+echo "$OUT" | grep -q "the rescue takes this host's ssh key from the panel's /data" && ok "resume: the key login of the kept /data counts as the root login" || bad "no root login note: $OUT"
+OUT=$(TSX_RESCUE_PW=k7m2x9pq4r TSX_PANEL_KIND=rescue "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run 2>&1) && bad "resume with a one-time rescue password and no login accepted" || ok "resume with a one-time rescue password still needs a root login"
+OUT=$(TSX_PANEL_KIND=rescue "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --wipe-data --dry-run 2>&1) && bad "resume with --wipe-data and no login accepted" || ok "resume with --wipe-data still needs a root login"
+
 echo "== $N ok, $F failed"
 [ $F = 0 ] && echo PASS test-install-mainline-dryrun || echo FAIL test-install-mainline-dryrun
 exit $F

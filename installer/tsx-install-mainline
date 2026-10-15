@@ -250,7 +250,17 @@ fi
 
 # --yes with no --config has no prompts. Only a reinstall of a mainline panel can
 # still get a root login: from the panel.conf of that panel (checked below).
-if [ "$ROOT_LOGIN_CHECK" = later ] && [ "$YES" = 1 ] && [ "$KIND" != mainline ]; then root_login_stop; fi
+# A resume in the rescue counts too, if the rescue took the ssh key of this
+# host with no password: the rescue reads the login from the panel's /data
+# (docs/recovery.md "Rescue login"), and the install keeps /data. So the
+# same command works again after a stop.
+if [ "$ROOT_LOGIN_CHECK" = later ] && [ "$YES" = 1 ] && [ "$KIND" != mainline ]; then
+	if [ "$KIND" = rescue ] && [ "$KEEP_DATA" = 1 ] && [ -z "$RPW" ]; then
+		log "== root login: the rescue takes this host's ssh key from the panel's /data, and the install keeps /data: the panel keeps that login"
+		ROOT_LOGIN_CHECK=done
+	else root_login_stop
+	fi
+fi
 
 if [ "$DRYRUN" = 1 ] && [ "$KIND" = mainline ]; then
 	log "[dry-run] 1: skipped: the kiosk's own ssh (root/\$TSX_MAINLINE_PW) replaces Android root"
