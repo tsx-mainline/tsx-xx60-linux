@@ -126,6 +126,20 @@ echo console > "$W/profile-file"
 eq=$(fake_profile "$W/profile-file"); [ "$eq" = console ] && ok "profile file says console: the line shows console" || bad "profile read: $eq"
 eq=$(fake_profile "$W/no-such-file"); [ "$eq" = ha ] && ok "no profile file: ha" || bad "no-file read: $eq"
 
+echo "== 10. push only: the panel opens no connection to this host"
+OUT=$(TSX_PANEL_KIND=android "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --config "$W/login.conf" --dry-run 2>&1)
+echo "$OUT" | grep -q "network: push only. This host opens every connection (ssh), the panel opens none" && ok "first install: the plan says push only" || bad "no push-only line: $OUT"
+echo "$OUT" | grep -q "dry-run\] 2: .*over the root shell (steps/rootsh --put: raw tty, sha256 checked)" && ok "first install: the arm payload goes over the root shell" || bad "arm payload not over rootsh --put"
+echo "$OUT" | grep -q "one tar stream over ssh (tsx_push_dir" && ok "first install: the bundle is one tar stream over ssh" || bad "bundle not pushed over ssh"
+echo "$OUT" | grep -q "run /tmp/b --yes --root-from - < lts/root.img over ssh" && ok "first install: root.img streams over ssh" || bad "root.img not streamed"
+echo "$OUT" | grep -qiE "http|wget" && bad "the first-install plan still names HTTP or wget" || ok "first install: no HTTP, no wget"
+OUT=$(TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run 2>&1)
+echo "$OUT" | grep -q "network: push only" && ok "reinstall: the plan says push only" || bad "reinstall: no push-only line"
+echo "$OUT" | grep -q "run /tmp/b --yes --keep-data --root-from - < lts/root.img over ssh" && ok "reinstall: root.img streams over ssh, /data kept" || bad "reinstall: root.img not streamed: $OUT"
+echo "$OUT" | grep -qiE "http|wget" && bad "the reinstall plan still names HTTP or wget" || ok "reinstall: no HTTP, no wget"
+OUT=$(TSX_SSH_CIPHERS=aes128-ctr TSX_PANEL_KIND=mainline "$DRIVER" 10.0.0.1 --payload "$W/good" --kernel lts --yes --dry-run 2>&1)
+echo "$OUT" | grep -q "ssh ciphers for the image streams: aes128-ctr$" && ok "TSX_SSH_CIPHERS sets the cipher list" || bad "TSX_SSH_CIPHERS ignored"
+
 echo "== $N ok, $F failed"
 [ $F = 0 ] && echo PASS test-install-mainline-dryrun || echo FAIL test-install-mainline-dryrun
 exit $F

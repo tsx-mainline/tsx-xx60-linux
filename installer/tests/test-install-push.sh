@@ -1,0 +1,159 @@
+#!/bin/bash
+# Host test: the push path of the installer (docs/install.md "Network
+# requirements"). The host opens every connection and sends every file over
+# it. The panel opens no connection to the host. The test needs no docker, no
+# root and no panel. Stand-ins replace ssh:
+#   - a fake rescue: "ssh ... CMD" runs CMD locally under busybox sh (the shell
+#     of the rescue), with stdin passed through. FAKE_SSH_CUT=N passes only the
+#     first N bytes of stdin (a lost connection). FAKE_SSH_FLIP=N changes byte
+#     N (a corrupt stream).
+#   - a fake Crestron root shell for steps/rootsh: an interactive bash on a
+#     real pty (python3 pty.spawn), like "ssh -tt admin@panel rootsh".
+# Checks:
+#   1. tsx_write_verify streams an image from stdin onto a "device" file and
+#      reads it back. The host compares the sha256 (tsx_write_result_check).
+#   2. a short stream (lost connection) and a corrupt stream fail the readback
+#   3. resume: the same push again after a short stream writes the full image
+#   4. progress lines (MiB, percent) while the stream runs
+#   5. tsx_push_dir: one tar stream, sha256 check in the "rescue", DEST is
+#      replaced only after a good check
+#   6. steps/rootsh --put: every byte value passes the pty unchanged, sha256
+#      checked. A root shell that cannot go raw stops with a message
+#   7. the installer has no HTTP path any more
+set -uo pipefail
+HERE=$(cd "$(dirname "$0")/.." && pwd)
+LIB="$HERE/lib/tsx-rescue.sh"
+for t in busybox python3 sha256sum tar; do
+	command -v "$t" >/dev/null 2>&1 || { echo "SKIPPED test-install-push: no $t on this host"; exit 0; }
+done
+W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
+N=0 F=0
+ok() { echo "  ok: $*"; N=$((N+1)); }
+bad() { echo "  FAIL: $*"; F=$((F+1)); }
+. "$LIB"   # tsx_push_dir, tsx_write_result_check (host side)
+
+# ---- the fake rescue: ssh [options] [user@]host CMD -> busybox sh -c CMD ----
+mkdir -p "$W/bin"
+cat > "$W/bin/ssh" <<'EOF'
+#!/bin/bash
+while [ $# -gt 0 ]; do case "$1" in
+	-o|-i|-p|-c|-e|-l) shift 2;; -*) shift;; *) break;; esac; done
+shift   # [user@]host
+if [ -n "${FAKE_SSH_CUT:-}" ]; then
+	head -c "$FAKE_SSH_CUT" | busybox sh -c "$*"
+elif [ -n "${FAKE_SSH_FLIP:-}" ]; then
+	python3 -I -c 'import sys; d=bytearray(sys.stdin.buffer.read()); n=int(sys.argv[1]); d[n]^=0xff; sys.stdout.buffer.write(d)' "$FAKE_SSH_FLIP" | busybox sh -c "$*"
+else
+	exec busybox sh -c "$*"
+fi
+EOF
+chmod +x "$W/bin/ssh"
+export PATH="$W/bin:$PATH" TSX_PROGRESS_FILE="$W/progress" TSX_RUN="$W/run"
+mkdir -p "$W/run"
+
+MIB=1048576
+head -c $((6 * MIB)) /dev/urandom > "$W/root.img"
+SHA=$(sha256sum < "$W/root.img" | cut -d' ' -f1)
+BYTES=$(stat -c %s "$W/root.img")
+fresh_dev() { head -c $((8 * MIB)) /dev/zero > "$W/p8"; }
+push_root() {  # the host side of step 4: stream the image into the rescue
+	ssh -o Ciphers=x root@rescue ". '$LIB'; tsx_write_verify '$W/p8' - $BYTES $SHA root 'eMMC root'" < "$W/root.img" 2>"$W/push.err"
+}
+
+echo "== 1. a full stream: written, read back, the host compares the sha256"
+fresh_dev
+OUT=$(push_root); rc=$?
+[ $rc = 0 ] && ok "tsx_write_verify returns 0" || bad "rc $rc: $OUT $(cat "$W/push.err")"
+cmp -s -n "$BYTES" "$W/root.img" "$W/p8" && ok "the device holds the image" || bad "device differs from the image"
+tsx_write_result_check "$OUT" root "$SHA" && ok "host check: WRITE-RESULT root sha256 = the payload" || bad "host check failed: $OUT"
+tsx_write_result_check "$OUT" root "0000$SHA" && bad "host check accepts a wrong sha256" || ok "host check refuses another sha256"
+tsx_write_result_check "$OUT" boot "$SHA" && bad "host check accepts a missing boot line" || ok "host check needs the line of the right image"
+
+echo "== 2. a short stream (lost connection) and a corrupt stream fail"
+fresh_dev
+OUT=$(FAKE_SSH_CUT=$((BYTES / 2)) push_root); rc=$?
+[ $rc != 0 ] && ok "short stream: rc $rc" || bad "short stream accepted"
+case "$OUT" in *"ok=0"*) ok "short stream: WRITE-RESULT ok=0";; *) bad "short stream: $OUT";; esac
+tsx_write_result_check "$OUT" root "$SHA" && bad "host check accepts the short stream" || ok "host check refuses the short stream"
+fresh_dev
+OUT=$(FAKE_SSH_FLIP=123457 push_root); rc=$?
+[ $rc != 0 ] && ok "corrupt stream: rc $rc" || bad "corrupt stream accepted"
+tsx_write_result_check "$OUT" root "$SHA" && bad "host check accepts the corrupt stream" || ok "host check refuses the corrupt stream"
+
+echo "== 3. resume: the same push again after a short stream"
+fresh_dev
+FAKE_SSH_CUT=$((BYTES / 3)) push_root >/dev/null
+OUT=$(push_root); rc=$?
+[ $rc = 0 ] && tsx_write_result_check "$OUT" root "$SHA" && ok "the second push writes and verifies the full image" || bad "resume failed: $OUT"
+
+echo "== 4. progress lines while the stream runs"
+fresh_dev
+OUT=$( (for i in 0 1 2 3 4 5; do dd if="$W/root.img" bs=$MIB skip=$i count=1 2>/dev/null; sleep 0.7; done) \
+	| TSX_PR_DD_TICK=1 ssh root@rescue ". '$LIB'; tsx_write_verify '$W/p8' - $BYTES $SHA root 'eMMC root'" 2>&1)
+case "$OUT" in *"eMMC root: "*"/6 MiB ("*"%)"*) ok "progress: $(printf '%s\n' "$OUT" | grep -m1 'eMMC root: ' | sed 's/^ *//')";; *) bad "no progress line: $OUT";; esac
+tsx_write_result_check "$OUT" root "$SHA" && ok "the slow stream verifies" || bad "slow stream: $OUT"
+[ -s "$W/progress" ] && grep -q ' eMMC root$' "$W/progress" && ok "the rescue screen file names the image" || bad "progress file: $(cat "$W/progress" 2>/dev/null)"
+
+echo "== 5. tsx_push_dir: one tar stream, sha256 check, replace only after a good check"
+mkdir -p "$W/src/sub" "$W/r"
+echo one > "$W/src/a.txt"; head -c 300000 /dev/urandom > "$W/src/sub/b.bin"
+(cd "$W/src" && find . -type f ! -name SHA256SUMS | sort | xargs sha256sum > SHA256SUMS)
+OUT=$(tsx_push_dir "$W/src" "$W/r/b" ssh root@rescue 2>&1); rc=$?
+[ $rc = 0 ] && ok "push rc 0 ($OUT)" || bad "push failed: $OUT"
+cmp -s "$W/src/sub/b.bin" "$W/r/b/sub/b.bin" && cmp -s "$W/src/a.txt" "$W/r/b/a.txt" && ok "the files arrived" || bad "files differ"
+cp -r "$W/src" "$W/src2"; echo changed > "$W/src2/a.txt"   # SHA256SUMS no longer matches
+OUT=$(tsx_push_dir "$W/src2" "$W/r/b" ssh root@rescue 2>&1); rc=$?
+[ $rc != 0 ] && ok "a sha256 mismatch fails the push (rc $rc)" || bad "mismatch accepted: $OUT"
+case "$OUT" in *"a.txt: FAILED"*"sha256 check FAILED"*) ok "the output names the bad file";; *) bad "output: $OUT";; esac
+[ "$(cat "$W/r/b/a.txt")" = one ] && ok "DEST keeps the last good copy" || bad "DEST changed after a failed check"
+mkdir -p "$W/r/b/tfa/settings_x" "$W/r/b/psr"; echo old-set > "$W/r/b/tfa/settings_x/stereo.cnt"; echo old-psr > "$W/r/b/psr/SOURCE"; echo stale > "$W/r/b/kiosk-url.txt"
+OUT=$(tsx_push_dir "$W/src" "$W/r/b" --keep "tfa psr ledstock" ssh root@rescue 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(cat "$W/r/b/tfa/settings_x/stereo.cnt" 2>/dev/null)" = old-set ] && [ -f "$W/r/b/psr/SOURCE" ] \
+	&& ok "--keep: a resume keeps tfa and psr of the earlier attempt" || bad "--keep lost the earlier sets: $OUT"
+[ ! -e "$W/r/b/kiosk-url.txt" ] && ok "--keep: other files of the old DEST are gone (no stale kiosk-url.txt)" || bad "a stale file survived"
+case "$OUT" in *"kept $W/r/b/tfa from an earlier attempt"*) ok "--keep: the output names what it kept";; *) bad "keep output: $OUT";; esac
+rm -f "$W/src2/SHA256SUMS"
+tsx_push_dir "$W/src2" "$W/r/b" ssh root@rescue >/dev/null 2>&1 && bad "a directory with no SHA256SUMS was pushed" || ok "no SHA256SUMS: refused"
+
+echo "== 6. steps/rootsh --put through a real pty (the Crestron root shell)"
+mkdir -p "$W/pty/bin" "$W/pty/dst"
+cat > "$W/pty/bin/sshpass" <<'EOF'
+#!/bin/bash
+while [ $# -gt 0 ] && [ "$1" != ssh ]; do shift; done; shift; exec "$(dirname "$0")/ssh" "$@"
+EOF
+cat > "$W/pty/bin/ssh" <<'EOF'
+#!/bin/bash
+# "ssh -tt admin@panel rootsh": an interactive root bash on a pty
+exec python3 -I -c 'import pty; pty.spawn(["bash", "--norc", "--noprofile", "-i"])'
+EOF
+chmod +x "$W/pty/bin/"*
+python3 -I -c 'import sys; sys.stdout.buffer.write(bytes(range(256)) * 64 + b"\n~.\n~?\r\n\x03\x04\x11\x13\x1a\x7f")' > "$W/put.bin"
+head -c $((2 * MIB)) /dev/urandom >> "$W/put.bin"
+OUT=$(PATH="$W/pty/bin:$PATH" TSX_ADMIN_PW=x "$HERE/steps/rootsh" --put fakepanel "$W/put.bin" "$W/pty/dst/put.bin" 2>&1); rc=$?
+[ $rc = 0 ] && ok "rootsh --put rc 0" || bad "rootsh --put rc $rc: $OUT"
+cmp -s "$W/put.bin" "$W/pty/dst/put.bin" && ok "every byte value passed the pty unchanged (^C, ^D, ^S, DEL, CR, ~.)" || bad "the copy differs"
+case "$OUT" in *"verified ("*"sha256 "*) ok "the copy is sha256 checked";; *) bad "no verify line: $OUT";; esac
+REALBB=$(command -v busybox)
+cat > "$W/pty/bin/busybox" <<EOF
+#!/bin/bash
+# a root shell whose tty cannot go raw
+[ "\$1" = stty ] && exit 1; exec "$REALBB" "\$@"
+EOF
+chmod +x "$W/pty/bin/busybox"
+sed -i 's|exec python3|export PATH='"$W/pty/bin"':$PATH; exec python3|' "$W/pty/bin/ssh"
+OUT=$(PATH="$W/pty/bin:$PATH" TSX_ADMIN_PW=x TSX_PUT_READY_S=6 timeout 60 "$HERE/steps/rootsh" --put fakepanel "$W/put.bin" "$W/pty/dst/put2.bin" 2>&1); rc=$?
+[ $rc = 1 ] && ok "no raw mode: rc 1" || bad "no raw mode: rc $rc: $OUT"
+case "$OUT" in *"did not get ready"*) ok "no raw mode: the message says so, and no byte was sent";; *) bad "no raw mode: $OUT";; esac
+[ ! -s "$W/pty/dst/put2.bin" ] && ok "nothing written without the ready marker" || bad "bytes were written"
+"$HERE/steps/rootsh" --put fakepanel "$W/put.bin" '/data/x;reboot' >/dev/null 2>&1 && bad "a DEST with shell characters was accepted" || ok "a DEST with shell characters is refused"
+
+echo "== 7. no HTTP path is left"
+grep -nE 'http\.server|wget|BASEURL|root-url' "$HERE/tsx-install-mainline" && bad "tsx-install-mainline still serves or fetches over HTTP" || ok "tsx-install-mainline: no HTTP server, no wget"
+grep -nE 'wget|ROOT_URL|root-url' "$HERE/steps/tsx-rescue-install" && bad "tsx-rescue-install still downloads" || ok "tsx-rescue-install: no download"
+grep -q -- '--root-from - 2>&1" < "\$FLAVOR_DIR/root.img"' "$HERE/tsx-install-mainline" && ok "step 4 streams root.img over ssh" || bad "step 4 does not stream root.img"
+grep -q 'tsx_write_result_check "\$RS_OUT" root' "$HERE/tsx-install-mainline" && ok "the host compares the root sha256" || bad "no host compare of the root sha256"
+for f in "$HERE/steps/tsx-rescue-install" "$LIB"; do busybox sh -n "$f" && ok "busybox sh -n $(basename "$f")" || bad "busybox sh -n $(basename "$f")"; done
+
+echo "== $N ok, $F failed"
+[ $F = 0 ] && echo PASS test-install-push || echo FAIL test-install-push
+exit $F

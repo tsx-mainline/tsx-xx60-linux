@@ -10,14 +10,84 @@
 # session never reads it.
 #   steps/rootsh HOST 'command ...'   (user $TSX_ADMIN_USER, default admin.
 #                                       Password: required, $TSX_ADMIN_PW)
+#
+#   steps/rootsh --put HOST FILE DEST
+# copies the host file FILE to DEST on the panel over the same root shell. The
+# host opens the connection, so the panel needs no connection to the host
+# (docs/install.md "Network requirements"). The remote root shell first sets
+# its tty to raw mode with no echo and prints a ready marker. Only then does
+# the script send the bytes of FILE, and `busybox head -c SIZE` writes them to
+# DEST. Raw mode passes every byte value unchanged. The ready marker matters:
+# bytes that reach the tty before the raw mode can be changed or lost. After
+# the copy, the script compares the sha256 of DEST on the panel with FILE. It
+# prints progress lines (MiB, percent) to stderr and returns 0 only on a match.
+# Test hooks: TSX_PUT_READY_S (default 60) and TSX_PUT_DONE_S (default 120 +
+# 1 s per MiB) are the time limits of the two waits.
 set -uo pipefail
-H=${1:?HOST}; C=${2:?command}
 U=${TSX_ADMIN_USER:-admin}
 PW=${TSX_ADMIN_PW:?set TSX_ADMIN_PW to the Crestron console admin password}
+SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR)
+
+if [ "${1:-}" = --put ]; then
+	H=${2:?HOST}; F=${3:?FILE}; D=${4:?DEST}
+	[ -f "$F" ] || { echo "rootsh --put: no file $F" >&2; exit 2; }
+	case "$D" in *[!A-Za-z0-9/._-]*|'') echo "rootsh --put: DEST must be a plain path: $D" >&2; exit 2;; esac
+	SIZE=$(stat -c %s "$F"); SHA=$(sha256sum < "$F" | cut -d' ' -f1)
+	MIB=$(( (SIZE + 1048575) / 1048576 ))
+	say() { echo "rootsh --put: $*" >&2; }
+	# -e none: no ssh escape character. With a tty, "~." after a newline in the
+	# data would close the connection.
+	coproc RS { SSHPASS=$PW exec sshpass -e ssh -tt -e none "${SSH_OPTS[@]}" "$U@$H" rootsh 2>/dev/null; }
+	RPID=$RS_PID
+	# Plain copies of the coproc pipes: bash closes the coproc fds in subshells,
+	# and the copy below runs in a background job.
+	exec {RIN}>&"${RS[1]}" {ROUT}<&"${RS[0]}"
+	fail() { say "$*"; kill "$RPID" 2>/dev/null; wait "$RPID" 2>/dev/null; exit 1; }
+	# wait_marker NAME SECONDS: read the session output until a line __RS_NAME...__
+	# and print that line. The tty echo of the command line shows the format
+	# string, not the marker, so it never matches.
+	wait_marker() {
+		local t0=$SECONDS l
+		while [ $((SECONDS - t0)) -lt "$2" ]; do
+			IFS= read -r -t 5 l <&"$ROUT" || { kill -0 "$RPID" 2>/dev/null && continue; return 1; }
+			l=${l//$'\r'/}
+			case "$l" in "__RS_$1"*__) echo "$l"; return 0;; esac
+		done
+		return 1
+	}
+	printf '%s\n' "busybox stty raw -echo && printf '\\n__RS_%s__\\n' READY && busybox head -c $SIZE > $D; rc=\$?; busybox stty sane; printf '\\n__RS_PUT=%d__\\n' \$rc" >&"$RIN" \
+		|| fail "the ssh session to $H did not start"
+	wait_marker READY "${TSX_PUT_READY_S:-60}" >/dev/null || fail "the root shell on $H did not get ready (no raw mode?)"
+	say "copying $(basename "$F") ($MIB MiB) to $H:$D"
+	cat < "$F" >&"$RIN" &
+	CP=$!
+	t0=$SECONDS; last=$SECONDS
+	while kill -0 "$CP" 2>/dev/null; do
+		sleep 1
+		if [ $((SECONDS - last)) -ge 5 ]; then
+			last=$SECONDS
+			pos=$(sed -n 's/^pos:[[:space:]]*//p' "/proc/$CP/fdinfo/0" 2>/dev/null) || pos=
+			[ -n "$pos" ] && say "$((pos / 1048576))/$MIB MiB ($((pos * 100 / (SIZE > 0 ? SIZE : 1)))%), $((SECONDS - t0)) s"
+		fi
+	done
+	wait "$CP" || fail "sending $F to $H failed"
+	RES=$(wait_marker PUT= "${TSX_PUT_DONE_S:-$((120 + MIB))}") || fail "no end marker from $H after the copy (the session stopped?)"
+	printf 'exit\nexit\n' >&"$RIN" 2>/dev/null
+	exec {RIN}>&- {ROUT}<&-
+	timeout 15 tail --pid="$RPID" -f /dev/null 2>/dev/null || kill "$RPID" 2>/dev/null
+	wait "$RPID" 2>/dev/null
+	[ "$RES" = "__RS_PUT=0__" ] || fail "writing $D on $H failed ($RES)"
+	GOT=$("$0" "$H" "busybox sha256sum $D" 2>/dev/null | grep -oE '^[0-9a-f]{64}' | tail -n 1)
+	[ "$GOT" = "$SHA" ] || fail "$H:$D has sha256 ${GOT:-none}, want $SHA"
+	say "$H:$D verified ($SIZE bytes, sha256 ${SHA:0:16}..., $((SECONDS - t0)) s)"
+	exit 0
+fi
+
+H=${1:?HOST}; C=${2:?command}
 # The command output sits between markers that printf %s builds. So the script
 # drops the tty echo of the input (it shows the format strings, not the markers)
 # and the bash prompts.
 C=${C%"${C##*[![:space:];]}"}; case "$C" in *'&') SEP=' ';; *) SEP='; ';; esac   # "cmd &; x" is a syntax error
-out=$(printf '%s\n' "printf '\\n__RS_%s__\\n' BEGIN; $C${SEP}printf '\\n__RS_END=%d__\\n' \$?" exit exit | timeout "${TSX_SSH_TIMEOUT:-900}" sshpass -p "$PW" ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR "$U@$H" rootsh 2>/dev/null | tr -d '\r')
+out=$(printf '%s\n' "printf '\\n__RS_%s__\\n' BEGIN; $C${SEP}printf '\\n__RS_END=%d__\\n' \$?" exit exit | timeout "${TSX_SSH_TIMEOUT:-900}" sshpass -p "$PW" ssh -tt "${SSH_OPTS[@]}" "$U@$H" rootsh 2>/dev/null | tr -d '\r')
 printf '%s\n' "$out" | awk '/^__RS_BEGIN__$/ {on=1; n=0; next} on && /^__RS_END=[0-9]+__$/ {exit} on {buf[++n]=$0} END {if (n && buf[n] == "") n--; for (i = 1; i <= n; i++) print buf[i]}'
 rc=$(printf '%s\n' "$out" | /bin/grep -a -o '^__RS_END=[0-9]*__$' | tail -n 1 | tr -dc 0-9); exit "${rc:-255}"

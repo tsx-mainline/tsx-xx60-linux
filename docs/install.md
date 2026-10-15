@@ -15,7 +15,7 @@ Before you start, make sure these items are ready:
 
 - The panel runs stock Android and the host can reach it over the network.
 - The host has `sshpass`, `ssh`, `python3`, `curl`, `sha256sum` and `ip`. The `.puf` download also needs `unzip` (or `busybox` with its `unzip` applet), and the PSR download also needs `debugfs` (e2fsprogs).
-- The panel can connect back to the host on TCP ports 8079 and 8081.
+- The host can open ssh connections to the panel (TCP port 22). The panel needs no connection to the host (see "Network requirements").
 - A root shell over the Crestron sshd works (see "Root over the Crestron sshd").
 - You have a payload (see "Get the payload").
 
@@ -40,13 +40,13 @@ The install runs these stages:
 |---|---|---|
 | 1 | `installer/steps/tsx-ensure-root` | Makes sure the panel is stock Android and settled. Makes sure root over the Crestron sshd works (`installer/steps/rootsh`). |
 | 2 | `installer/steps/tsx-rescue-arm.sh` | Backs up the env and the first 2 MiB of the disk. Writes the rescue image to `p1:boot.img` (golden slot, after it backs up the Crestron golden image) and to `p1:tsxboot.img` (one-shot hook target). Installs the U-Boot env hook with `tsx_once=1`. Reboots the panel. |
-| 3 | `installer/lib/tsx-rescue.sh` | Finds the rescue on the network by the MAC of the panel, which the installer records before the reboot. Pushes the install bundle: the boot image of the chosen flavor and `--kiosk-url`. Serves the root image over HTTP. |
-| 4 | `installer/steps/tsx-rescue-install` | Runs inside the rescue. Writes eMMC `boot` (`p7`) and root (`p8`) with live progress. Verifies each image by readback. Runs `resize2fs` so the root fills `p8`. Folds card partitions `p5` to `p8` into `p4` (`tsxdata`). Deploys the TFA9890, PSR and `KIOSK_URL` files into the new root. Writes the final env (`tsx-usb-recovery enable`, `p1:tsxboot.off`). Reboots. |
+| 3 | `installer/lib/tsx-rescue.sh` | Finds the rescue on the network by the MAC of the panel, which the installer records before the reboot. Pushes the install bundle over ssh: the boot image of the chosen flavor and `--kiosk-url`. |
+| 4 | `installer/steps/tsx-rescue-install` | Runs inside the rescue. Writes eMMC `boot` (`p7`) and root (`p8`) with live progress. The host streams the root image over ssh into this step. Verifies each image by readback. Runs `resize2fs` so the root fills `p8`. Folds card partitions `p5` to `p8` into `p4` (`tsxdata`). Deploys the TFA9890, PSR and `KIOSK_URL` files into the new root. Writes the final env (`tsx-usb-recovery enable`, `p1:tsxboot.off`). Reboots. |
 | 5 | host driver | Waits for the SSH of the kiosk. With your key (or `TSX_MAINLINE_PW`) it checks that root is `/dev/mmcblk1p8` and prints a summary. Without login it waits for the OpenSSH banner on port 22 and prints which root login case applies. |
 
 Stage 2 never writes `p2` or the MBR of the card. The rescue does that after it verifies the eMMC writes. `tsx_once` is a true one-shot. U-Boot clears it before it loads `tsxboot.img`. One power cycle with no install progress therefore returns the panel to stock Android. See [boot.md](boot.md) "The `tsx_once` state machine".
 
-The installer serves every file over HTTP: the rescue image, the eMMC boot and root images and, only if the panel has none, the DSP files. The panel needs no USB stick.
+The installer sends every file over the ssh connections that it opens: the rescue image, the eMMC boot and root images and, only if the panel has none, the DSP and PSR files. The panel needs no USB stick and no connection to the host.
 
 ### Reinstall or update a panel that runs mainline
 
@@ -200,6 +200,7 @@ Environment variables:
 | `TSX_ADMIN_USER` | Admin user. Default `admin`. |
 | `TSX_MAINLINE_PW` | Root password of a running mainline panel, when you log in with a password and not a key. If set, the installer skips the check for a root password or key. |
 | `TSX_RESCUE_PW` | The one-time password that the rescue shows on the panel screen. |
+| `TSX_SSH_CIPHERS` | The ssh cipher list for the streams into the rescue. The default puts `chacha20-poly1305@openssh.com` first (see "Network requirements"). |
 | `TSX_PANEL_KIND` | `android`, `mainline`, `rescue` or `unreachable`. The value skips the network probe of the installer. Without it, the installer finds the kind from the ssh banner. If no ssh answers, it assumes stock Android. |
 
 ### Panel configuration
@@ -233,6 +234,39 @@ The installer hashes the password on the host (sha512-crypt, with `openssl`, `mk
 A test image built with `TSX_DEV_ROOT_HASH` has a fixed password (see [rootfs.md](rootfs.md) "Root login"). Give it in `TSX_MAINLINE_PW`, for example `TSX_MAINLINE_PW=tsx` when the hash is the hash of `tsx`.
 
 The rescue has no fixed password. It uses the panel login from `/data`, so your key (or `TSX_MAINLINE_PW`) works on a reinstall. When the rescue cannot read `/data`, it shows a one-time password on the panel screen. See [recovery.md](recovery.md) "Rescue login".
+
+### Network requirements
+
+The host opens every connection of the install. The panel never opens a connection to the host. The install works on a network that drops new connections from the panel, for example an IoT VLAN, if the host can reach port 22 of the panel.
+
+| Stage | Connection | What goes over it |
+|---|---|---|
+| 1, 2 (stock Android) | ssh to the Crestron sshd (`installer/steps/rootsh`) | The commands, and one tar with the arm script and the rescue image (`rootsh --put`) |
+| 2 (reinstall) | ssh to the kiosk (OpenSSH) | The commands and the rescue image |
+| 3, 4 | ssh to the rescue (dropbear) | The install bundle as one tar stream, the root image as a stream into `tsx-rescue-install run --root-from -`, and the DSP and PSR files from a `.puf` download |
+
+The checks:
+
+- `rootsh --put` sets the tty of the root shell to raw mode with no echo. It sends the file only after the shell prints a ready marker. Then it compares the sha256 of the copy with the file.
+- The rescue checks the bundle against `SHA256SUMS` before it replaces `/tmp/b`.
+- The rescue reads the boot and root images back from the eMMC and prints a `WRITE-RESULT` line with the sha256. The host compares it with the manifest of the payload.
+
+Speeds on a TSS-10 (100 Mbit/s Ethernet, routed path with a round trip of 1.9 ms):
+
+| Measurement | MiB/s |
+|---|---|
+| eMMC write of random data through ext4, with `fsync`, no network | 3.3 |
+| eMMC write of zeros to `p8`, with `fsync`, no network | 4.0 |
+| ssh into the rescue, `chacha20-poly1305@openssh.com` | 4.5 |
+| ssh into the rescue, `aes128-ctr` | 3.1 |
+| ssh into the rescue, `aes256-ctr` | 3.0 |
+| Root image during the install (ssh and eMMC together, 993 MiB in about 6 min) | 2.8 to 3.0 |
+
+The eMMC sets the speed of the install. The first 200 MiB go faster (4.5 MiB/s), until the page cache is full.
+
+The dropbear of the rescue has no GCM ciphers. So the installer puts `chacha20-poly1305@openssh.com` first. The receive window of dropbear (24 KiB) sets the ssh speed, not the CPU. On a path with a longer round trip, the ssh speed falls below the eMMC speed and the install takes longer. A test dropbear with a 2 MiB window (`-W`) gave 10 to 11 MiB/s on the same path.
+
+If a run stops while the rescue is up, run the same command again. The new run stops an earlier run that is still busy, for example a `dd` that flushes the eMMC after a lost connection. It keeps the DSP and PSR files that the earlier attempt found. After the root stream ends, a lost connection does not stop the rescue: the install goes on and reboots the panel.
 
 ### Root over the Crestron sshd
 
@@ -396,6 +430,9 @@ Every driver script prints progress and does not run silently:
 | The install stops before it writes anything and asks for a root password or key | `panel.conf` has no `ROOT_PASSWORD_HASH` and no `SSH_AUTHORIZED_KEY`. | Give a password or a key in the prompts or in `--config FILE`. |
 | The rescue asks for a password | The rescue cannot read `/data` (first install). | Read the one-time password on the panel screen. Set `TSX_RESCUE_PW` and run the same command again. |
 | The run stops after the rescue is up | A network or host interruption. | Run the same command again. It resumes in the rescue. |
+| `eMMC root readback mismatch` | The root stream stopped early, for example after a lost connection. | Run the same command again. |
+| `rootsh --put: the root shell ... did not get ready` | The root shell on stock Android cannot set its tty to raw mode. | Make sure that `busybox stty` works in the root shell. Nothing was written. |
+| The root write is slower than 2.5 MiB/s | The round trip to the panel is long, and the 24 KiB ssh window of the rescue sets the speed. | None needed. Run the installer on a host closer to the panel to make it faster. |
 | The rescue never answers | The rescue did not boot or is not on the network. | Power cycle once. The panel boots the installed kiosk or stock Android. Run the command again. |
 | `WARNING: ... cannot be kept` | `p4` is not a clean `tsxdata` ext4 file system. | None needed. The rescue formatted `p4`. Restore `panel.conf` with `--config FILE` if needed. |
 | The panel boots to the setup page | No `KIOSK_URL` in `panel.conf`. | Configure the panel (see "Configure the panel after install"). |

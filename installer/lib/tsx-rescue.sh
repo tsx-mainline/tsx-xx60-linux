@@ -19,8 +19,10 @@
 # ---------------------------------------------------------------- pr_dd -----
 # Live progress for a background dd (BusyBox dd has no status=progress).
 # pr_dd DEST OFF_MIB LEN_MIB NAME -- DD_ARGS...
-# Copied unchanged from installer/factory/tsx-emmc-restore (same tool, same
-# fix for the ash stdin trap, see docs/recovery.md "The ash dd stdin trap").
+# Copied from installer/factory/tsx-emmc-restore (same tool, same fix for the
+# ash stdin trap, see docs/recovery.md "The ash dd stdin trap"). One change:
+# TSX_PR_DD_TICK sets the seconds between two progress lines (default 15), so
+# the host tests do not wait 15 s for a line.
 # A background job under busybox ash gets /dev/null as stdin, unless the real
 # input first moves to a separate fd (7). Bash does not need this, but it does
 # no harm there.
@@ -33,7 +35,7 @@ pr_dd() {
 	( _pd_t0=$(date +%s)
 	  while kill -0 $_pd_dp 2>/dev/null; do
 		_pd_i=0
-		while [ $_pd_i -lt 15 ] && kill -0 $_pd_dp 2>/dev/null; do sleep 1; _pd_i=$((_pd_i + 1)); done
+		while [ $_pd_i -lt "${TSX_PR_DD_TICK:-15}" ] && kill -0 $_pd_dp 2>/dev/null; do sleep 1; _pd_i=$((_pd_i + 1)); done
 		kill -0 $_pd_dp 2>/dev/null || break
 		_pd_pos=$(sed -n 's/^pos:[[:space:]]*//p' "/proc/$_pd_dp/fdinfo/1" 2>/dev/null) || break
 		[ -n "$_pd_pos" ] || continue
@@ -59,6 +61,44 @@ pr_dd() {
 	wait $_pd_rp 2>/dev/null
 	exec 7<&- 8<&-
 	return $_pd_rc
+}
+
+# ------------------------------------------------- write and read back ------
+# tsx_write_verify DEV SRC BYTES SHA256 NAME [LABEL]: write an image to the start of
+# DEV with live progress (pr_dd), then read BYTES back from DEV and compare
+# the sha256. SRC is a file, or "-" for stdin. With "-", the host streams the
+# image over the ssh connection that it opened itself (docs/install.md
+# "Network requirements"), so the panel opens no connection to the host.
+# A stream that stops early (a lost connection) leaves a short write. The
+# readback finds it. Run the same install command again to write it again.
+# The function prints one line for the host to compare:
+#   WRITE-RESULT name=NAME bytes=BYTES sha256=GOT ok=1|0
+# It returns 0 only if GOT is SHA256. NAME has no spaces. LABEL (default NAME)
+# names the progress lines and the rescue screen.
+tsx_write_verify() {
+	local dev=$1 src=$2 bytes=$3 want=$4 name=$5 label=${6:-$5} mib got ok=0
+	mib=$(( (bytes + 1048575) / 1048576 ))
+	if [ "$src" = - ]; then
+		pr_dd "$dev" 0 "$mib" "$label" -- bs=1M conv=fsync || { echo "WRITE-RESULT name=$name bytes=$bytes sha256=none ok=0"; return 1; }
+	else
+		pr_dd "$dev" 0 "$mib" "$label" -- if="$src" bs=1M conv=fsync || { echo "WRITE-RESULT name=$name bytes=$bytes sha256=none ok=0"; return 1; }
+	fi
+	sync
+	{ echo 3 > /proc/sys/vm/drop_caches; } 2>/dev/null
+	got=$(dd if="$dev" bs=1M count="$mib" 2>/dev/null | head -c "$bytes" | sha256sum | cut -d' ' -f1)
+	[ "$got" = "$want" ] && ok=1
+	echo "WRITE-RESULT name=$name bytes=$bytes sha256=$got ok=$ok"
+	[ "$ok" = 1 ]
+}
+
+# tsx_write_result_check OUTPUT NAME SHA256: the host side of
+# tsx_write_verify. True if OUTPUT (the streamed output of the rescue) has a
+# WRITE-RESULT line for NAME with ok=1 and the sha256 that the host expects.
+# The last line for NAME counts.
+tsx_write_result_check() {
+	local line
+	line=$(printf '%s\n' "$1" | grep -F "WRITE-RESULT name=$2 " | tail -n 1)
+	case "$line" in *"sha256=$3 ok=1"*) return 0;; *) return 1;; esac
 }
 
 # ---------------------------------------------------- verified env write ----
@@ -346,6 +386,28 @@ tsx_rescue_ssh() {
 # tsx_rescue_ssh_cur ARGS...: the same, with the password in $RESCUE_SSH_PW. A
 # command string that holds this function name keeps the password out of it.
 tsx_rescue_ssh_cur() { tsx_rescue_ssh "${RESCUE_SSH_PW:-}" "$@"; }
+
+# tsx_push_dir SRC DEST [--keep "NAMES"] SSH...: copy the host directory SRC
+# to DEST on the rescue as one tar stream over the ssh command SSH... (for
+# example tsx_rescue_ssh_cur -o ... root@IP). The host opens the connection,
+# so the panel needs no connection to the host. SRC must have a SHA256SUMS
+# file. The rescue checks every file against it before it replaces DEST.
+# --keep moves the named entries of the old DEST into the new one, if the new
+# one does not have them. The install bundle keeps tfa, psr and ledstock this
+# way: a run again in the same rescue session (a resume) finds the files of
+# the earlier attempt there, after the earlier attempt wrote over the old
+# root. It prints "pushed DEST: N files, sha256 checked", or the failed
+# files. Use it on the host only (it needs a shell with pipefail for the tar
+# status).
+tsx_push_dir() {
+	local src=$1 dest=$2 keep= k mv=; shift 2
+	[ "${1:-}" = --keep ] && { keep=$2; shift 2; }
+	[ -f "$src/SHA256SUMS" ] || { echo "tsx_push_dir: $src has no SHA256SUMS"; return 1; }
+	for k in $keep; do mv="$mv [ -e '$dest/$k' ] && [ ! -e '$dest.new/$k' ] && mv '$dest/$k' '$dest.new/$k' && echo 'kept $dest/$k from an earlier attempt';"; done
+	tar --owner=0 --group=0 -C "$src" -cf - . | "$@" "rm -rf '$dest.new' && mkdir -p '$dest.new' && tar -xf - -C '$dest.new' && cd '$dest.new' \
+		&& { sha256sum -c SHA256SUMS > ../.tsx-sumcheck 2>&1 || { grep -v ': OK\$' ../.tsx-sumcheck; echo 'sha256 check FAILED'; exit 1; }; } \
+		&& cd / && { $mv true; } && rm -rf '$dest' && mv '$dest.new' '$dest' && echo \"pushed $dest: \$(wc -l < '$dest/SHA256SUMS') files, sha256 checked\""
+}
 
 # ssh_test_rescue HOST PW: true if HOST answers ssh as the rescue. If HOST runs
 # the Crestron sshd, the function does not try a login (see is_crestron_sshd).

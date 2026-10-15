@@ -8,11 +8,19 @@
 # docs/boot.md "The v2 env state machine"). It never touches U-Boot itself. It
 # writes only the env at 1 MiB.
 #
-#   tsx-rescue-install check BUNDLE_DIR [--keep-data]
+#   tsx-rescue-install check BUNDLE_DIR [--keep-data] [--root-from -|FILE]
 #   tsx-rescue-install tfa   BUNDLE_DIR
 #   tsx-rescue-install psr   BUNDLE_DIR
 #   tsx-rescue-install ledstock BUNDLE_DIR
-#   tsx-rescue-install run   BUNDLE_DIR [--yes] [--keep-data]
+#   tsx-rescue-install run   BUNDLE_DIR [--yes] [--keep-data] [--root-from -|FILE]
+#
+# --root-from (default BUNDLE_DIR/root.img): where the root image comes from.
+# "-" is stdin: the host streams root.img over the ssh connection that it
+# opened itself (installer/tsx-install-mainline), so the panel needs no
+# connection to the host (docs/install.md "Network requirements"). "-" needs
+# --yes, because stdin is the image. A FILE is an image on the panel itself,
+# for example one that the host copied there before the rescue boot. The
+# readback check verifies the root on p8 in every case.
 #
 # tfa (read-only, before run): look for the TFA9890 DSP files on the panel
 # itself. First the current mainline root on eMMC p8 (a reinstall), then the
@@ -50,15 +58,14 @@
 # and installer/tsx-install-mainline):
 #   manifest              key=value: root_bytes, root_sha256, boot_sha256, kernel
 #                          flavor, root_partition_min_bytes (if the build set it)
-#   root.img              ext4 (LABEL=tsxroot-emmc), built COMPACT (content plus a
-#                          margin, well under the ~2.9 GiB of p8, see the eMMC region
-#                          table in docs/boot.md). After the write, resize2fs grows
-#                          it to fill p8. The bundle has root.img OR root-url.txt.
-#   root-url.txt          one line: an http URL that serves that root.img. The
-#                          rescue does not need to store the image on its own
-#                          disk first. The script streams it onto p8 (wget -O -
-#                          | dd) either way. The readback sha256 against the
-#                          manifest verifies it.
+#   root.img              (optional) ext4 (LABEL=tsxroot-emmc), built COMPACT
+#                          (content plus a margin, well under the ~2.9 GiB of p8,
+#                          see the eMMC region table in docs/boot.md). After the
+#                          write, resize2fs grows it to fill p8. The host driver
+#                          does not put it in the bundle: root.img (about 1 GiB)
+#                          does not fit in the RAM of the rescue. It streams it
+#                          into "run --root-from -" instead. The readback sha256
+#                          against the manifest verifies it either way.
 #   boot.img              the eMMC boot image (kernel+DTB+initramfs), <= 32 MiB
 #   tsx-rescue.sh          installer/lib/tsx-rescue.sh (pr_dd, tsx_env_apply, tsx_mbr_fold, tsx_mkfs_tsxdata)
 #   tsx-usb-recovery       installer/emmc/tsx-usb-recovery (copied verbatim, runs standalone)
@@ -91,18 +98,35 @@
 # (card disk), TSX_CMDLINE (the kernel command line for the psr command), TSX_STATUS (status-screen state file, default /run/tsx-install-state).
 set -eu
 RUN=${TSX_RUN:-/run}; mkdir -p "$RUN"
-say() { echo "tsx-rescue-install: $(date +%T 2>/dev/null) $*" >&2; }
-die() { say "ERROR: $*"; set_state "failed: $*"; exit 1; }
+# "|| true": after a lost connection stderr is a closed pipe. A failed echo
+# must not stop the script under set -e (see the PIPE trap below).
+say() { echo "tsx-rescue-install: $(date +%T 2>/dev/null) $*" >&2 || true; }
+STATUS=${TSX_STATUS:-/run/tsx-install-state}
+set_state() { printf '%s\n' "$1" > "$STATUS" 2>/dev/null || true; }
+die() { set_state "failed: $*"; say "ERROR: $*"; exit 1; }
 CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,/^set -eu$/p' "$0" | sed '$d'; exit 2; }
-YES=0 KEEP_DATA=0
-while [ $# -gt 0 ]; do case "$1" in --yes) YES=1;; --keep-data) KEEP_DATA=1;; *) die "unknown option $1";; esac; shift; done
+YES=0 KEEP_DATA=0 ROOT_FROM=
+while [ $# -gt 0 ]; do case "$1" in
+	--yes) YES=1;; --keep-data) KEEP_DATA=1;;
+	--root-from) [ $# -ge 2 ] || die "--root-from needs - or a FILE"; ROOT_FROM=$2; shift;;
+	*) die "unknown option $1";;
+esac; shift; done
 case "$CMD" in check|run|tfa|psr|ledstock) ;; *) sed -n '2,/^set -eu$/p' "$0" | sed '$d'; exit 2;; esac
+# With --root-from -, stdin is the root image. Keep it on fd 6 for the root
+# write and give every other command /dev/null, so no command eats image bytes.
+if [ "$CMD" = run ] && [ "$ROOT_FROM" = - ]; then
+	[ "$YES" = 1 ] || die "--root-from - needs --yes (stdin is the root image, so the script cannot ask)"
+	exec 6<&0 </dev/null
+fi
+# A lost ssh connection closes stdout and stderr. Without this, the next output
+# line would stop "run" with SIGPIPE at a random step. With it, "run" goes on
+# without output: a short root stream fails the readback and stops before the
+# card fold, and a complete one finishes the install and reboots.
+[ "$CMD" = run ] && trap '' PIPE
 [ -f "$B/manifest" ] && grep -q '^format=tsx-rescue-install-1$' "$B/manifest" || die "$B is not a v2 install bundle (no manifest)"
 . "$B/tsx-rescue.sh"
 . /usr/share/tsx/tsx-lib.sh   # tsx_find_disk, TSX_MBR_P4_TYPE_OFFSET, TSX_ENV_OFFSET/SIZE (already on the rescue image)
 
-STATUS=${TSX_STATUS:-/run/tsx-install-state}
-set_state() { printf '%s\n' "$1" > "$STATUS" 2>/dev/null || true; }
 # The rescue screen (tsx-rescue-status) shows the state and the pr_dd progress
 # of the tool named here, while its pid lives. A "check" writes nothing to disks.
 echo "$$ install" > "$RUN/tsx-op" 2>/dev/null || true
@@ -119,11 +143,10 @@ ROOT_MINPART=$(conf root_partition_min_bytes)
 # still covers the whole file, so the readback check would always fail.
 [ "$((ROOT_BYTES % 1048576))" = 0 ] || die "manifest root_bytes=$ROOT_BYTES is not a whole MiB (bad bundle?)"
 [ -f "$B/boot.img" ] || die "$B missing boot.img"
-ROOT_URL=
-if [ ! -f "$B/root.img" ]; then
-	[ -f "$B/root-url.txt" ] || die "$B has neither root.img nor root-url.txt"
-	ROOT_URL=$(head -n 1 "$B/root-url.txt")
-	[ -n "$ROOT_URL" ] || die "$B/root-url.txt is empty"
+[ -n "$ROOT_FROM" ] || ROOT_FROM=$B/root.img
+if [ "$ROOT_FROM" != - ] && { [ "$CMD" = check ] || [ "$CMD" = run ]; }; then
+	[ -f "$ROOT_FROM" ] || die "no root image at $ROOT_FROM (the host driver streams it: --root-from -)"
+	[ "$(stat -c %s "$ROOT_FROM")" = "$ROOT_BYTES" ] || die "$ROOT_FROM is $(stat -c %s "$ROOT_FROM") bytes, the manifest says root_bytes=$ROOT_BYTES"
 fi
 
 # ---- the eMMC: the mmcblk with a boot0 sibling (as tsx-emmc-restore) -------
@@ -202,13 +225,11 @@ tsx_find_disk || die "no card with the Crestron/card-stage partition layout foun
 CWHOLE=$WHOLE CP1=$P1 CP4=$P4
 
 say "eMMC $EDEV: boot $EBOOT ($ROOT_BYTES bytes wanted on root), card $CWHOLE ($TSX_DISK_LAYOUT layout)"
-if [ -z "$ROOT_URL" ]; then
-	say "checking the bundle (sha256 of root.img and boot.img). This can take a minute"
-	[ "$(sha256sum < "$B/root.img" | cut -d' ' -f1)" = "$ROOT_SHA" ] || die "root.img sha256 mismatch (corrupt transfer?)"
+if [ "$ROOT_FROM" != - ]; then
+	say "checking the bundle (sha256 of $ROOT_FROM and boot.img). This can take a minute"
+	[ "$(sha256sum < "$ROOT_FROM" | cut -d' ' -f1)" = "$ROOT_SHA" ] || die "$ROOT_FROM sha256 mismatch (corrupt copy?)"
 else
-	say "checking the bundle (boot.img sha256). root.img streams from $ROOT_URL and the readback verifies it after the write"
-	GOTN=$(wget -q -O - "$ROOT_URL" 2>/dev/null | head -c 4096 | wc -c)
-	[ "$GOTN" = 4096 ] || die "cannot read the root image from $ROOT_URL (got $GOTN bytes)"
+	say "checking the bundle (boot.img sha256). The host streams root.img over this ssh connection in the run step, and the readback verifies it after the write"
 fi
 [ "$(sha256sum < "$B/boot.img" | cut -d' ' -f1)" = "$BOOT_SHA" ] || die "boot.img sha256 mismatch (corrupt transfer?)"
 say "bundle OK (flavor: ${FLAVOR:-unknown})"
@@ -227,15 +248,36 @@ if [ $YES != 1 ]; then
 	read -r ans; [ "$ans" = INSTALL ] || die "not confirmed"
 fi
 
+# ---- 0. an earlier run that is still busy ----------------------------------
+# After a lost connection, the run of that connection goes on for a while: dd
+# flushes what it has (fsync), and the readback reads the image region again.
+# A run again (the resume) must not write the eMMC at the same time. Stop the
+# earlier run and wait until it is gone (dd cannot stop in the middle of the
+# fsync).
+RUNPID=$RUN/tsx-install-run.pid
+OLD=$(cat "$RUNPID" 2>/dev/null) || OLD=
+if [ -n "$OLD" ] && [ "$OLD" != $$ ] && kill -0 "$OLD" 2>/dev/null \
+	&& grep -q tsx-rescue-install "/proc/$OLD/cmdline" 2>/dev/null; then
+	say "an earlier install run (pid $OLD, from a lost connection) is still busy: stopping it"
+	set_state "stopping an earlier install run"
+	for c in $(grep -l "^PPid:[[:space:]]*$OLD\$" /proc/[0-9]*/status 2>/dev/null | cut -d/ -f3); do kill "$c" 2>/dev/null || true; done
+	kill "$OLD" 2>/dev/null || true
+	w=0
+	while kill -0 "$OLD" 2>/dev/null || pgrep -f '^dd bs 1M conv fsync' >/dev/null 2>&1; do
+		[ $w -lt 600 ] || die "the earlier install run (pid $OLD) did not stop in 600 s"
+		[ $((w % 15)) = 0 ] && say "  waiting for the earlier run to stop (its dd flushes the eMMC): $w/600 s"
+		sleep 1; w=$((w + 1))
+	done
+	say "the earlier install run stopped"
+fi
+echo $$ > "$RUNPID"
+
 # ---- 1. eMMC boot (p7), pr_dd + readback ------------------------------------
 set_state "writing eMMC boot (p7)"
-BOOT_MIB=$(( ($(stat -c %s "$B/boot.img") + 1048575) / 1048576 ))
-say "writing boot.img -> $EBOOT ($BOOT_MIB MiB)"
-pr_dd "$EBOOT" 0 "$BOOT_MIB" "eMMC boot" -- if="$B/boot.img" bs=1M conv=fsync || die "write to $EBOOT failed"
-sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-GOT=$(dd if="$EBOOT" bs=1M count="$BOOT_MIB" 2>/dev/null | head -c "$(stat -c %s "$B/boot.img")" | sha256sum | cut -d' ' -f1)
-[ "$GOT" = "$BOOT_SHA" ] || die "eMMC boot readback mismatch ($GOT != $BOOT_SHA)"
-say "eMMC boot verified ($GOT)"
+BOOT_BYTES=$(stat -c %s "$B/boot.img")
+say "writing boot.img -> $EBOOT ($(( (BOOT_BYTES + 1048575) / 1048576 )) MiB)"
+tsx_write_verify "$EBOOT" "$B/boot.img" "$BOOT_BYTES" "$BOOT_SHA" boot "eMMC boot" || die "eMMC boot write or readback failed (want sha256 $BOOT_SHA)"
+say "eMMC boot verified ($BOOT_SHA)"
 
 # ---- 2. eMMC root (p8): write only the (compact) image, then grow it ------
 set_state "writing eMMC root (p8)"
@@ -246,19 +288,18 @@ say "discarding $EROOT, then writing root.img ($ROOT_MIB MiB). p8 itself is $((G
 # tsxroot-emmc). It only prints "contains existing file system". Plain
 # blkdiscard is the fallback for a build whose blkdiscard has no -f.
 blkdiscard -f "$EROOT" 2>/dev/null || blkdiscard "$EROOT" 2>&1 || say "blkdiscard $EROOT failed (continuing)"
-if [ -z "$ROOT_URL" ]; then
-	pr_dd "$EROOT" 0 "$ROOT_MIB" "eMMC root" -- if="$B/root.img" bs=1M conv=fsync || die "write to $EROOT failed"
+if [ "$ROOT_FROM" = - ]; then
+	# The host streams the image on stdin (fd 6, see the top). The writes are
+	# sequential and take whatever the pipe delivers. This is correct without
+	# iflag=fullblock. The readback catches a short stream.
+	say "receiving root.img from the host over this ssh connection"
+	tsx_write_verify "$EROOT" - "$ROOT_BYTES" "$ROOT_SHA" root "eMMC root" <&6 \
+		|| die "eMMC root readback mismatch (want sha256 $ROOT_SHA). If the stream from the host stopped early (a lost connection), run the same install command again"
+	exec 6<&-
 else
-	# The writes are sequential and take whatever the pipe delivers. This is
-	# correct without iflag=fullblock. The readback catches a short or failed
-	# download.
-	wget -q -O - "$ROOT_URL" | pr_dd "$EROOT" 0 "$ROOT_MIB" "eMMC root" -- bs=1M conv=fsync || die "write to $EROOT failed"
+	tsx_write_verify "$EROOT" "$ROOT_FROM" "$ROOT_BYTES" "$ROOT_SHA" root "eMMC root" || die "eMMC root write or readback failed (want sha256 $ROOT_SHA)"
 fi
-sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-set_state "verifying eMMC root"
-GOT=$(dd if="$EROOT" bs=1M count="$ROOT_MIB" 2>/dev/null | sha256sum | cut -d' ' -f1)
-[ "$GOT" = "$ROOT_SHA" ] || die "eMMC root readback mismatch ($GOT != $ROOT_SHA)"
-say "eMMC root verified ($GOT)"
+say "eMMC root verified ($ROOT_SHA)"
 
 # ---- 2b. grow the (compact) root to fill the rest of p8 --------------------
 # The build made root.img with content plus a margin, not with the real size of

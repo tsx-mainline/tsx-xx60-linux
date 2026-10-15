@@ -1,8 +1,8 @@
 # Install payload
 
-The payload is a FAT32 USB stick, or a plain staging directory that a host serves over HTTP. It installs the mainline kiosk on a Crestron TSW-1060 or TSW-760. The boot image has the DTBs of both models. Build the payload on the host with `installer/payload/mkpayload`.
+The payload is a FAT32 USB stick, or a plain staging directory on the host. It installs the mainline kiosk on a Crestron TSW-1060 or TSW-760. The boot image has the DTBs of both models. Build the payload on the host with `installer/payload/mkpayload`.
 
-In this file, "stick" means the physical USB medium. The same payload directory also works over HTTP with no stick. This is the network install method, `tsx-install-mainline` (see [docs/install.md](../../docs/install.md)).
+In this file, "stick" means the physical USB medium. The same payload directory also works with no stick. This is the network install method, `tsx-install-mainline`. It sends the files over ssh (see [docs/install.md](../../docs/install.md)).
 
 ## Tasks
 

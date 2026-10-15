@@ -37,6 +37,8 @@ PY
 echo "  stock busybox has $(wc -l < "$W/applets.txt") applets"
 . "$HERE/android/tsx-lib.sh"
 used="$TSX_APPLETS sort fuser blkid tar reboot"
+# applets that steps/rootsh --put and the arm step of tsx-install-mainline call as "busybox <applet>"
+used="$used stty head sha256sum"
 # applets called as "$BB <applet>" anywhere in the Android scripts
 used="$used $(grep -ho '"\$BB" [a-z0-9]*' "$HERE"/android/*.sh | awk '{print $2}' | sort -u | tr '\n' ' ')"
 for a in $(echo $used | tr ' ' '\n' | sort -u); do

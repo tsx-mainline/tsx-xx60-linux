@@ -8,8 +8,9 @@
 #
 #   1. steps/tsx-ensure-root: make sure PANEL_IP is stock Android and settled.
 #      Also make sure root over the Crestron sshd (steps/rootsh) works.
-#   2. steps/tsx-rescue-arm.sh: the host pushes it over HTTP+wget and runs it
-#      over steps/rootsh. It writes only the rescue image to card p1. That
+#   2. steps/tsx-rescue-arm.sh: the host copies it, with the rescue image, over
+#      the root shell (steps/rootsh --put) and runs it over steps/rootsh. It
+#      writes only the rescue image to card p1. That
 #      slot is both the golden slot and the one-shot hook target. It arms
 #      tsx_once=1 for exactly one rescue boot (a true one-shot, not a
 #      boot_retry count). Then it reboots. If the rescue never checks in, the
@@ -19,8 +20,12 @@
 #      IP of the kiosk first, then sweep by MAC. Step 2 records the panel MAC
 #      before the reboot, because the reboot loses the Android eth0 state.
 #      Then drive the rescue:
-#      - push the eMMC boot and root images (installer/steps/tsx-rescue-install,
-#        streamed progress) and the TFA9890 DSP files (below)
+#      - push the install bundle with the eMMC boot image as one tar stream
+#        over ssh (tsx_push_dir), then stream the root image into
+#        installer/steps/tsx-rescue-install over ssh (live progress). The
+#        rescue reads every image back and the host compares the sha256
+#      - push the TFA9890 DSP files and the PSR file the same way, only if
+#        the panel has none (below)
 #      - fold the card (p5..p8 -> p4 tsxdata)
 #      - write the final env (tsx-usb-recovery enabled, p1:tsxboot.off)
 #      - reboot
@@ -108,8 +113,13 @@
 # its unzip applet) is needed only for the .puf download, and debugfs
 # (e2fsprogs) only for the PSR file from it.
 # Without that download, a panel that has no DSP files gets no vendor speaker
-# tuning. The panel must be able to connect back to this
-# host (HTTP on ports 8079 and 8081). Rescue login: the root password or key of
+# tuning.
+# NETWORK (docs/install.md "Network requirements"): this host opens every
+# connection (ssh to the Crestron sshd, the kiosk and the rescue), and every
+# file goes over these connections. The panel never connects to this host, so
+# a network that drops new connections from the panel (an IoT VLAN) still
+# works. TSX_SSH_CIPHERS sets the ssh cipher list for the rescue (default
+# below). Rescue login: the root password or key of
 # the panel, or a one-time password that the rescue shows on the panel screen
 # (give it in $TSX_RESCUE_PW). The installed system has no fixed root password (docs/rootfs.md "Root login"),
 # so the script logs in to a running mainline panel with your ssh key. If the
@@ -178,6 +188,11 @@ RPW=${TSX_RESCUE_PW:-${TSX_MAINLINE_PW:-}}
 # No fixed root password on the installed system: use $TSX_MAINLINE_PW when it
 # is set, else the ssh key (BatchMode: never ask for a password).
 MSSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8"
+# The cipher order for the streams into the rescue. Its dropbear takes the
+# first one that it supports. It has no GCM. chacha20-poly1305 is the fastest
+# one there (4.5 MiB/s on the TSS-10, aes128-ctr 3.1 MiB/s), faster than the
+# eMMC write (3.3 to 4.0 MiB/s). See docs/install.md "Network requirements".
+SSH_CIPHERS=${TSX_SSH_CIPHERS:-chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes128-ctr,aes256-ctr}
 if [ -n "$MPW" ]; then MSSH="sshpass -p $MPW ssh $MSSH_OPTS root@$PANEL"; else MSSH="ssh -o BatchMode=yes $MSSH_OPTS root@$PANEL"; fi
 is_mainline_kiosk() { local out; is_crestron_sshd "$PANEL" && return 1; out=$($MSSH 'awk "\$2==\"/\"{print \$1}" /proc/mounts' 2>/dev/null) || return 1; [ "$out" = /dev/mmcblk1p8 ]; }
 # After the install the panel may have no login that this host can use (a root
@@ -185,22 +200,22 @@ is_mainline_kiosk() { local out; is_crestron_sshd "$PANEL" && return 1; out=$($M
 # tells the new system from the rescue (dropbear) and from Android.
 ssh_banner() { timeout 5 bash -c 'exec 3<>/dev/tcp/$1/22 && head -n 1 <&3' _ "$1" 2>/dev/null | tr -d '\r'; }
 kiosk_up() { is_mainline_kiosk && return 0; is_crestron_sshd "$PANEL" && return 1; case "$(ssh_banner "$PANEL")" in SSH-2.0-OpenSSH*) return 0;; *) return 1;; esac; }
-run_stream_at() {  # SSHCMD REMOTECMD: like tsx-restore-factory's run_stream, parameterised on the ssh command
-	local sshcmd=$1 cmd=$2 tmp rc
+run_stream_cmd() {  # CMD...: run CMD, stream its output to the terminal and the log, keep it in RS_OUT
+	local tmp rc
 	tmp=$(mktemp "$RESULTS.XXXXXX")
-	if $sshcmd "$cmd" 2>&1 | tee "$tmp" | while IFS= read -r l; do log "  $l"; done; then rc=0; else rc=$?; fi
+	if "$@" 2>&1 | tee "$tmp" | while IFS= read -r l; do log "  $l"; done; then rc=0; else rc=$?; fi
 	RS_OUT=$(cat "$tmp"); rm -f "$tmp"
 	return $rc
 }
+# SSHCMD REMOTECMD: like tsx-restore-factory's run_stream, parameterised on the ssh command (a word list)
+run_stream_at() { local sshcmd=$1; shift; run_stream_cmd $sshcmd "$@"; }
 WSIP_FOR() { ip route get "$1" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}'; }
 STAGE1= STAGE2= RESCUE_WAIT_S=300
 # temp files next to $RESULTS (panel.conf copies: may hold secrets, mode 600): removed on exit
 TMPFILES=()
 cleanup() {
-	# "|| true": under set -e a failed kill (server already stopped) would end
-	# cleanup early and leave the next server running
-	for s in "$STAGE1" "$STAGE2"; do [ -n "$s" ] && [ -f "$s/.http.pid" ] && kill "$(cat "$s/.http.pid")" 2>/dev/null || true; done
 	rm -rf "$STAGE1" "$STAGE2" "${TSX_CONFIG_STAGE:-}"
+	[ -z "$STAGE1" ] || rm -f "$STAGE1.tar"
 	[ ${#TMPFILES[@]} = 0 ] || rm -f "${TMPFILES[@]}"
 }
 trap cleanup EXIT
@@ -244,12 +259,13 @@ if [ "$DRYRUN" = 1 ] && [ "$KIND" = mainline ]; then
 fi
 if [ "$DRYRUN" = 1 ]; then
 	[ "$KIND" = mainline ] || log "[dry-run] 1: steps/tsx-ensure-root $PANEL --uart $UART_OPT (settle + root over steps/rootsh)"
-	[ "$KIND" = mainline ] || log "[dry-run] 2: record eth0 MAC over rootsh. Push steps/tsx-rescue-arm.sh + android/tsx-lib.sh + lib/tsx-rescue.sh + rescue.img over HTTP+wget. Run 'preflight' then 'install --yes' over rootsh (reboots the panel)"
-	[ "$KIND" = mainline ] || log "[dry-run] 3: wait_for_rescue (kiosk IP first, then a MAC sweep, installer/lib/tsx-rescue.sh). Push a bundle ($KERNEL manifest+boot.img, root-url.txt: root.img is streamed onto p8 in step 4, tsx-rescue.sh, tsx-tfa.sh, tsx-psr.sh, tsx-usb-recovery, tsx-rescue-install, kiosk-url.txt, panel.conf if --config or prompts were used) over HTTP+wget+sha256sum -c"
+	[ "$KIND" = mainline ] || log "[dry-run] 2: record eth0 MAC over rootsh. Copy one tar (steps/tsx-rescue-arm.sh + android/tsx-lib.sh + lib/tsx-rescue.sh + rescue.img) to /data/tsx-inst over the root shell (steps/rootsh --put: raw tty, sha256 checked), unpack it. Run 'preflight' then 'install --yes' over rootsh (reboots the panel)"
+	[ "$KIND" = mainline ] || log "[dry-run] 3: wait_for_rescue (kiosk IP first, then a MAC sweep, installer/lib/tsx-rescue.sh). Push a bundle ($KERNEL manifest+boot.img, tsx-rescue.sh, tsx-tfa.sh, tsx-psr.sh, tsx-usb-recovery, tsx-rescue-install, kiosk-url.txt, panel.conf if --config or prompts were used) to /tmp/b as one tar stream over ssh (tsx_push_dir: sha256sum -c in the rescue)"
+	log "[dry-run] network: push only. This host opens every connection (ssh), the panel opens none to this host. ssh ciphers for the image streams: $SSH_CIPHERS"
 	case "$TFA_SOURCE" in
-	auto) log "[dry-run] 3: TFA9890 DSP files (--tfa-source auto): tsx-rescue-install tfa /tmp/b (read-only: the current root on eMMC p8, then stock Android's boot image on eMMC p7. The files stay on the panel). Only if that finds no valid set: rootfs/vendor-fetch.sh here (the .puf download) and push its files. Never fatal";;
+	auto) log "[dry-run] 3: TFA9890 DSP files (--tfa-source auto): tsx-rescue-install tfa /tmp/b (read-only: the current root on eMMC p8, then stock Android's boot image on eMMC p7. The files stay on the panel). Only if that finds no valid set: rootfs/vendor-fetch.sh here (the .puf download) and push its files over ssh. Never fatal";;
 	panel) log "[dry-run] 3: TFA9890 DSP files (--tfa-source panel): tsx-rescue-install tfa /tmp/b only (current root, then stock Android's boot image). No .puf download";;
-	puf) log "[dry-run] 3: TFA9890 DSP files (--tfa-source puf): rootfs/vendor-fetch.sh here (the .puf download), push its files to the rescue. The panel is not searched";;
+	puf) log "[dry-run] 3: TFA9890 DSP files (--tfa-source puf): rootfs/vendor-fetch.sh here (the .puf download), push its files to the rescue over ssh. The panel is not searched";;
 	none) log "[dry-run] 3: TFA9890 DSP files (--tfa-source none): none. The speakers run without the vendor tuning";;
 	esac
 	case "$PSR_SOURCE" in
@@ -265,8 +281,8 @@ if [ "$DRYRUN" = 1 ]; then
 	elif [ "$YES" = 1 ]; then log "[dry-run] panel configuration: --yes with no --config: prompts skipped, no panel.conf would be written"
 	else log "[dry-run] panel configuration: would prompt interactively here (installer/panel.conf.example). Skipped under --dry-run"
 	fi
-	if [ "$KEEP_DATA" = 1 ]; then log "[dry-run] 4: tsx-rescue-install check /tmp/b --keep-data. Then run /tmp/b --yes --keep-data (streamed output). It writes and verifies the eMMC boot and root. It keeps card p4 tsxdata if that is a clean ext4 LABEL=tsxdata (e2fsck -fn), and formats it if not. It writes the final env and tsxboot.off, then reboots"
-	else log "[dry-run] 4: tsx-rescue-install check /tmp/b. Then run /tmp/b --yes (streamed: eMMC boot+root write/verify, card fold + tsxdata mkfs, final env, tsxboot.off). The panel reboots"
+	if [ "$KEEP_DATA" = 1 ]; then log "[dry-run] 4: tsx-rescue-install check /tmp/b --keep-data --root-from -. Then run /tmp/b --yes --keep-data --root-from - < $KERNEL/root.img over ssh (streamed output). It writes and verifies the eMMC boot and root (WRITE-RESULT lines, the host compares the sha256 with the manifest). It keeps card p4 tsxdata if that is a clean ext4 LABEL=tsxdata (e2fsck -fn), and formats it if not. It writes the final env and tsxboot.off, then reboots"
+	else log "[dry-run] 4: tsx-rescue-install check /tmp/b --root-from -. Then run /tmp/b --yes --root-from - < $KERNEL/root.img over ssh (streamed: eMMC boot+root write/verify, the host compares the sha256 with the manifest, card fold + tsxdata mkfs, final env, tsxboot.off). The panel reboots"
 	fi
 	log "[dry-run] 5: wait for the rescue ssh to go away, then mainline ssh root@$PANEL. Verify root=/dev/mmcblk1p8 and the kiosk is running"
 	log "== dry-run done"; exit 0
@@ -377,25 +393,20 @@ ENSURE_ARGS=("$PANEL" --uart "$UART_OPT" --results "$RESULTS")
 log "== step 2: arm the rescue boot"
 MAC=$("$HERE/steps/rootsh" "$PANEL" 'cat /sys/class/net/eth0/address' 2>/dev/null) || die "could not read the panel's eth0 MAC before the reboot (needed for rescue discovery)"
 log "  panel MAC (for rescue discovery): $MAC"
-WSIP=$(WSIP_FOR "$PANEL"); [ -n "$WSIP" ] || die "no workstation IP towards $PANEL"
+# The arm payload goes over the root shell that this host opened (steps/rootsh
+# --put): the panel opens no connection to this host.
 STAGE1=$(mktemp -d "$RESULTS.arm.XXXXXX")
 mkdir -p "$STAGE1/steps" "$STAGE1/android" "$STAGE1/lib"
 cp "$HERE/steps/tsx-rescue-arm.sh" "$STAGE1/steps/"; cp "$HERE/android/tsx-lib.sh" "$STAGE1/android/"; cp "$HERE/lib/tsx-rescue.sh" "$STAGE1/lib/"
 cp "$RESCUE_IMG" "$STAGE1/rescue.img"
-PORT1=8079
-nohup python3 -m http.server "$PORT1" --bind 0.0.0.0 --directory "$STAGE1" >/dev/null 2>&1 &   # $! must be python itself, so the kill below stops it
-echo $! > "$STAGE1/.http.pid"
-sleep 1; kill -0 "$(cat "$STAGE1/.http.pid")" 2>/dev/null || die "HTTP server (stage 1) failed to start"
-BASEURL1="http://$WSIP:$PORT1"
-log "  serving $STAGE1 at $BASEURL1"
-"$HERE/steps/rootsh" "$PANEL" "mkdir -p /data/tsx-inst/steps /data/tsx-inst/android /data/tsx-inst/lib && \
-	wget -q -O /data/tsx-inst/steps/tsx-rescue-arm.sh $BASEURL1/steps/tsx-rescue-arm.sh && \
-	wget -q -O /data/tsx-inst/android/tsx-lib.sh $BASEURL1/android/tsx-lib.sh && \
-	wget -q -O /data/tsx-inst/lib/tsx-rescue.sh $BASEURL1/lib/tsx-rescue.sh && \
-	wget -q -O /data/tsx-inst/rescue.img $BASEURL1/rescue.img && \
-	sha256sum /data/tsx-inst/rescue.img" >>"$RESULTS" 2>&1 || die "pushing the arm payload failed (see $RESULTS)"
-kill "$(cat "$STAGE1/.http.pid")" 2>/dev/null || true
-log "  arm payload pushed and running preflight"
+tar --owner=0 --group=0 -C "$STAGE1" -cf "$STAGE1.tar" steps android lib rescue.img || die "could not pack the arm payload"
+RSHA=$(sha256sum < "$RESCUE_IMG" | cut -d' ' -f1)
+log "  copying the arm payload ($(( $(stat -c %s "$STAGE1.tar") / 1048576 )) MiB: tsx-rescue-arm.sh, tsx-lib.sh, tsx-rescue.sh, rescue.img) to /data/tsx-inst over the root shell"
+run_stream_cmd "$HERE/steps/rootsh" --put "$PANEL" "$STAGE1.tar" /data/tsx-inst.tar \
+	|| die "copying the arm payload to $PANEL failed (see above). Nothing was written to the boot slots or the env"
+GOT=$("$HERE/steps/rootsh" "$PANEL" "mkdir -p /data/tsx-inst && busybox tar -xf /data/tsx-inst.tar -C /data/tsx-inst && rm -f /data/tsx-inst.tar && busybox sha256sum /data/tsx-inst/rescue.img" 2>>"$RESULTS" | grep -oE '^[0-9a-f]{64}' | tail -n 1) || GOT=
+[ "$GOT" = "$RSHA" ] || die "rescue.img in /data/tsx-inst has sha256 ${GOT:-none}, want $RSHA. Nothing was written to the boot slots or the env"
+log "  arm payload unpacked in /data/tsx-inst (rescue.img ${RSHA:0:16}...). Running preflight"
 PREOUT=$("$HERE/steps/rootsh" "$PANEL" 'bash /data/tsx-inst/steps/tsx-rescue-arm.sh preflight --rescue /data/tsx-inst/rescue.img 2>&1') || true
 logblock "preflight" "$PREOUT"
 grep -q "preflight OK" <<<"$PREOUT" || die "preflight did not report 'preflight OK'"
@@ -434,7 +445,7 @@ else RIP=$(wait_for_rescue "$PANEL" "$MAC" "$WSIP" "$RPW" "$RESCUE_WAIT_S") || d
 fi
 log "  rescue reachable at $RIP"
 RESCUE_SSH_PW=$RPW
-RSSH="tsx_rescue_ssh_cur -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=6 root@$RIP"
+RSSH="tsx_rescue_ssh_cur -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=6 -o Ciphers=$SSH_CIPHERS root@$RIP"
 if [ "$KIND" = mainline ]; then
 	# Reinstall: the rescue that just booted (p1:tsxboot.img) also becomes the
 	# rescue in the golden slot. Later recovery (tsx-restore-factory,
@@ -463,23 +474,16 @@ fi
 STAGE2=$(mktemp -d "$RESULTS.bundle.XXXXXX")
 [ -n "$URL" ] && printf '%s\n' "$URL" > "$STAGE2/kiosk-url.txt"
 [ -n "$CONFIG" ] && { install -m 600 "$CONFIG" "$STAGE2/panel.conf"; log "  panel.conf included in the install bundle ($(TSX_CONF="$CONFIG" "$TSX_CONFIG_BIN" show | wc -l) keys set)"; }
-PORT2=8081
-BASEURL2="http://$WSIP:$PORT2"
-# root.img (~2.9 GiB) does not fit in the RAM of the rescue (~2 GiB), so the
-# pushed bundle does not include it. The rescue streams it from stream/ straight
-# onto eMMC p8 (tsx-rescue-install, root-url.txt) and verifies it by readback.
+# root.img (about 1 GiB, up to the 2.9 GiB of p8) does not fit in the RAM of
+# the rescue, so the bundle does not include it. Step 4 streams it over ssh
+# straight onto eMMC p8 (tsx-rescue-install run --root-from -), and the rescue
+# verifies it by readback.
 cp "$FLAVOR_DIR/manifest" "$FLAVOR_DIR/boot.img" "$STAGE2/"
-mkdir -p "$STAGE2/stream"; ln -s "$(cd "$FLAVOR_DIR" && pwd)/root.img" "$STAGE2/stream/root.img"
-printf '%s\n' "$BASEURL2/stream/root.img" > "$STAGE2/root-url.txt"
 cp "$HERE/lib/tsx-rescue.sh" "$HERE/lib/tsx-tfa.sh" "$HERE/lib/tsx-psr.sh" "$HERE/lib/tsx-ledstock.sh" "$HERE/emmc/tsx-usb-recovery" "$HERE/steps/tsx-rescue-install" "$STAGE2/"
-(cd "$STAGE2" && find . -path ./stream -prune -o -type f ! -name 'SHA256SUMS*' -print | sort | xargs sha256sum > SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS)
-nohup python3 -m http.server "$PORT2" --bind 0.0.0.0 --directory "$STAGE2" >/dev/null 2>&1 &
-echo $! > "$STAGE2/.http.pid"
-sleep 1; kill -0 "$(cat "$STAGE2/.http.pid")" 2>/dev/null || die "HTTP server (stage 2) failed to start"
-FILES="$(cd "$STAGE2" && find . -path ./stream -prune -o -type f ! -name SHA256SUMS ! -name .http.pid -print | sed 's#^\./##' | tr '\n' ' ')SHA256SUMS"
-log "  pushing the install bundle to the rescue ($RIP): $FILES"
-run_stream_at "$RSSH" "set -e; mkdir -p /tmp/b; cd /tmp/b; for f in $FILES; do mkdir -p \"\$(dirname \"\$f\")\"; wget -q -O \"\$f\" $BASEURL2/\$f && echo \"fetched \$f\" || { echo \"wget \$f FAILED\"; exit 1; }; done; sha256sum -c SHA256SUMS >/tmp/b/sumcheck.txt 2>&1 && echo 'all files OK' || { cat /tmp/b/sumcheck.txt; exit 1; }; chmod +x tsx-rescue-install tsx-usb-recovery" \
-	|| die "pushing the bundle failed (see above)"
+chmod +x "$STAGE2/tsx-rescue-install" "$STAGE2/tsx-usb-recovery"
+(cd "$STAGE2" && find . -type f ! -name 'SHA256SUMS*' -print | sort | xargs sha256sum > SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS)
+log "  pushing the install bundle to the rescue ($RIP) over ssh: $(cd "$STAGE2" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | sort | tr '\n' ' ')($(du -sm "$STAGE2" | cut -f1) MiB)"
+run_stream_cmd tsx_push_dir "$STAGE2" /tmp/b --keep "tfa psr ledstock" $RSSH </dev/null || die "pushing the bundle failed (see above)"
 
 # ------------------------------------------ step 3: TFA9890 DSP files -------
 # --tfa-source (see the header): look on the panel first. The rescue reads the
@@ -501,8 +505,9 @@ tfa_puf() {  # rootfs/vendor-fetch.sh here, then push the files into /tmp/b/tfa
 	{ echo "source=puf"; echo "firmware=$(basename "${TFA_PUF_URL:-tsw-xx60_3.002.1061.001.puf}") (rootfs/vendor-fetch.sh, pinned sha256)"
 	  for v in $TSX_TFA_VARIANTS; do [ -f "$STAGE2/tfa/$v/stereo.cnt" ] && echo "$v=$(sha256sum < "$STAGE2/tfa/$v/stereo.cnt" | cut -d' ' -f1) pinned"; done; } > "$STAGE2/tfa/SOURCE"
 	(cd "$STAGE2/tfa" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | sort | xargs sha256sum > SHA256SUMS)
-	local files; files=$(cd "$STAGE2/tfa" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | tr '\n' ' ')
-	run_stream_at "$RSSH" "set -e; rm -rf /tmp/b/tfa.new; mkdir -p /tmp/b/tfa.new; cd /tmp/b/tfa.new; for f in $files SHA256SUMS; do mkdir -p \"\$(dirname \"\$f\")\"; wget -q -O \"\$f\" $BASEURL2/tfa/\$f; done; sha256sum -c SHA256SUMS >/dev/null; rm SHA256SUMS; cd /tmp/b; rm -rf tfa; mv tfa.new tfa; echo \"tfa: \$(ls -d tfa/settings_* | wc -l) variant(s) in /tmp/b/tfa, sha256 checked\"" \
+	local files; files=$(cd "$STAGE2/tfa" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | sort | tr '\n' ' ')
+	log "  pushing the .puf's DSP files to the rescue over ssh: $files"
+	run_stream_cmd tsx_push_dir "$STAGE2/tfa" /tmp/b/tfa $RSSH </dev/null \
 		|| { log "  WARNING: pushing the .puf's DSP files to the rescue failed"; return 1; }
 	TFA_USED="puf (rootfs/vendor-fetch.sh), $n of 3 variants"
 }
@@ -551,7 +556,8 @@ psr_puf() {  # rootfs/vendor-fetch.sh --psr here, then push the file into /tmp/b
 	{ echo "source=puf"; echo "firmware=$(basename "${TFA_PUF_URL:-tsw-xx60_3.002.1061.001.puf}") (rootfs/vendor-fetch.sh --psr, pinned sha256)"
 	  echo "sha256=$sha $([ "$sha" = "$(tsx_psr_pinned)" ] && echo pinned || echo unpinned)"; } > "$STAGE2/psr/SOURCE"
 	(cd "$STAGE2/psr" && sha256sum "$TSX_PSR_NAME" SOURCE > SHA256SUMS)
-	run_stream_at "$RSSH" "set -e; rm -rf /tmp/b/psr.new; mkdir -p /tmp/b/psr.new; cd /tmp/b/psr.new; for f in $TSX_PSR_NAME SOURCE SHA256SUMS; do wget -q -O \"\$f\" $BASEURL2/psr/\$f; done; sha256sum -c SHA256SUMS >/dev/null; rm SHA256SUMS; cd /tmp/b; rm -rf psr; mv psr.new psr; echo \"psr: \$(sed -n 's/^sha256=//p' psr/SOURCE) in /tmp/b/psr, sha256 checked\"" \
+	log "  pushing the .puf's PSR file to the rescue over ssh"
+	run_stream_cmd tsx_push_dir "$STAGE2/psr" /tmp/b/psr $RSSH </dev/null \
 		|| { log "  WARNING: pushing the .puf's PSR file to the rescue failed"; return 1; }
 	PSR_USED="puf (rootfs/vendor-fetch.sh --psr), sha256 $sha"
 }
@@ -608,15 +614,22 @@ fi
 # --------------------------------------------------------- step 4: install --
 log "== step 4: install (rescue: eMMC boot+root, card fold, final env)"
 KEEP_ARG=; [ "$KEEP_DATA" = 1 ] && KEEP_ARG=--keep-data
-run_stream_at "$RSSH" "sh /tmp/b/tsx-rescue-install check /tmp/b $KEEP_ARG 2>&1" || die "tsx-rescue-install check failed (see above)"
+run_stream_at "$RSSH" "sh /tmp/b/tsx-rescue-install check /tmp/b $KEEP_ARG --root-from - 2>&1" </dev/null || die "tsx-rescue-install check failed (see above)"
 if [ "$YES" != 1 ]; then
 	read -r -p "Write the eMMC (boot+root, $KERNEL) and fold the card of $PANEL (rescue at $RIP)? Type INSTALL: " ans </dev/tty
 	[ "$ans" = INSTALL ] || die "aborted: operator did not type INSTALL"
 fi
 t0=$(date +%s)
-run_stream_at "$RSSH" "sh /tmp/b/tsx-rescue-install run /tmp/b --yes $KEEP_ARG 2>&1" || die "tsx-rescue-install run FAILED. The rescue is still reachable at $RIP. Read the output above and fix the cause. Then run this same command again. It resumes at step 3 while the rescue is up. The installer never changes U-Boot, so two power cycles always return the unit to stock Android"
+ROOT_SHA_WANT=$(sed -n 's/^root_sha256=//p' "$FLAVOR_DIR/manifest" | tail -n 1)
+BOOT_SHA_WANT=$(sed -n 's/^boot_sha256=//p' "$FLAVOR_DIR/manifest" | tail -n 1)
+log "  streaming root.img ($(( $(stat -c %s "$FLAVOR_DIR/root.img") / 1048576 )) MiB) into the rescue over ssh. The eMMC write sets the speed. The rescue prints its progress about every 15 s"
+run_stream_at "$RSSH" "sh /tmp/b/tsx-rescue-install run /tmp/b --yes $KEEP_ARG --root-from - 2>&1" < "$FLAVOR_DIR/root.img" || die "tsx-rescue-install run FAILED. The rescue is still reachable at $RIP. Read the output above and fix the cause. Then run this same command again. It resumes at step 3 while the rescue is up and writes the images again. The installer never changes U-Boot, so two power cycles always return the unit to stock Android"
+# The rescue compared its readback with the manifest. Compare it here too,
+# with the values of this host.
+tsx_write_result_check "$RS_OUT" boot "$BOOT_SHA_WANT" || die "the rescue did not report the eMMC boot sha256 $BOOT_SHA_WANT (see above)"
+tsx_write_result_check "$RS_OUT" root "$ROOT_SHA_WANT" || die "the rescue did not report the eMMC root sha256 $ROOT_SHA_WANT (see above)"
+log "  ok: eMMC boot ${BOOT_SHA_WANT:0:16}... and root ${ROOT_SHA_WANT:0:16}... read back by the rescue, sha256 equal to the payload"
 log "  install finished in $(( $(date +%s) - t0 )) s"
-kill "$(cat "$STAGE2/.http.pid")" 2>/dev/null || true
 
 # --------------------------------------------------------- step 5: verify ---
 log "== step 5: wait for the mainline kiosk"
