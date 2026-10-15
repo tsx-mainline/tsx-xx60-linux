@@ -188,11 +188,9 @@ RPW=${TSX_RESCUE_PW:-${TSX_MAINLINE_PW:-}}
 # No fixed root password on the installed system: use $TSX_MAINLINE_PW when it
 # is set, else the ssh key (BatchMode: never ask for a password).
 MSSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8"
-# The cipher order for the streams into the rescue. Its dropbear takes the
-# first one that it supports. It has no GCM. chacha20-poly1305 is the fastest
-# one there (4.5 MiB/s on the TSS-10, aes128-ctr 3.1 MiB/s), faster than the
-# eMMC write (3.3 to 4.0 MiB/s). See docs/install.md "Network requirements".
-SSH_CIPHERS=${TSX_SSH_CIPHERS:-chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes128-ctr,aes256-ctr}
+# The cipher order for the streams into the rescue (lib/tsx-rescue.sh
+# TSX_SSH_CIPHERS_DEFAULT, docs/install.md "Network requirements").
+SSH_CIPHERS=${TSX_SSH_CIPHERS:-$TSX_SSH_CIPHERS_DEFAULT}
 if [ -n "$MPW" ]; then MSSH="sshpass -p $MPW ssh $MSSH_OPTS root@$PANEL"; else MSSH="ssh -o BatchMode=yes $MSSH_OPTS root@$PANEL"; fi
 is_mainline_kiosk() { local out; is_crestron_sshd "$PANEL" && return 1; out=$($MSSH 'awk "\$2==\"/\"{print \$1}" /proc/mounts' 2>/dev/null) || return 1; [ "$out" = /dev/mmcblk1p8 ]; }
 # After the install the panel may have no login that this host can use (a root

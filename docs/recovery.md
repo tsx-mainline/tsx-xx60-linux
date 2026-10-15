@@ -65,7 +65,7 @@ Use this path when no backup of the unit exists. You need the firmware package (
 Before you start:
 
 - The host needs `sshpass`, `python3`, `curl`, `unzip` and e2fsprogs (`mke2fs`, `e2fsck`, `debugfs`). On Debian, e2fsprogs is in `/sbin`, so add that to `PATH`.
-- The panel must reach the host. The rescue downloads the restore bundle from an HTTP server on the host (port 8081 by default).
+- The host must reach port 22 of the panel. The host pushes the restore bundle into the rescue over ssh, and the panel opens no connection to the host (see [install.md](install.md) "Network requirements"). The bundle stays in the RAM of the rescue, so the rescue needs about 750 MiB of free memory.
 - If the unit already has a Crestron account, set `TSX_ADMIN_PW` (the console and web-UI admin password, user `TSX_ADMIN_USER`, default `admin`). Step 7 of the driver needs it to verify the console.
 
 Steps:

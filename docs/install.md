@@ -266,6 +266,8 @@ The eMMC sets the speed of the install. The first 200 MiB go faster (4.5 MiB/s),
 
 The dropbear of the rescue has no GCM ciphers. So the installer puts `chacha20-poly1305@openssh.com` first. The receive window of dropbear (24 KiB) sets the ssh speed, not the CPU. On a path with a longer round trip, the ssh speed falls below the eMMC speed and the install takes longer. A test dropbear with a 2 MiB window (`-W`) gave 10 to 11 MiB/s on the same path.
 
+`installer/tsx-restore-factory` uses the same method. The host pushes the factory bundle (about 700 MiB) to `/tmp/b` of the rescue as one tar stream over ssh. The rescue shows the MiB received about every 15 s and checks `SHA256SUMS` before the restore uses the files.
+
 If a run stops while the rescue is up, run the same command again. The new run stops an earlier run that is still busy, for example a `dd` that flushes the eMMC after a lost connection. It keeps the DSP and PSR files that the earlier attempt found. After the root stream ends, a lost connection does not stop the rescue: the install goes on and reboots the panel.
 
 ### Root over the Crestron sshd

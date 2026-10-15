@@ -42,10 +42,13 @@
 #   3  payload. Without --bundle, first read the live env from the card in the
 #      rescue (results/env-live-<unit>-<date>.bin, CRC and MAC checked, --env
 #      FILE overrides). Then build the bundle (mkbundle.sh, no backup) in
-#      out/bundle-<unit>-<date>. Then start an HTTP server on the parent dir
-#      of the bundle. The panel fetches every file of SHA256SUMS with wget into
-#      /tmp/b of the rescue (RAM, needs ~750 MiB free). Then run sha256sum -c
-#      on the panel.
+#      out/bundle-<unit>-<date>. Then push every file of SHA256SUMS into /tmp/b
+#      of the rescue as one tar stream over ssh (lib/tsx-rescue.sh
+#      tsx_push_bundle, live progress). /tmp/b is RAM, so the rescue needs the
+#      size of the bundle plus 64 MiB free (about 750 MiB in total). The rescue
+#      runs sha256sum -c before it uses the files. This host opens the ssh
+#      connection: the panel never connects to this host (docs/install.md
+#      "Network requirements").
 #   4  check: tsx-emmc-restore check + tsx-factory-restore check (nothing
 #      written)
 #   5  run (gate: type FACTORY unless --yes). First tsx-emmc-restore run (boot,
@@ -84,7 +87,9 @@
 #   --env FILE  a 64 KiB env block instead of the live one
 #   --bundle DIR  --results FILE  --from-step N  --to-step N  --yes  --dry-run
 #   --rescue-ip IP  overrides the rescue-IP discovery in UART and network-only mode
-#   --port N (HTTP, 8081)  --ws-ip IP  --stable-min N  --rescue-pw PW (default: your ssh key)
+#   --ws-ip IP  --stable-min N  --rescue-pw PW (default: your ssh key)
+#   --port N  ignored. The old HTTP download is gone: the bundle goes over ssh.
+#   TSX_SSH_CIPHERS  the ssh cipher list for the push (lib/tsx-rescue.sh)
 #   --uart auto|yes|no  the default is auto. UART mode runs only if the serial
 #          logger runs and uc.sh exists. Otherwise steps 2, 6 and 7 fall back to
 #          the network-only checks described above. --uart yes or no forces
@@ -113,7 +118,7 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); WORK=$(cd "$HERE/.." && pwd)
 SERIALDIR=$WORK/tools/bench; UC=$SERIALDIR/uc.sh; SERLOG=${TSX_SERIAL_LOG:-$SERIALDIR/boot-2200.log}
-BUNDLE= PANEL= RESULTS= FROM_STEP=1 TO_STEP=7 YES=0 DRYRUN=0 PORT=8081 WSIP= STABLE_MIN=9 RPW=${TSX_RESCUE_PW:-} RIP= UART=auto
+BUNDLE= PANEL= RESULTS= FROM_STEP=1 TO_STEP=7 YES=0 DRYRUN=0 WSIP= STABLE_MIN=9 RPW=${TSX_RESCUE_PW:-} RIP= UART=auto
 PUF=${TSX_PUF:-} ENVFILE=
 ROOTSSH=1 ROOTSSH_SET=0 SSHSHELL=${SSHSHELL:-}   # rootsh patch by default
 PRISTINE_PUF_SHA=96438108e3175b66c09f1df284ded5fe155593ba06e069e154688b04f395e40b   # rootfs/vendor-fetch.sh TFA_PUF_SHA256
@@ -125,14 +130,14 @@ ENVPY="python3 $HERE/sdcard/tsx-env.py"
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' >&2; }   # the whole header comment
 while [ $# -gt 0 ]; do case "$1" in
 	--bundle) BUNDLE=$2; shift 2;; --puf) PUF=$2; shift 2;; --env) ENVFILE=$2; shift 2;; --results) RESULTS=$2; shift 2;; --from-step) FROM_STEP=$2; shift 2;; --to-step) TO_STEP=$2; shift 2;;
-	--yes) YES=1; shift;; --dry-run) DRYRUN=1; shift;; --port) PORT=$2; shift 2;; --ws-ip) WSIP=$2; shift 2;;
+	--yes) YES=1; shift;; --dry-run) DRYRUN=1; shift;; --port) echo "note: --port is ignored: the bundle goes over ssh, with no HTTP server" >&2; shift 2;; --ws-ip) WSIP=$2; shift 2;;
 	--stable-min) STABLE_MIN=$2; shift 2;; --rescue-ip) RIP=$2; shift 2;; --rescue-pw) RPW=$2; shift 2;; --uart) UART=$2; shift 2;;
 	--root-ssh) ROOTSSH=1; ROOTSSH_SET=1; shift;; --sshshell) ROOTSSH=1; ROOTSSH_SET=1; SSHSHELL=$2; shift 2;; --stock-sshshell) ROOTSSH=0; SSHSHELL=; shift;; -h|--help) usage; exit 0;;
 	--*) echo "unknown option $1" >&2; usage; exit 2;; *) [ -z "$PANEL" ] || { echo "extra argument $1" >&2; exit 2; }; PANEL=$1; shift;; esac; done
 [ -n "$PANEL" ] || { usage; exit 2; }
 case "$UART" in auto|yes|no) ;; *) echo "--uart must be auto, yes, or no" >&2; exit 2;; esac
 [ -n "$RESULTS" ] || RESULTS=$HERE/results/tsx-restore-factory-$(date +%Y%m%d-%H%M).txt
-mkdir -p "$(dirname "$RESULTS")" "$HERE/results"   # results/ also holds the live env and the HTTP pid file
+mkdir -p "$(dirname "$RESULTS")" "$HERE/results"   # results/ also holds the live env
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$RESULTS" >&2; }
 logblock() { log "-- $1 --"; printf '%s\n' "$2" | while IFS= read -r l; do log "  $l"; done; log "-- end $1 --"; }
 die() { log "ERROR: $*"; exit 1; }
@@ -150,6 +155,13 @@ run_stream() {  # CMD
 	out=$(cat "$tmp"); rm -f "$tmp"
 	return $rc
 }
+run_stream_cmd() {  # CMD...: run a host command (a function too), stream its output the same way
+	local tmp rc
+	tmp=$(mktemp "$RESULTS.XXXXXX")
+	if "$@" 2>&1 | tee "$tmp" | while IFS= read -r l; do log "  $l"; done; then rc=0; else rc=$?; fi
+	out=$(cat "$tmp"); rm -f "$tmp"
+	return $rc
+}
 if [ "$ROOTSSH" = 1 ]; then
 	if [ -n "$BUNDLE" ]; then [ "$ROOTSSH_SET" = 0 ] || log "  WARNING: --root-ssh/--sshshell ignored: --bundle was already built (its system.img is whatever mkbundle.sh made)"; ROOTSSH=0
 	elif [ -n "$SSHSHELL" ]; then [ -f "$SSHSHELL" ] || die "--sshshell $SSHSHELL: no such file"
@@ -157,7 +169,8 @@ if [ "$ROOTSSH" = 1 ]; then
 fi
 RHOST=$PANEL
 ANDROID_IP=$PANEL
-set_rhost() { RHOST=$1; RESCUE_SSH_PW=$RPW; SSH="tsx_rescue_ssh_cur -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$RHOST"; }
+SSH_CIPHERS=${TSX_SSH_CIPHERS:-$TSX_SSH_CIPHERS_DEFAULT}
+set_rhost() { RHOST=$1; RESCUE_SSH_PW=$RPW; SSH="tsx_rescue_ssh_cur -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=6 -o Ciphers=$SSH_CIPHERS root@$RHOST"; }
 set_rhost "$PANEL"
 rescue_ip_from_log() { tr -d '\0' < "$SERLOG" | grep -a -o 'tsx-rescue: network: eth0 [0-9.]*' | tail -n 1 | awk '{print $NF}'; }
 ssh_ok() { is_crestron_sshd "$RHOST" && return 1; $SSH true >/dev/null 2>&1; }
@@ -227,12 +240,8 @@ if [ "$UART_ON" = 1 ]; then
 else
 	log "  network-only mode (--uart $UART): steps 2, 6 and 7 use ssh, curl and MAC-based checks instead of the serial log and the UART console"
 fi
-set_bundle_paths() { BUNDLEABS=$(cd "$BUNDLE" && pwd); PARENT=$(dirname "$BUNDLEABS"); BNAME=$(basename "$BUNDLEABS"); BASEURL="http://$WSIP:$PORT/$BNAME"; }
 if [ -z "$WSIP" ]; then WSIP=$(ip route get "$PANEL" | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}'); fi
 [ -n "$WSIP" ] || die "no workstation IP towards $PANEL (--ws-ip)"
-[ -z "$BUNDLE" ] || set_bundle_paths
-HTTP_PID=; stop_http() { [ -n "$HTTP_PID" ] && kill "$HTTP_PID" 2>/dev/null && log "  HTTP server stopped"; HTTP_PID=; }
-trap stop_http EXIT
 if [ "$DRYRUN" = 1 ]; then
 	log "[dry-run] step 2: ssh root@$PANEL: if kiosk (no /etc/tsx/rescue-image): mount p1, cp boot.img tsxboot.img, sha check, rm tsxboot.off, tsx_once=1 if the hook is the once guard, umount, reboot. Wait for ssh + rescue flag (300 s)"
 	if [ "$UART_ON" = 1 ]; then
@@ -241,7 +250,7 @@ if [ "$DRYRUN" = 1 ]; then
 		log "[dry-run] step 2 (network-only): record eth0 MAC over ssh before reboot. Every ~10s up to 300s: ssh at the kiosk's own IP $PANEL, plus a MAC sweep of its /24 when that is on-link from $WSIP (lib/tsx-rescue.sh wait_for_rescue). Accept once ssh root@IP test -f /etc/tsx/rescue-image succeeds; --rescue-ip overrides"
 	fi
 	[ -n "$BUNDLE" ] || log "[dry-run] step 3a: rescue: dd if=/dev/mmcblk0 bs=65536 skip=16 count=1 > results/env-live-<unit>-<date>.bin (or --env). tsx-env.py unit (CRC, ethaddr). mkbundle.sh --puf $PUF --env <env> --out out/bundle-<unit>-<date>$(if [ "$ROOTSSH" = 1 ]; then echo "${SSHSHELL:+ --sshshell $SSHSHELL} (rootsh patch)"; else echo " --stock-sshshell"; fi)"
-	log "[dry-run] step 3: python3 -m http.server $PORT --directory <bundle parent>. On the panel: mkdir /tmp/b. wget every file of SHA256SUMS + SHA256SUMS. sha256sum -c SHA256SUMS"
+	log "[dry-run] step 3: rm -rf /tmp/b in the rescue, check MemAvailable >= bundle + 64 MiB. Push every file of SHA256SUMS + SHA256SUMS to /tmp/b as one tar stream over ssh (tsx_push_bundle, ciphers $SSH_CIPHERS, live progress). sha256sum -c SHA256SUMS in the rescue. The panel opens no connection to this host"
 	log "[dry-run] step 4: sh /tmp/b/tsx-emmc-restore check /tmp/b. TSX_SHARE=/usr/share/tsx sh /tmp/b/tsx-factory-restore check /tmp/b"
 	log "[dry-run] step 5: gate FACTORY. sh /tmp/b/tsx-emmc-restore run /tmp/b --yes. TSX_SHARE=/usr/share/tsx sh /tmp/b/tsx-factory-restore run /tmp/b --yes"
 	if [ "$UART_ON" = 1 ]; then
@@ -317,19 +326,18 @@ if [ "$FROM_STEP" -le 3 ] && [ "$TO_STEP" -ge 3 ]; then
 		log "  building the bundle (no backup$(if [ "$ROOTSSH" = 1 ]; then echo ", rootsh patch${SSHSHELL:+ from --sshshell $SSHSHELL}"; else echo ", --stock-sshshell"; fi)): $BUNDLE"
 		out=$("$HERE/factory/mkbundle.sh" "${MKARGS[@]}" 2>&1) || { logblock "mkbundle" "$out"; die "mkbundle.sh failed"; }
 		logblock "mkbundle (tail)" "$(printf '%s\n' "$out" | tail -n 25)"
-		check_bundle; set_bundle_paths
+		check_bundle
 	fi
 	FILES="$(awk '{print $2}' "$BUNDLE/SHA256SUMS" | tr '\n' ' ')SHA256SUMS"
-	log "  HTTP $BASEURL, files: $FILES"
-	freek=$($SSH "awk '/MemAvailable/{print \$2}' /proc/meminfo"); [ "$freek" -gt 800000 ] || die "only ${freek} KiB available in the rescue, need > 800000"
-	( cd "$PARENT"; python3 -m http.server "$PORT" --bind 0.0.0.0 >/dev/null 2>&1 & echo $! > "$HERE/results/.http.pid" )   # $! must be python's own pid
-	HTTP_PID=$(cat "$HERE/results/.http.pid"); sleep 1; kill -0 "$HTTP_PID" || die "http.server did not start"
-	log "  HTTP server pid $HTTP_PID serving $PARENT"
+	NEEDK=$(( $(cd "$BUNDLE" && awk '{print $2}' SHA256SUMS | xargs du -kL | awk '{s += $1} END {print s + 0}') + 65536 ))
+	# An earlier attempt left its bundle in /tmp/b (RAM): remove it before the memory check.
+	$SSH 'rm -rf /tmp/b /tmp/b.new' </dev/null || die "could not clear /tmp/b in the rescue"
+	freek=$($SSH "awk '/MemAvailable/{print \$2}' /proc/meminfo" </dev/null); [ "${freek:-0}" -ge "$NEEDK" ] || die "only ${freek:-?} KiB available in the rescue, the bundle needs $NEEDK KiB (its size plus 64 MiB)"
+	log "  pushing the bundle to /tmp/b of the rescue over ssh ($(( NEEDK / 1024 - 64 )) MiB, ${freek} KiB available). Files: $FILES"
 	t0=$(date +%s)
-	log "  fetching payload (streaming live):"
-	run_stream "set -e; mkdir -p /tmp/b; cd /tmp/b; for f in $FILES; do wget -q -O \$f $BASEURL/\$f && echo \"fetched \$f\" || { echo \"wget \$f FAILED\"; exit 1; }; done; sha256sum -c SHA256SUMS 2>&1 | grep -vc ': OK' | grep -qx 0 && echo 'all files OK' || { sha256sum -c SHA256SUMS | grep -v ': OK'; exit 1; }; chmod +x tsx-emmc-restore tsx-factory-restore; ls -l /tmp/b | wc -l; free -m | sed -n 2p" || die "payload failed (see output above)"
+	run_stream_cmd tsx_push_bundle "$BUNDLE" /tmp/b $SSH </dev/null || die "pushing the bundle failed (see the output above). The rescue is still up: run step 3 again (--from-step 3)"
+	run_stream 'chmod +x /tmp/b/tsx-emmc-restore /tmp/b/tsx-factory-restore; echo "files in /tmp/b: $(ls /tmp/b | wc -l)"; free -m | sed -n 2p' </dev/null || die "the bundle in /tmp/b is not complete"
 	log "  payload done in $(( $(date +%s) - t0 )) s"
-	stop_http
 fi
 
 # ---------------------------------------------------------------- step 4 --

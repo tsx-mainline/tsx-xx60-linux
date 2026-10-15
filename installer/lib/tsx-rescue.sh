@@ -387,26 +387,66 @@ tsx_rescue_ssh() {
 # command string that holds this function name keeps the password out of it.
 tsx_rescue_ssh_cur() { tsx_rescue_ssh "${RESCUE_SSH_PW:-}" "$@"; }
 
+# The cipher order for the ssh streams into the rescue. Its dropbear takes the
+# first one that it supports. It has no GCM. chacha20-poly1305 is the fastest
+# one there (4.5 MiB/s on the TSS-10, aes128-ctr 3.1 MiB/s), faster than the
+# eMMC write (3.3 to 4.0 MiB/s). See docs/install.md "Network requirements".
+# TSX_SSH_CIPHERS replaces the list.
+TSX_SSH_CIPHERS_DEFAULT=chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes128-ctr,aes256-ctr
+
 # tsx_push_dir SRC DEST [--keep "NAMES"] SSH...: copy the host directory SRC
 # to DEST on the rescue as one tar stream over the ssh command SSH... (for
 # example tsx_rescue_ssh_cur -o ... root@IP). The host opens the connection,
 # so the panel needs no connection to the host. SRC must have a SHA256SUMS
 # file. The rescue checks every file against it before it replaces DEST.
+# A symbolic link in SRC goes as the file that it points to (tar -h), so a
+# caller can send a selection of files from another directory.
 # --keep moves the named entries of the old DEST into the new one, if the new
 # one does not have them. The install bundle keeps tfa, psr and ledstock this
 # way: a run again in the same rescue session (a resume) finds the files of
 # the earlier attempt there, after the earlier attempt wrote over the old
-# root. It prints "pushed DEST: N files, sha256 checked", or the failed
-# files. Use it on the host only (it needs a shell with pipefail for the tar
-# status).
+# root. For a push of TSX_PUSH_PROGRESS_MIB (default 32) MiB or more, the
+# rescue prints a progress line every TSX_PR_DD_TICK (default 15) seconds:
+# the MiB received, the percent and the seconds since the start. It prints
+# "pushed DEST: N files, sha256 checked", or the failed files. Use it on the
+# host only (it needs a shell with pipefail for the tar status).
 tsx_push_dir() {
-	local src=$1 dest=$2 keep= k mv=; shift 2
+	local src=$1 dest=$2 keep= k mv= total prog=; shift 2
 	[ "${1:-}" = --keep ] && { keep=$2; shift 2; }
 	[ -f "$src/SHA256SUMS" ] || { echo "tsx_push_dir: $src has no SHA256SUMS"; return 1; }
 	for k in $keep; do mv="$mv [ -e '$dest/$k' ] && [ ! -e '$dest.new/$k' ] && mv '$dest/$k' '$dest.new/$k' && echo 'kept $dest/$k from an earlier attempt';"; done
-	tar --owner=0 --group=0 -C "$src" -cf - . | "$@" "rm -rf '$dest.new' && mkdir -p '$dest.new' && tar -xf - -C '$dest.new' && cd '$dest.new' \
+	total=$(du -sLm "$src" | cut -f1)
+	if [ "$total" -ge "${TSX_PUSH_PROGRESS_MIB:-32}" ]; then
+		# The reporter stops by itself when the marker file exists. It is never
+		# killed (see pr_dd).
+		prog="( i=0; while [ ! -e '$dest.new.done' ]; do sleep 1; i=\$((i + 1)); [ \$((i % ${TSX_PR_DD_TICK:-15})) = 0 ] || continue; \
+			n=\$(du -sm '$dest.new' 2>/dev/null | cut -f1); echo \"  push $dest: \${n:-0}/$total MiB (\$(( \${n:-0} * 100 / $total ))%), \${i} s\"; done ) &"
+	fi
+	tar -h --owner=0 --group=0 -C "$src" -cf - . | "$@" "rm -rf '$dest.new' '$dest.new.done' && mkdir -p '$dest.new' \
+		&& { $prog tar -xf - -C '$dest.new'; r=\$?; : > '$dest.new.done'; wait; rm -f '$dest.new.done'; [ \$r = 0 ] || echo 'tar stream FAILED'; [ \$r = 0 ]; } && cd '$dest.new' \
 		&& { sha256sum -c SHA256SUMS > ../.tsx-sumcheck 2>&1 || { grep -v ': OK\$' ../.tsx-sumcheck; echo 'sha256 check FAILED'; exit 1; }; } \
 		&& cd / && { $mv true; } && rm -rf '$dest' && mv '$dest.new' '$dest' && echo \"pushed $dest: \$(wc -l < '$dest/SHA256SUMS') files, sha256 checked\""
+}
+
+# tsx_push_bundle SRC DEST SSH...: push the files that SRC/SHA256SUMS lists,
+# and SHA256SUMS itself, to DEST on the rescue (tsx_push_dir). Other files in
+# SRC stay on the host. The old DEST goes first, so the rescue RAM holds one
+# copy only. tsx-restore-factory sends its factory bundle this way.
+tsx_push_bundle() {
+	local src=$1 dest=$2 st f rc; shift 2
+	[ -f "$src/SHA256SUMS" ] || { echo "tsx_push_bundle: $src has no SHA256SUMS"; return 1; }
+	st=$(mktemp -d) || return 1
+	src=$(cd "$src" && pwd)
+	ln -s "$src/SHA256SUMS" "$st/SHA256SUMS"
+	for f in $(awk '{sub(/^\*/, "", $2); print $2}' "$src/SHA256SUMS"); do
+		case "$f" in */*|..|.) echo "tsx_push_bundle: $f: only plain file names are supported"; rm -rf "$st"; return 1;; esac
+		[ -f "$src/$f" ] || { echo "tsx_push_bundle: $src/$f is missing"; rm -rf "$st"; return 1; }
+		ln -s "$src/$f" "$st/$f"
+	done
+	"$@" "rm -rf '$dest' '$dest.new'" </dev/null || { echo "tsx_push_bundle: could not remove the old $dest"; rm -rf "$st"; return 1; }
+	tsx_push_dir "$st" "$dest" "$@"; rc=$?
+	rm -rf "$st"
+	return $rc
 }
 
 # ssh_test_rescue HOST PW: true if HOST answers ssh as the rescue. If HOST runs

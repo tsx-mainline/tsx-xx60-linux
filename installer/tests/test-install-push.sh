@@ -6,7 +6,8 @@
 #   - a fake rescue: "ssh ... CMD" runs CMD locally under busybox sh (the shell
 #     of the rescue), with stdin passed through. FAKE_SSH_CUT=N passes only the
 #     first N bytes of stdin (a lost connection). FAKE_SSH_FLIP=N changes byte
-#     N (a corrupt stream).
+#     N (a corrupt stream). FAKE_SSH_SLOW=S stops for S seconds after the
+#     first MiB (a slow link).
 #   - a fake Crestron root shell for steps/rootsh: an interactive bash on a
 #     real pty (python3 pty.spawn), like "ssh -tt admin@panel rootsh".
 # Checks:
@@ -20,6 +21,9 @@
 #   6. steps/rootsh --put: every byte value passes the pty unchanged, sha256
 #      checked. A root shell that cannot go raw stops with a message
 #   7. the installer has no HTTP path any more
+#   8. tsx_push_bundle (the factory bundle of tsx-restore-factory): only the
+#      files of SHA256SUMS go, the old DEST goes first, progress lines for a
+#      large push, and a dry run of tsx-restore-factory names the push
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 LIB="$HERE/lib/tsx-rescue.sh"
@@ -41,6 +45,8 @@ while [ $# -gt 0 ]; do case "$1" in
 shift   # [user@]host
 if [ -n "${FAKE_SSH_CUT:-}" ]; then
 	head -c "$FAKE_SSH_CUT" | busybox sh -c "$*"
+elif [ -n "${FAKE_SSH_SLOW:-}" ]; then
+	(head -c 1048576; sleep "$FAKE_SSH_SLOW"; cat) | busybox sh -c "$*"
 elif [ -n "${FAKE_SSH_FLIP:-}" ]; then
 	python3 -I -c 'import sys; d=bytearray(sys.stdin.buffer.read()); n=int(sys.argv[1]); d[n]^=0xff; sys.stdout.buffer.write(d)' "$FAKE_SSH_FLIP" | busybox sh -c "$*"
 else
@@ -153,6 +159,41 @@ grep -nE 'wget|ROOT_URL|root-url' "$HERE/steps/tsx-rescue-install" && bad "tsx-r
 grep -q -- '--root-from - 2>&1" < "\$FLAVOR_DIR/root.img"' "$HERE/tsx-install-mainline" && ok "step 4 streams root.img over ssh" || bad "step 4 does not stream root.img"
 grep -q 'tsx_write_result_check "\$RS_OUT" root' "$HERE/tsx-install-mainline" && ok "the host compares the root sha256" || bad "no host compare of the root sha256"
 for f in "$HERE/steps/tsx-rescue-install" "$LIB"; do busybox sh -n "$f" && ok "busybox sh -n $(basename "$f")" || bad "busybox sh -n $(basename "$f")"; done
+
+echo "== 8. tsx_push_bundle: the factory bundle of tsx-restore-factory"
+mkdir -p "$W/fb" "$W/r2"
+head -c $((3 * MIB)) /dev/urandom > "$W/fb/system.img"; echo boot > "$W/fb/boot-golden.img"
+printf '#!/bin/sh\necho emmc\n' > "$W/fb/tsx-emmc-restore"; chmod +x "$W/fb/tsx-emmc-restore"
+echo junk > "$W/fb/build.log"   # not in SHA256SUMS: stays on the host
+(cd "$W/fb" && sha256sum system.img boot-golden.img tsx-emmc-restore > SHA256SUMS)
+mkdir -p "$W/r2/b"; echo stale > "$W/r2/b/old.img"
+OUT=$(TSX_PUSH_PROGRESS_MIB=1 TSX_PR_DD_TICK=1 tsx_push_bundle "$W/fb" "$W/r2/b" ssh root@rescue 2>&1); rc=$?
+[ $rc = 0 ] && ok "push rc 0" || bad "push failed: $OUT"
+cmp -s "$W/fb/system.img" "$W/r2/b/system.img" && [ -x "$W/r2/b/tsx-emmc-restore" ] && [ ! -L "$W/r2/b/system.img" ] \
+	&& ok "the files arrived as files (not links), the mode is kept" || bad "bundle files differ"
+[ ! -e "$W/r2/b/build.log" ] && ok "a file that SHA256SUMS does not list stays on the host" || bad "build.log was sent"
+[ ! -e "$W/r2/b/old.img" ] && ok "the old DEST is gone" || bad "old.img survived"
+case "$OUT" in *"pushed $W/r2/b: 3 files, sha256 checked"*) ok "the output counts 3 files";; *) bad "output: $OUT";; esac
+# a slow link: the rescue prints progress lines (MiB, percent, seconds) while
+# tar reads the stream in the foreground
+OUT=$(TSX_PUSH_PROGRESS_MIB=1 TSX_PR_DD_TICK=1 FAKE_SSH_SLOW=2.5 tsx_push_bundle "$W/fb" "$W/r2/b" ssh root@rescue 2>&1)
+case "$OUT" in *"push $W/r2/b: "*" MiB ("*"%), "*" s"*) ok "progress: $(printf '%s\n' "$OUT" | grep -m1 "push $W/r2/b: " | sed 's/^ *//')";; *) bad "no progress line: $OUT";; esac
+echo changed > "$W/fb/boot-golden.img"
+OUT=$(tsx_push_bundle "$W/fb" "$W/r2/b" ssh root@rescue 2>&1); rc=$?
+[ $rc != 0 ] && case "$OUT" in *"boot-golden.img: FAILED"*) true;; *) false;; esac && ok "a changed file fails the sha256 check (rc $rc)" || bad "mismatch: rc $rc $OUT"
+rm -f "$W/fb/boot-golden.img"
+tsx_push_bundle "$W/fb" "$W/r2/b" ssh root@rescue >/dev/null 2>&1 && bad "a missing file was not seen" || ok "a file of SHA256SUMS that is missing stops the push"
+grep -nE 'http\.server|wget|BASEURL' "$HERE/tsx-restore-factory" && bad "tsx-restore-factory still serves or fetches over HTTP" || ok "tsx-restore-factory: no HTTP server, no wget"
+# a dry run with a made-up bundle names the push
+mkdir -p "$W/fbd" "$W/fbin"
+for f in factory.manifest emmc.manifest uboot-check.txt; do echo "unit=test" > "$W/fbd/$f"; done
+echo identity_and_hw=identical > "$W/fbd/env-identity.txt"
+(cd "$W/fbd" && sha256sum factory.manifest emmc.manifest > SHA256SUMS)
+for t in sshpass curl; do command -v $t >/dev/null 2>&1 || { printf '#!/bin/sh\nexit 1\n' > "$W/fbin/$t"; chmod +x "$W/fbin/$t"; }; done
+OUT=$(PATH="$W/fbin:$PATH" "$HERE/tsx-restore-factory" --bundle "$W/fbd" --dry-run --uart no --ws-ip 192.0.2.1 --port 8081 --results "$W/rf.txt" 192.0.2.10 2>&1); rc=$?
+[ $rc = 0 ] && ok "tsx-restore-factory --dry-run rc 0" || bad "dry run rc $rc: $OUT"
+case "$OUT" in *"step 3: rm -rf /tmp/b"*"one tar stream over ssh (tsx_push_bundle"*"opens no connection to this host"*) ok "the dry run names the push over ssh";; *) bad "dry run: $OUT";; esac
+case "$OUT" in *"--port is ignored"*) ok "--port is accepted and ignored";; *) bad "no --port note: $OUT";; esac
 
 echo "== $N ok, $F failed"
 [ $F = 0 ] && echo PASS test-install-push || echo FAIL test-install-push
