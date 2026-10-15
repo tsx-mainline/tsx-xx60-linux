@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# Make the folder of an install stick (docs/install.md "Install from a USB
+# stick"). Copy the folder onto a FAT32 USB stick. A panel then installs
+# mainline from the stick with no network and no host.
+#
+#   tsx-make-stick --payload DIR --kernel lts|stable --out DIR
+#                  [--config FILE | --no-config] [--kiosk-url URL] [--yes]
+#                  [--tfa-source auto|panel|puf|none] [--psr-source auto|panel|puf|none]
+#
+# The folder holds:
+#   jabil.txt         three lines for the stock stick boot of U-Boot
+#                     (jabil_factory, docs/boot.md "U-Boot USB needs VBUS held
+#                     before enumeration"): none-5inch.img, then tsx-rescue.img
+#                     for the 7-inch and the 10-inch panels
+#   tsx-rescue.img    the rescue image of the payload. It has the runner
+#                     steps/tsx-rescue-staged, which finds the stage below
+#   tsx-stage/        STAGE, bundle/ (the scripts of the rescue, panel.conf,
+#                     manifest, boot.img) and root.img.gz: the format of
+#                     --stage of tsx-install-mainline
+#   SHA256SUMS        all files, for a check of the copy on the stick
+#   README.txt        the steps at the panel
+# The stick stays read-only on the panel, so one stick installs many panels.
+# Each panel installs a stick stage only once (p1:tsxstick.done).
+#
+# PANEL CONFIGURATION: --config FILE (tsx-config checks it), or the prompts of
+# tsx-install-mainline. One panel.conf for every panel of the stick: leave
+# PANEL_NAME blank and each panel takes <model>-<MAC>. The stick needs a root
+# password hash or an SSH key in it. --no-config makes a stick without
+# panel.conf: only panels that run mainline install from it, and they keep
+# their own panel.conf. A stock Android panel refuses such a stick.
+#
+# The panel needs USB recovery (tsx-usb-recovery enable): every mainline
+# panel has it after tsx-install-mainline. A stock Android panel gets it from
+# installer/android/tsx-install-usb or the arm step of tsx-install-mainline,
+# once. Then plug in the stick and power-cycle the panel.
+set -euo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' >&2; }
+PAYLOAD= KERNEL= OUT= CONFIG= NOCONF=0 URL= YES=0 TFA_SOURCE=auto PSR_SOURCE=auto
+while [ $# -gt 0 ]; do case "$1" in
+	--payload) PAYLOAD=$2; shift 2;; --kernel) KERNEL=$2; shift 2;; --out) OUT=$2; shift 2;;
+	--config) CONFIG=$2; shift 2;; --no-config) NOCONF=1; shift;; --kiosk-url) URL=$2; shift 2;; --yes) YES=1; shift;;
+	--tfa-source) TFA_SOURCE=$2; shift 2;; --psr-source) PSR_SOURCE=$2; shift 2;;
+	-h|--help) usage; exit 0;; *) echo "unknown argument $1" >&2; usage; exit 2;;
+esac; done
+[ -n "$PAYLOAD" ] && [ -n "$OUT" ] || { usage; exit 2; }
+case "$KERNEL" in lts|stable) ;; *) echo "tsx-make-stick: --kernel lts|stable is required" >&2; exit 2;; esac
+case "$TFA_SOURCE" in auto|panel|puf|none) ;; *) echo "--tfa-source must be auto, panel, puf, or none" >&2; exit 2;; esac
+case "$PSR_SOURCE" in auto|panel|puf|none) ;; *) echo "--psr-source must be auto, panel, puf, or none" >&2; exit 2;; esac
+[ -z "$CONFIG" ] || [ "$NOCONF" = 0 ] || { echo "tsx-make-stick: --config and --no-config together" >&2; exit 2; }
+[ -z "$CONFIG" ] || [ -f "$CONFIG" ] || { echo "tsx-make-stick: no file $CONFIG" >&2; exit 2; }
+[ ! -e "$OUT" ] || [ -z "$(ls -A "$OUT" 2>/dev/null)" ] || { echo "tsx-make-stick: $OUT is not empty" >&2; exit 2; }
+. "$HERE/lib/tsx-rescue.sh"
+. "$HERE/lib/tsx-tfa.sh"
+. "$HERE/lib/tsx-psr.sh"
+. "$HERE/lib/tsx-stage.sh"
+. "$HERE/lib/tsx-config-prompt.sh"
+mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
+RESULTS=$OUT.log
+: > "$RESULTS"
+log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$RESULTS" >&2; }
+die() { log "ERROR: $*"; exit 1; }
+run_stream_cmd() { "$@" 2>&1 | while IFS= read -r l; do log "  $l"; done; }
+TMPFILES=() W=
+cleanup() { rm -rf "$W" "${TSX_CONFIG_STAGE:-}"; [ ${#TMPFILES[@]} = 0 ] || rm -f "${TMPFILES[@]}"; }
+trap cleanup EXIT
+
+RESCUE=$PAYLOAD/rescue.img FLAVOR_DIR=$PAYLOAD/$KERNEL
+for f in "$RESCUE" "$FLAVOR_DIR/manifest" "$FLAVOR_DIR/root.img" "$FLAVOR_DIR/boot.img"; do [ -f "$f" ] || die "missing payload file: $f"; done
+(cd "$FLAVOR_DIR" && sha256sum -c --quiet SHA256SUMS) || die "$FLAVOR_DIR/SHA256SUMS mismatch"
+tsx_stage_rescue_ok "$RESCUE" || die "$RESCUE cannot run a stage (an older payload: no steps/tsx-rescue-staged in it)"
+log "== tsx-make-stick: payload $PAYLOAD, kernel $KERNEL, out $OUT"
+
+# ---- panel configuration -------------------------------------------------------
+W=$(mktemp -d)
+NEEDS_MAINLINE=0
+if [ "$NOCONF" = 1 ]; then
+	CONFIG= NEEDS_MAINLINE=1
+	log "  no panel.conf (--no-config): only panels that run mainline install from this stick, and they keep their own panel.conf"
+elif [ -n "$CONFIG" ]; then
+	install -m 600 "$CONFIG" "$W/panel.conf"; CONFIG=$W/panel.conf
+	tsx_config_has_root_login "$CONFIG" || die "$(tsx_config_root_login_message | tr '\n' ' ')"
+	log "  panel.conf: $(TSX_CONF="$CONFIG" "$TSX_CONFIG_BIN" show | wc -l) keys (--config)"
+elif [ "$YES" = 1 ]; then
+	die "--yes needs --config FILE or --no-config (a stick for a stock Android panel needs a root login)"
+else
+	CONFIG=$W/panel.conf
+	tsx_config_prompt "$CONFIG" "" || die "$(tsx_config_root_login_message | tr '\n' ' ')"
+fi
+[ -z "$CONFIG" ] || TSX_CONF="$CONFIG" "$TSX_CONFIG_BIN" set KERNEL_FLAVOR "$KERNEL" >/dev/null || die "could not set KERNEL_FLAVOR"
+
+# ---- the stage ---------------------------------------------------------------------
+mkdir -p "$W/bundle"
+tsx_bundle_make "$W/bundle" "$CONFIG" "$URL" "$FLAVOR_DIR"
+tsx_stage_puf_files "$W/bundle" "$TFA_SOURCE" "$PSR_SOURCE"
+tsx_stage_gzip "$FLAVOR_DIR/root.img" || die "gzip of root.img failed"
+RSHA=$(sha256sum < "$RESCUE" | cut -d' ' -f1)
+# keep_data=1: a mainline panel keeps a clean tsxdata (/data). A stock card is
+# always folded and formatted. golden=stick: the rescue of the stick goes to
+# the p1 slots.
+tsx_stage_build "$W/stage" "$W/bundle" "$STAGE_GZ" "$KERNEL" 1 stick "$TFA_SOURCE" "$PSR_SOURCE" \
+	"$(printf 'source=stick\nrescue_sha256=%s\nneeds_mainline=%s' "$RSHA" "$NEEDS_MAINLINE")"
+log "  copying the stage to $OUT/tsx-stage ($(( $(tsx_stage_kib "$W/stage") / 1024 )) MiB)"
+cp -rL "$W/stage" "$OUT/tsx-stage"
+cp "$RESCUE" "$OUT/tsx-rescue.img"
+# jabil.txt: exactly three short lines (docs/boot.md: U-Boot reads it into a
+# 150-byte buffer, a name has fewer than 50 characters).
+printf '%s\n' none-5inch.img tsx-rescue.img tsx-rescue.img > "$OUT/jabil.txt"
+cat > "$OUT/README.txt" <<EOF
+TSX - LINUX install stick ($(sed -n 's/^kernel_flavor=//p' "$FLAVOR_DIR/manifest") kernel, made $(date +%F))
+
+1. The panel needs USB recovery. Every panel that runs mainline has it.
+   A stock Android panel needs installer/android/tsx-install-usb once.
+2. Remove the LED bar from the USB-A socket, if one is in it.
+3. Put this stick into the USB-A socket.
+4. Power-cycle the panel.
+5. The rescue screen shows the install. Do not power off.
+6. When the screen says so, remove the stick. The panel restarts.
+EOF
+(cd "$OUT" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | sort | xargs sha256sum > SHA256SUMS)
+(cd "$OUT/tsx-stage" && sha256sum -c --quiet SHA256SUMS) || die "the stage in $OUT does not match its SHA256SUMS"
+log "== done: $OUT ($(du -sm "$OUT" | cut -f1) MiB). Copy everything in it to the root of a FAT32 USB stick, then check the copy: (cd STICK && sha256sum -c SHA256SUMS)"

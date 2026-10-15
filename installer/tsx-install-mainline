@@ -272,53 +272,10 @@ trap cleanup EXIT
 build_bundle() {
 	[ -z "$STAGE2" ] || return 0
 	STAGE2=$(mktemp -d "$RESULTS.bundle.XXXXXX")
-	[ -n "$URL" ] && printf '%s\n' "$URL" > "$STAGE2/kiosk-url.txt"
-	[ -n "$CONFIG" ] && { install -m 600 "$CONFIG" "$STAGE2/panel.conf"; log "  panel.conf included in the install bundle ($(TSX_CONF="$CONFIG" "$TSX_CONFIG_BIN" show | wc -l) keys set)"; }
 	# --fetch: the panel adds manifest and boot.img of the release (steps/tsx-netinstall)
-	[ -n "$FETCH" ] || cp "$FLAVOR_DIR/manifest" "$FLAVOR_DIR/boot.img" "$STAGE2/"
-	cp "$HERE/lib/tsx-rescue.sh" "$HERE/lib/tsx-tfa.sh" "$HERE/lib/tsx-psr.sh" "$HERE/lib/tsx-ledstock.sh" "$HERE/emmc/tsx-usb-recovery" "$HERE/steps/tsx-rescue-install" "$STAGE2/"
-	chmod +x "$STAGE2/tsx-rescue-install" "$STAGE2/tsx-usb-recovery"
-	bundle_sums
+	tsx_bundle_make "$STAGE2" "$CONFIG" "$URL" "$([ -n "$FETCH" ] || echo "$FLAVOR_DIR")"
 }
-bundle_sums() { (cd "$STAGE2" && find . -type f ! -name 'SHA256SUMS*' -print | sort | xargs sha256sum > SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS); }
-
-# tfa_puf_fetch DIR: rootfs/vendor-fetch.sh here (the .puf download, cached),
-# then put its DSP files in DIR (the tfa/ layout with SOURCE and SHA256SUMS).
-# Sets TFA_PUF_N.
-tfa_puf_fetch() {
-	local dir=$1 fetch="$HERE/../rootfs/vendor-fetch.sh" local_dir v n=0
-	local_dir=${TFA_VENDOR_LOCAL:-"$HERE/../rootfs/vendor-local/tfa9890"}
-	log "  TFA9890: rootfs/vendor-fetch.sh on this host (Crestron's .puf, 357 MB, downloaded once and cached). The log is in $RESULTS"
-	command -v unzip >/dev/null || busybox --list 2>/dev/null | grep -x unzip >/dev/null \
-		|| log "  WARNING: no unzip on this host (neither unzip nor busybox unzip): vendor-fetch.sh will fail unless its files are already cached"
-	[ -x "$fetch" ] && "$fetch" >>"$RESULTS" 2>&1 || { log "  WARNING: rootfs/vendor-fetch.sh failed (see $RESULTS)"; return 1; }
-	rm -rf "$dir"; mkdir -p "$dir"
-	for v in $TSX_TFA_VARIANTS; do
-		[ -f "$local_dir/$v/stereo.cnt" ] || continue
-		mkdir -p "$dir/$v"; cp "$local_dir/$v/stereo.cnt" "$dir/$v/"; n=$((n + 1))
-	done
-	[ $n -gt 0 ] || { log "  WARNING: vendor-fetch.sh left no stereo.cnt in $local_dir"; rm -rf "$dir"; return 1; }
-	{ echo "source=puf"; echo "firmware=$(basename "${TFA_PUF_URL:-tsw-xx60_3.002.1061.001.puf}") (rootfs/vendor-fetch.sh, pinned sha256)"
-	  for v in $TSX_TFA_VARIANTS; do [ -f "$dir/$v/stereo.cnt" ] && echo "$v=$(sha256sum < "$dir/$v/stereo.cnt" | cut -d' ' -f1) pinned"; done; } > "$dir/SOURCE"
-	(cd "$dir" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | sort | xargs sha256sum > SHA256SUMS)
-	TFA_PUF_N=$n
-}
-# psr_puf_fetch DIR: rootfs/vendor-fetch.sh --psr here, then put the PSR file
-# in DIR (the psr/ layout with SOURCE and SHA256SUMS). Sets PSR_PUF_SHA.
-psr_puf_fetch() {
-	local dir=$1 fetch="$HERE/../rootfs/vendor-fetch.sh" local_dir sha
-	local_dir=${PSR_VENDOR_LOCAL:-"$HERE/../rootfs/vendor-local/csr8811"}
-	log "  Bluetooth PSR: rootfs/vendor-fetch.sh --psr on this host (Crestron's .puf, 357 MB, downloaded once and cached). The log is in $RESULTS"
-	[ -x "$fetch" ] && "$fetch" --psr >>"$RESULTS" 2>&1 || { log "  WARNING: rootfs/vendor-fetch.sh --psr failed (see $RESULTS)"; return 1; }
-	[ -f "$local_dir/$TSX_PSR_NAME" ] || { log "  WARNING: vendor-fetch.sh --psr left no $TSX_PSR_NAME in $local_dir"; return 1; }
-	rm -rf "$dir"; mkdir -p "$dir"
-	cp "$local_dir/$TSX_PSR_NAME" "$dir/"
-	sha=$(sha256sum < "$dir/$TSX_PSR_NAME" | cut -d' ' -f1)
-	{ echo "source=puf"; echo "firmware=$(basename "${TFA_PUF_URL:-tsw-xx60_3.002.1061.001.puf}") (rootfs/vendor-fetch.sh --psr, pinned sha256)"
-	  echo "sha256=$sha $([ "$sha" = "$(tsx_psr_pinned)" ] && echo pinned || echo unpinned)"; } > "$dir/SOURCE"
-	(cd "$dir" && sha256sum "$TSX_PSR_NAME" SOURCE > SHA256SUMS)
-	PSR_PUF_SHA=$sha
-}
+bundle_sums() { tsx_bundle_sums "$STAGE2"; }
 
 # stage_skip REASON: a stage is not possible. --stage yes stops, auto goes on
 # with the push path.
@@ -326,24 +283,8 @@ stage_skip() {
 	[ "$STAGE_OPT" = yes ] && die "stage: $* (--stage yes)"
 	log "  stage: $*. The images go over ssh during the rescue instead (--stage auto)"
 }
-# stage_puf_files: the .puf files for a stage. The rescue looks on the panel
-# first. With --tfa-source puf (or --psr-source puf), the stage carries the
-# download. With auto, it carries the files only if this host has them in its
-# cache already.
-stage_puf_files() {
-	local tfa_cached psr_cached
-	tfa_cached=$(ls "${TFA_VENDOR_LOCAL:-$HERE/../rootfs/vendor-local/tfa9890}"/*/stereo.cnt 2>/dev/null | head -n 1) || tfa_cached=
-	psr_cached=$(ls "${PSR_VENDOR_LOCAL:-$HERE/../rootfs/vendor-local/csr8811}/$TSX_PSR_NAME" 2>/dev/null) || psr_cached=
-	case "$TFA_SOURCE" in
-	puf) tfa_puf_fetch "$STAGE2/tfa" || log "  WARNING: no .puf DSP files for the stage";;
-	auto) [ -z "$tfa_cached" ] || tfa_puf_fetch "$STAGE2/tfa-puf" || true;;
-	esac
-	case "$PSR_SOURCE" in
-	puf) psr_puf_fetch "$STAGE2/psr" || log "  WARNING: no .puf PSR file for the stage";;
-	auto) [ -z "$psr_cached" ] || psr_puf_fetch "$STAGE2/psr-puf" || true;;
-	esac
-	bundle_sums
-}
+# stage_puf_files: the .puf files for a stage (lib/tsx-stage.sh).
+stage_puf_files() { tsx_stage_puf_files "$STAGE2" "$TFA_SOURCE" "$PSR_SOURCE"; }
 # fetch_stage: --fetch. The kiosk downloads the signed release and makes the
 # stage (steps/tsx-netinstall). Sets NET_RESCUE_SHA, BOOT_SHA_WANT and
 # ROOT_SHA_WANT from the signed release.

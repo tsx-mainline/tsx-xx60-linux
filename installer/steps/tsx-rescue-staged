@@ -11,7 +11,9 @@
 #
 # Before the rescue boot, installer/tsx-install-mainline copies a stage to the
 # card of the panel: tsx-stage/ on card p5 (stock Android, the "sdcard" ext2)
-# or on card p4 (tsxdata, a mainline panel). The stage has:
+# or on card p4 (tsxdata, a mainline panel). installer/tsx-make-stick puts a
+# stage on a USB stick (docs/install.md "Install from a USB stick"). The stage
+# has:
 #   STAGE         key=value: format=tsx-stage-1, kernel, keep_data, golden,
 #                 tfa_source, psr_source, root_gz_bytes, root_gz_sha256
 #   bundle/       the install bundle of tsx-rescue-install, with SHA256SUMS.
@@ -26,7 +28,16 @@
 #
 # What "auto" does:
 #   1. Find the card (tsx-lib.sh). Mount p5 (stock layout) or p4 (folded card)
-#      and look for tsx-stage/STAGE. No stage: exit 0, nothing changes.
+#      and look for tsx-stage/STAGE. If the card has none, look for a USB
+#      stick with tsx-stage/STAGE (up to 20 s for the stick to show up). No
+#      stage: exit 0, nothing changes.
+#      A stick stays read-only: the runner never changes it, so one stick
+#      installs many panels. p1:tsxstick.done holds the sha256 of the STAGE
+#      that this panel installed. The same stick does not install it twice.
+#      One exception: a panel that boots again from the stick that installed
+#      it (the stick stayed in through a reboot) renames jabil.txt on the
+#      stick to jabil.txt.done and reboots, so U-Boot boots the kiosk. Rename
+#      the file back for the next panel.
 #   2. Check that the RAM can hold the bundle and root.img.gz (plus 64 MiB).
 #      If not, rename STAGE to STAGE.failed and stop: the host then pushes
 #      the images over ssh.
@@ -42,11 +53,17 @@
 #      gunzip on stdin. The readback checks the sha256 of boot and root.
 #   7. Copy the log to /data/tsx/install-staged.log on the new tsxdata, so the
 #      host can compare the WRITE-RESULT lines after the boot. Reboot.
+#      From a stick: write p1:tsxstick.done, put the rescue image of the
+#      stick in the golden slot and p1:tsxboot.img (golden=stick), keep the
+#      old p1:boot.img in /data/tsx/backup, and ask on the screen to remove
+#      the stick. Reboot when the stick is gone.
 # A failure stops the run and keeps the rescue up with the files in RAM. The
 # log is /run/tsx-staged.log.
 # Test hooks: TSX_RUN, TSX_TMP (default /tmp), TSX_STAGE_DIR (a stage folder:
-# no card, no mount), TSX_STAGED_INSTALL (the tsx-rescue-install to run),
-# TSX_MEMAVAIL_KIB, TSX_NO_REBOOT=1, TSX_STAGED_FOLLOW_S (the follow limit).
+# no card, no mount), TSX_STICK_DIR (the root of a stick: no card, no mount,
+# no p1), TSX_STAGED_INSTALL (the tsx-rescue-install to run),
+# TSX_MEMAVAIL_KIB, TSX_NO_REBOOT=1, TSX_STAGED_FOLLOW_S (the follow limit),
+# TSX_STICK_WAIT (seconds to wait for a stick, default 20).
 RUN=${TSX_RUN:-/run}; TMP=${TSX_TMP:-/tmp}
 LOG=$RUN/tsx-staged.log STATE=$RUN/tsx-staged.state PIDF=$RUN/tsx-staged.pid
 # One runner per boot: the first one makes this folder (mkdir is atomic). It
@@ -103,10 +120,35 @@ nostage() { rm -f "$PIDF" "$LOG"; echo nostage > "$STATE"; exit 0; }
 say() { echo "tsx-rescue-staged: $(date +%T 2>/dev/null) $*" >> "$LOG"; }
 STATUS=${TSX_STATUS:-$RUN/tsx-install-state}
 fail() { say "ERROR: $*"; echo "failed: $*" > "$STATE"; printf '%s\n' "failed: $*" > "$STATUS" 2>/dev/null; exit 1; }
-unmount() { [ -n "${TSX_STAGE_DIR:-}" ] || { sync; umount "$MNT" 2>/dev/null; }; }
+FROM=card STICKDEV= STM=$RUN/tsx-stick-mnt
+unmount() { [ -n "${TSX_STAGE_DIR:-}${TSX_STICK_DIR:-}" ] || { sync; umount "$MNT" 2>/dev/null; umount "$STM" 2>/dev/null; }; }
+# A stage on the card runs once: it is marked or removed. A stick stays as it is.
+mark() { [ "$FROM" = stick ] || mv "$S/$1" "$S/$2"; }
 
 # ---- 1. find the stage --------------------------------------------------------
+# find_stick: mount the first USB stick (vfat) that has tsx-stage/STAGE on $STM,
+# read-only. Sets STICKDEV. Waits up to TSX_STICK_WAIT s for the stick.
+find_stick() {
+	local end b n dev
+	end=$(( $(cut -d. -f1 /proc/uptime) + ${TSX_STICK_WAIT:-20} ))
+	mkdir -p "$STM"
+	while [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ]; do
+		for b in /sys/block/sd*; do
+			[ -e "$b" ] || continue
+			n=${b##*/}
+			for dev in /dev/${n}1 /dev/$n; do
+				[ -b "$dev" ] || continue
+				mount -t vfat -o ro "$dev" "$STM" 2>/dev/null || continue
+				[ -f "$STM/tsx-stage/STAGE" ] && { STICKDEV=$n; return 0; }
+				umount "$STM"
+			done
+		done
+		sleep 1
+	done
+	return 1
+}
 if [ -n "${TSX_STAGE_DIR:-}" ]; then S=$TSX_STAGE_DIR
+elif [ -n "${TSX_STICK_DIR:-}" ]; then S=$TSX_STICK_DIR/tsx-stage; FROM=stick
 else
 	[ -f /usr/share/tsx/tsx-lib.sh ] || nostage
 	# Never next to a run of the push path: it can format p4 at any moment.
@@ -116,9 +158,13 @@ else
 	n=0; until tsx_find_disk 2>/dev/null; do n=$((n + 1)); [ $n -lt 20 ] || nostage; sleep 1; done
 	if [ "$TSX_DISK_LAYOUT" = stock ]; then DEV=$P5; else DEV=$P4; fi
 	mkdir -p "$MNT"
-	mount -t ext4 -o rw,noatime "$DEV" "$MNT" 2>/dev/null || mount -t ext2 -o rw,noatime "$DEV" "$MNT" 2>/dev/null \
-		|| nostage
 	S=$MNT/tsx-stage
+	mount -t ext4 -o rw,noatime "$DEV" "$MNT" 2>/dev/null || mount -t ext2 -o rw,noatime "$DEV" "$MNT" 2>/dev/null || S=
+	if [ -z "$S" ] || [ ! -f "$S/STAGE" ]; then
+		umount "$MNT" 2>/dev/null
+		find_stick || nostage
+		S=$STM/tsx-stage FROM=stick DEV="USB stick /dev/$STICKDEV"
+	fi
 fi
 if [ ! -f "$S/STAGE" ]; then unmount; nostage; fi
 echo running > "$STATE"
@@ -126,7 +172,48 @@ echo "$$ staged install" > "$RUN/tsx-op" 2>/dev/null
 printf '%s\n' "staged install: starting" > "$STATUS" 2>/dev/null
 say "stage found: ${DEV:-$S}"
 conf() { sed -n "s/^$1=//p" "$S/STAGE" | tail -n 1; }
-grep -q '^format=tsx-stage-1$' "$S/STAGE" || { mv "$S/STAGE" "$S/STAGE.failed"; unmount; fail "$S/STAGE is not a tsx-stage-1 file"; }
+grep -q '^format=tsx-stage-1$' "$S/STAGE" || { mark STAGE STAGE.failed; unmount; fail "$S/STAGE is not a tsx-stage-1 file"; }
+STAGE_ID=$(sha256sum < "$S/STAGE" | cut -d' ' -f1)
+# p1:tsxstick.done names the stick stage that this panel installed already.
+# p1_dir: mount p1 (vfat) on $RUN/tsx-p1s and print the folder (test hook TSX_P1_DIR).
+p1_dir() { if [ -n "${TSX_P1_DIR:-}" ]; then echo "$TSX_P1_DIR"; else mkdir -p "$RUN/tsx-p1s"; mount -t vfat "$P1" "$RUN/tsx-p1s" && echo "$RUN/tsx-p1s"; fi; }
+p1_done() { [ -n "${TSX_P1_DIR:-}" ] || { sync; umount "$RUN/tsx-p1s" 2>/dev/null; }; }
+# wait_stick_out MESSAGE: show MESSAGE on the screen until the stick is gone, then reboot.
+wait_stick_out() {
+	printf '%s\n' "done: $1" > "$STATUS" 2>/dev/null
+	say "$1"
+	[ "${TSX_NO_REBOOT:-0}" = 1 ] && exit 0
+	while [ -n "$STICKDEV" ] && [ -e "/sys/block/$STICKDEV" ]; do sleep 2; done
+	say "the USB stick is out: rebooting"
+	sync; reboot -f; exit 0
+}
+if [ "$FROM" = stick ]; then
+	P1D=$(p1_dir) && OLDID=$(cat "$P1D/tsxstick.done" 2>/dev/null); p1_done
+	if [ "${OLDID:-}" = "$STAGE_ID" ]; then
+		# The stick stayed in through a reboot after its install. U-Boot boots
+		# it again at every boot while jabil.txt is there. Rename it, so the
+		# next boot reaches the kiosk, and reboot.
+		echo "done" > "$STATE"
+		say "this panel is installed from this USB stick already (p1:tsxstick.done)"
+		STD=${TSX_STICK_DIR:-$STM}
+		if [ -f "$STD/jabil.txt" ] && { [ -n "${TSX_STICK_DIR:-}" ] || mount -o remount,rw "$STM"; } \
+			&& mv "$STD/jabil.txt" "$STD/jabil.txt.done" && sync; then
+			unmount
+			printf '%s\n' "done: installed from this USB stick already. jabil.txt on the stick is now jabil.txt.done: the panel restarts into the kiosk" > "$STATUS" 2>/dev/null
+			say "jabil.txt on the stick renamed to jabil.txt.done (rename it back for the next panel). Rebooting into the kiosk"
+			rm -f "$PIDF"
+			[ "${TSX_NO_REBOOT:-0}" = 1 ] && exit 0
+			sleep "${TSX_STAGED_REBOOT_S:-10}"; sync; reboot -f; exit 0
+		fi
+		unmount
+		wait_stick_out "this panel is installed from this USB stick already. Remove the USB stick: the panel then restarts"
+	fi
+fi
+# A stick without panel.conf (tsx-make-stick --no-config) gives no root login
+# to a stock Android panel: refuse it there, before any write.
+if [ "$(conf needs_mainline)" = 1 ] && [ "${TSX_DISK_LAYOUT:-}" = stock ]; then
+	unmount; fail "this stick has no panel.conf and is for panels that run mainline only. This panel has the stock card layout (stock Android). Nothing was written"
+fi
 GZB=$(conf root_gz_bytes); GZS=$(conf root_gz_sha256); KEEP=$(conf keep_data); GOLDEN=$(conf golden)
 TFA_SOURCE=$(conf tfa_source); PSR_SOURCE=$(conf psr_source)
 say "kernel $(conf kernel), keep_data=$KEEP, golden=$GOLDEN, tfa_source=$TFA_SOURCE, psr_source=$PSR_SOURCE, root.img.gz $GZB bytes"
@@ -136,12 +223,12 @@ BK=$(du -sk "$S/bundle" | cut -f1)
 NEEDK=$(( GZB / 1024 + BK + 65536 ))
 AVK=${TSX_MEMAVAIL_KIB:-$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)}
 if [ "${AVK:-0}" -lt "$NEEDK" ]; then
-	mv "$S/STAGE" "$S/STAGE.failed"; unmount
+	mark STAGE STAGE.failed; unmount
 	fail "the RAM has ${AVK:-?} KiB available, the stage needs $NEEDK KiB. The host can push the images over ssh instead"
 fi
 
 # ---- 3. take the stage, copy it to RAM, check it, remove it from the card --------
-mv "$S/STAGE" "$S/STAGE.taken" && sync || { unmount; fail "cannot mark the stage as taken"; }
+mark STAGE STAGE.taken && sync || { unmount; fail "cannot mark the stage as taken"; }
 say "copying the stage to RAM ($((NEEDK / 1024 - 64)) MiB, ${AVK} KiB available)"
 printf '%s\n' "staged install: copying the stage to RAM" > "$STATUS" 2>/dev/null
 rm -rf "$B" "$TMP/tsx-root.img.gz"
@@ -151,18 +238,36 @@ cp -a "$S/bundle" "$B" || { unmount; fail "copying the stage to RAM failed"; }
 . "$B/tsx-rescue.sh"
 pr_dd "$TMP/tsx-root.img.gz" 0 $(( (GZB + 1048575) / 1048576 )) "stage copy to RAM" -- if="$S/root.img.gz" bs=1M 2>> "$LOG" \
 	|| { unmount; fail "copying root.img.gz to RAM failed"; }
-( cd "$B" && sha256sum -c SHA256SUMS > "$RUN/tsx-staged.sums" 2>&1 ) || { grep -v ': OK$' "$RUN/tsx-staged.sums" >> "$LOG"; mv "$S" "$S.failed" 2>/dev/null; unmount; fail "the bundle of the stage does not match its SHA256SUMS (it stays on the card as tsx-stage.failed)"; }
+( cd "$B" && sha256sum -c SHA256SUMS > "$RUN/tsx-staged.sums" 2>&1 ) || { grep -v ': OK$' "$RUN/tsx-staged.sums" >> "$LOG"; [ "$FROM" = stick ] || mv "$S" "$S.failed" 2>/dev/null; unmount; fail "the bundle of the stage does not match its SHA256SUMS (on the card it stays as tsx-stage.failed)"; }
 [ "$(stat -c %s "$TMP/tsx-root.img.gz")" = "$GZB" ] && [ "$(sha256sum < "$TMP/tsx-root.img.gz" | cut -d' ' -f1)" = "$GZS" ] \
-	|| { mv "$S" "$S.failed" 2>/dev/null; unmount; fail "root.img.gz of the stage has a wrong size or sha256 (it stays on the card as tsx-stage.failed)"; }
+	|| { [ "$FROM" = stick ] || mv "$S" "$S.failed" 2>/dev/null; unmount; fail "root.img.gz of the stage has a wrong size or sha256 (on the card it stays as tsx-stage.failed)"; }
 say "stage checked: bundle SHA256SUMS ok, root.img.gz sha256 $GZS"
-rm -rf "$S" && sync || say "WARNING: could not remove $S from the card"
-unmount
-say "the stage is in RAM and gone from the card. From here the install needs no network"
+if [ "$GOLDEN" = stick ]; then
+	# The rescue image of the stick (STAGE rescue_sha256) for the p1 slots.
+	cp "$S/../tsx-rescue.img" "$TMP/tsx-stick-rescue.img" 2>/dev/null \
+		&& [ "$(sha256sum < "$TMP/tsx-stick-rescue.img" | cut -d' ' -f1)" = "$(conf rescue_sha256)" ] \
+		|| { unmount; fail "tsx-rescue.img of the stick is missing or has a wrong sha256"; }
+fi
+if [ "$FROM" = stick ]; then unmount; say "the stage is in RAM. The stick is not changed. From here the install needs no network"
+else
+	rm -rf "$S" && sync || say "WARNING: could not remove $S from the card"
+	unmount
+	say "the stage is in RAM and gone from the card. From here the install needs no network"
+fi
 
 # ---- 4. the golden slot (a reinstall) -------------------------------------------
-if [ "$GOLDEN" = 1 ] && [ -z "${TSX_STAGE_DIR:-}" ]; then
+if [ "$GOLDEN" = 1 ] && [ -z "${TSX_STAGE_DIR:-}${TSX_STICK_DIR:-}" ]; then
 	say "golden slot: p1:boot.img <- the rescue that just booted"
 	tsx_golden_update >> "$LOG" 2>&1 || say "WARNING: could not update the golden slot (p1:boot.img). The install goes on"
+elif [ "$GOLDEN" = stick ]; then
+	# The rescue of the stick goes to the golden slot and to p1:tsxboot.img, as
+	# the arm step does. The old p1:boot.img (the Crestron golden image on a
+	# stock card) goes to /data/tsx/backup after the install.
+	say "p1: boot.img and tsxboot.img <- the rescue of the stick"
+	P1D=$(p1_dir) || fail "cannot mount p1"
+	[ -f "$P1D/boot.img" ] && ! cmp -s "$P1D/boot.img" "$TMP/tsx-stick-rescue.img" && cp "$P1D/boot.img" "$TMP/tsx-p1-boot.old"
+	tsx_p1_rescue "$P1D" "$TMP/tsx-stick-rescue.img" >> "$LOG" 2>&1 || { p1_done; fail "writing the rescue to p1 failed (see the log)"; }
+	p1_done
 fi
 
 # ---- 5. DSP, PSR and LED bar files from the panel --------------------------------
@@ -208,12 +313,20 @@ rm -f "$TMP/tsx-root.img.gz"
 
 # ---- 7. the log onto the new tsxdata, then reboot --------------------------------
 echo "done" > "$STATE"
-printf '%s\n' "done: the install is complete, the panel reboots into the kiosk" > "$STATUS" 2>/dev/null
-say "DONE. The log goes to /data/tsx/install-staged.log. Rebooting into the kiosk"
-if [ -z "${TSX_STAGE_DIR:-}" ] && tsx_find_disk 2>/dev/null; then
+if [ "$FROM" = stick ]; then
+	if P1D=$(p1_dir); then echo "$STAGE_ID" > "$P1D/tsxstick.done"; p1_done; fi
+fi
+[ "$FROM" = stick ] || printf '%s\n' "done: the install is complete, the panel reboots into the kiosk" > "$STATUS" 2>/dev/null
+say "DONE. The log goes to /data/tsx/install-staged.log"
+if [ -z "${TSX_STAGE_DIR:-}${TSX_STICK_DIR:-}" ] && tsx_find_disk 2>/dev/null; then
 	D=$RUN/tsx-staged-data; mkdir -p "$D"
-	if mount -t ext4 "$P4" "$D" 2>/dev/null; then mkdir -p "$D/tsx"; cp "$LOG" "$D/tsx/install-staged.log"; sync; umount "$D"; fi
+	if mount -t ext4 "$P4" "$D" 2>/dev/null; then
+		mkdir -p "$D/tsx"
+		[ -f "$TMP/tsx-p1-boot.old" ] && mkdir -p "$D/tsx/backup" && cp "$TMP/tsx-p1-boot.old" "$D/tsx/backup/p1-boot.img.$(date +%Y%m%d%H%M%S)"
+		cp "$LOG" "$D/tsx/install-staged.log"; sync; umount "$D"
+	fi
 fi
 rm -f "$PIDF"
+[ "$FROM" = stick ] && wait_stick_out "the install is complete. Remove the USB stick: the panel then restarts into the kiosk"
 [ "${TSX_NO_REBOOT:-0}" = 1 ] || { sleep "${TSX_STAGED_REBOOT_S:-10}"; sync; reboot -f; }
 exit 0

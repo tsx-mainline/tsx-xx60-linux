@@ -11,8 +11,85 @@
 # Both places are on the card. The install formats them, or (a reinstall that
 # keeps /data) the rescue removes the stage before it writes.
 #
-# The caller provides log, run_stream_cmd and the variables HERE, RESULTS and
-# TMPFILES (an array of files to remove at exit).
+# The caller provides log, run_stream_cmd and the variables HERE, RESULTS,
+# TMPFILES (an array of files to remove at exit) and TSX_CONFIG_BIN (the
+# tsx-config of tsx-linux-common, lib/tsx-config-prompt.sh).
+
+# tsx_bundle_make DIR CONFIG URL FLAVOR_DIR: the install bundle for /tmp/b of
+# the rescue (steps/tsx-rescue-install) in DIR: the scripts of the rescue,
+# panel.conf (CONFIG, if set), kiosk-url.txt (URL, if set), and manifest and
+# boot.img of FLAVOR_DIR (if set: --fetch adds them on the panel). root.img
+# (about 1 GiB) does not fit in the RAM of the rescue, so the bundle never has
+# it: the host streams it, or the stage carries a gzip of it.
+tsx_bundle_make() {
+	local d=$1 conf=$2 url=$3 fdir=$4
+	[ -n "$url" ] && printf '%s\n' "$url" > "$d/kiosk-url.txt"
+	[ -n "$conf" ] && { install -m 600 "$conf" "$d/panel.conf"; log "  panel.conf included in the install bundle ($(TSX_CONF="$conf" "$TSX_CONFIG_BIN" show | wc -l) keys set)"; }
+	[ -z "$fdir" ] || cp "$fdir/manifest" "$fdir/boot.img" "$d/"
+	cp "$HERE/lib/tsx-rescue.sh" "$HERE/lib/tsx-tfa.sh" "$HERE/lib/tsx-psr.sh" "$HERE/lib/tsx-ledstock.sh" "$HERE/emmc/tsx-usb-recovery" "$HERE/steps/tsx-rescue-install" "$d/"
+	chmod +x "$d/tsx-rescue-install" "$d/tsx-usb-recovery"
+	tsx_bundle_sums "$d"
+}
+# tsx_bundle_sums DIR: SHA256SUMS of every file of the bundle DIR.
+tsx_bundle_sums() { (cd "$1" && find . -type f ! -name 'SHA256SUMS*' -print | sort | xargs sha256sum > SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS); }
+
+# tfa_puf_fetch DIR: rootfs/vendor-fetch.sh here (the .puf download, cached),
+# then put its DSP files in DIR (the tfa/ layout with SOURCE and SHA256SUMS).
+# Sets TFA_PUF_N.
+tfa_puf_fetch() {
+	local dir=$1 fetch="$HERE/../rootfs/vendor-fetch.sh" local_dir v n=0
+	local_dir=${TFA_VENDOR_LOCAL:-"$HERE/../rootfs/vendor-local/tfa9890"}
+	log "  TFA9890: rootfs/vendor-fetch.sh on this host (Crestron's .puf, 357 MB, downloaded once and cached). The log is in $RESULTS"
+	command -v unzip >/dev/null || busybox --list 2>/dev/null | grep -x unzip >/dev/null \
+		|| log "  WARNING: no unzip on this host (neither unzip nor busybox unzip): vendor-fetch.sh will fail unless its files are already cached"
+	[ -x "$fetch" ] && "$fetch" >>"$RESULTS" 2>&1 || { log "  WARNING: rootfs/vendor-fetch.sh failed (see $RESULTS)"; return 1; }
+	rm -rf "$dir"; mkdir -p "$dir"
+	for v in $TSX_TFA_VARIANTS; do
+		[ -f "$local_dir/$v/stereo.cnt" ] || continue
+		mkdir -p "$dir/$v"; cp "$local_dir/$v/stereo.cnt" "$dir/$v/"; n=$((n + 1))
+	done
+	[ $n -gt 0 ] || { log "  WARNING: vendor-fetch.sh left no stereo.cnt in $local_dir"; rm -rf "$dir"; return 1; }
+	{ echo "source=puf"; echo "firmware=$(basename "${TFA_PUF_URL:-tsw-xx60_3.002.1061.001.puf}") (rootfs/vendor-fetch.sh, pinned sha256)"
+	  for v in $TSX_TFA_VARIANTS; do [ -f "$dir/$v/stereo.cnt" ] && echo "$v=$(sha256sum < "$dir/$v/stereo.cnt" | cut -d' ' -f1) pinned"; done; } > "$dir/SOURCE"
+	(cd "$dir" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | sort | xargs sha256sum > SHA256SUMS)
+	TFA_PUF_N=$n
+}
+# psr_puf_fetch DIR: rootfs/vendor-fetch.sh --psr here, then put the PSR file
+# in DIR (the psr/ layout with SOURCE and SHA256SUMS). Sets PSR_PUF_SHA.
+psr_puf_fetch() {
+	local dir=$1 fetch="$HERE/../rootfs/vendor-fetch.sh" local_dir sha
+	local_dir=${PSR_VENDOR_LOCAL:-"$HERE/../rootfs/vendor-local/csr8811"}
+	log "  Bluetooth PSR: rootfs/vendor-fetch.sh --psr on this host (Crestron's .puf, 357 MB, downloaded once and cached). The log is in $RESULTS"
+	[ -x "$fetch" ] && "$fetch" --psr >>"$RESULTS" 2>&1 || { log "  WARNING: rootfs/vendor-fetch.sh --psr failed (see $RESULTS)"; return 1; }
+	[ -f "$local_dir/$TSX_PSR_NAME" ] || { log "  WARNING: vendor-fetch.sh --psr left no $TSX_PSR_NAME in $local_dir"; return 1; }
+	rm -rf "$dir"; mkdir -p "$dir"
+	cp "$local_dir/$TSX_PSR_NAME" "$dir/"
+	sha=$(sha256sum < "$dir/$TSX_PSR_NAME" | cut -d' ' -f1)
+	{ echo "source=puf"; echo "firmware=$(basename "${TFA_PUF_URL:-tsw-xx60_3.002.1061.001.puf}") (rootfs/vendor-fetch.sh --psr, pinned sha256)"
+	  echo "sha256=$sha $([ "$sha" = "$(tsx_psr_pinned)" ] && echo pinned || echo unpinned)"; } > "$dir/SOURCE"
+	(cd "$dir" && sha256sum "$TSX_PSR_NAME" SOURCE > SHA256SUMS)
+	PSR_PUF_SHA=$sha
+}
+
+# tsx_stage_puf_files BUNDLE TFA_SOURCE PSR_SOURCE: the .puf files for a
+# stage. The rescue looks on the panel first. With puf, the stage carries the
+# download. With auto, it carries the files only if this host has them in its
+# cache already (the rescue uses them only when the panel has none).
+tsx_stage_puf_files() {
+	local d=$1 tfa_cached psr_cached
+	tfa_cached=$(ls "${TFA_VENDOR_LOCAL:-$HERE/../rootfs/vendor-local/tfa9890}"/*/stereo.cnt 2>/dev/null | head -n 1) || tfa_cached=
+	psr_cached=$(ls "${PSR_VENDOR_LOCAL:-$HERE/../rootfs/vendor-local/csr8811}/$TSX_PSR_NAME" 2>/dev/null) || psr_cached=
+	case "$2" in
+	puf) tfa_puf_fetch "$d/tfa" || log "  WARNING: no .puf DSP files for the stage";;
+	auto) [ -z "$tfa_cached" ] || tfa_puf_fetch "$d/tfa-puf" || true;;
+	esac
+	case "$3" in
+	puf) psr_puf_fetch "$d/psr" || log "  WARNING: no .puf PSR file for the stage";;
+	auto) [ -z "$psr_cached" ] || psr_puf_fetch "$d/psr-puf" || true;;
+	esac
+	tsx_bundle_sums "$d"
+}
+
 
 # tsx_stage_rescue_ok IMG: true if the rescue image IMG has the staged-install
 # runner (/usr/sbin/tsx-rescue-staged, installer/rescue/mkrescue.sh). An older
@@ -74,16 +151,18 @@ tsx_stage_gzip() {
 	STAGE_GZ=$gz
 }
 
-# tsx_stage_build OUT BUNDLE GZ KERNEL KEEP GOLDEN TFA_SOURCE PSR_SOURCE: make
-# the stage folder OUT for tsx_push_dir: STAGE, bundle/ (a link to BUNDLE),
-# root.img.gz (a link to GZ) and SHA256SUMS over all of them. Needs
-# STAGE_GZ_SHA and STAGE_GZ_BYTES (tsx_stage_gzip).
+# tsx_stage_build OUT BUNDLE GZ KERNEL KEEP GOLDEN TFA_SOURCE PSR_SOURCE [EXTRA]:
+# make the stage folder OUT for tsx_push_dir: STAGE, bundle/ (a link to
+# BUNDLE), root.img.gz (a link to GZ) and SHA256SUMS over all of them. EXTRA
+# holds more key=value lines for STAGE. Needs STAGE_GZ_SHA and STAGE_GZ_BYTES
+# (tsx_stage_gzip).
 tsx_stage_build() {
 	local out=$1 bundle=$2 gz=$3
 	rm -rf "$out"; mkdir -p "$out"
 	{ echo "format=tsx-stage-1"; echo "kernel=$4"; echo "keep_data=$5"; echo "golden=$6"
 	  echo "tfa_source=$7"; echo "psr_source=$8"
-	  echo "root_gz_bytes=$STAGE_GZ_BYTES"; echo "root_gz_sha256=$STAGE_GZ_SHA"; } > "$out/STAGE"
+	  echo "root_gz_bytes=$STAGE_GZ_BYTES"; echo "root_gz_sha256=$STAGE_GZ_SHA"
+	  [ -z "${9:-}" ] || printf '%s\n' "$9"; } > "$out/STAGE"
 	ln -s "$(cd "$bundle" && pwd)" "$out/bundle"
 	ln -s "$(cd "$(dirname "$gz")" && pwd)/$(basename "$gz")" "$out/root.img.gz"
 	{ sha256sum "$out/STAGE" | sed "s#  $out/#  #"

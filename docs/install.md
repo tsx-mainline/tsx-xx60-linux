@@ -128,6 +128,45 @@ Use this method when the panel has a root shell but no usable network.
 
 The USB boot does not install straight to the eMMC. The result of step 5 is the card-stage layout (see "Layouts"). `tsx-autoinstall` also has an Android-CLI path (`tsx-android-install.sh`). Use `tsx-install-usb` for the USB install.
 
+### Install from a USB stick
+
+Use this method for a panel with no network, or for many panels with one stick. The stick holds the rescue, the images and the panel configuration. The panel needs no host and no network.
+
+Before you start, make sure these items are ready:
+
+- USB recovery is on in the panel. Every panel that runs mainline has it after `tsx-install-mainline`. A stock Android panel needs it once: run `installer/android/tsx-install-usb` in a root shell, or the arm step of `tsx-install-mainline`.
+- A FAT32 USB stick with about 450 MiB free.
+- A payload (see "Get the payload") with a rescue image that has `tsx-rescue-staged`.
+
+Steps:
+
+1. Make the stick folder on the host:
+
+   ```sh
+   installer/tsx-make-stick --payload installer/out/payload --kernel lts \
+     --out STICKDIR --config panel.conf
+   ```
+
+2. Copy everything in `STICKDIR` to the root of the stick.
+3. Check the copy: `(cd /media/stick && sha256sum -c SHA256SUMS)`.
+4. If the LED bar is in the USB-A socket of the panel, remove it.
+5. Put the stick into the USB-A socket.
+6. Power-cycle the panel.
+7. Watch the rescue screen. It shows each step and a progress bar. Do not power off.
+8. When the screen says "Remove the USB stick", remove it. The panel then restarts into the kiosk.
+
+The stick boot: U-Boot finds `jabil.txt` on the stick and boots `tsx-rescue.img` from it (see [boot.md](boot.md) "U-Boot USB needs VBUS held before enumeration"). The rescue finds no stage on the card and finds `tsx-stage/` on the stick. It installs the stage as described in "Stage on the panel first", with these differences:
+
+- The rescue mounts the stick read-only and never changes it. One stick installs many panels.
+- The rescue writes the sha256 of the `STAGE` file to `p1:tsxstick.done`. A panel that boots from the same stick again does not install again.
+- If the stick stays in through a reboot after its install, U-Boot boots the stick again. The rescue then sees `p1:tsxstick.done`, renames `jabil.txt` on the stick to `jabil.txt.done` and reboots into the kiosk. Before you use the stick for the next panel, rename `jabil.txt.done` back to `jabil.txt`.
+- The rescue of the stick goes to the golden slot (`p1:boot.img`) and to `p1:tsxboot.img`. The old `p1:boot.img`, for example the golden image of Crestron on a stock card, goes to `/data/tsx/backup/`.
+- A mainline panel keeps a clean `tsxdata` (`/data`). A stock card is always folded and formatted.
+
+`panel.conf`: `--config FILE` puts one configuration on the stick for every panel. Leave `PANEL_NAME` empty, so each panel takes `<model>-<MAC>`. Without `--config`, the script asks the questions of the installer. The stick needs a root password hash or an SSH key. `--no-config` makes a stick without `panel.conf`: a panel that runs mainline keeps its own `panel.conf`, and a stock Android panel refuses the stick before it writes anything.
+
+The DSP and PSR files come from the panel. With `--tfa-source puf` (or `--psr-source puf`), the stick carries the files of the `.puf` download.
+
 ### Change the kernel flavor or the boot image
 
 For the two flavors see [kernel.md](kernel.md).

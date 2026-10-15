@@ -279,6 +279,29 @@ tsx_golden_update() {
 	sync; umount "$m"; return $rc
 }
 
+# tsx_p1_rescue DIR IMG: put the rescue image IMG into the golden slot
+# DIR/boot.img and the hook target DIR/tsxboot.img (DIR: the mounted p1), as
+# the arm step does (installer/steps/tsx-rescue-arm.sh). Each copy goes to a
+# .new file first and is verified before the rename. If p1 has no room for a
+# side copy, the old file goes first. installer/steps/tsx-rescue-staged uses
+# it for an install from a USB stick. Returns 1 on a failure.
+tsx_p1_rescue() {
+	local d=$1 img=$2 want f free need
+	want=$(sha256sum < "$img" | cut -d' ' -f1)
+	need=$(( $(tsx_dev_bytes "$img") / 1024 + 256 ))
+	for f in boot tsxboot; do
+		if [ -f "$d/$f.img" ] && [ "$(sha256sum < "$d/$f.img" | cut -d' ' -f1)" = "$want" ]; then echo "p1:$f.img is already this rescue"; continue; fi
+		rm -f "$d/$f.new"
+		free=$(df -Pk "$d" | awk 'NR==2{print $4}')
+		[ "${free:-0}" -gt "$need" ] || { rm -f "$d/$f.img"; sync; }
+		cp "$img" "$d/$f.new" && sync || { rm -f "$d/$f.new"; echo "p1:$f.img: copy failed"; return 1; }
+		[ "$(sha256sum < "$d/$f.new" | cut -d' ' -f1)" = "$want" ] || { rm -f "$d/$f.new"; echo "p1:$f.img: copy corrupt"; return 1; }
+		mv "$d/$f.new" "$d/$f.img" && sync || return 1
+		echo "p1:$f.img = rescue $want"
+	done
+	return 0
+}
+
 # ------------------------------------------- the old root file system ------
 # The eMMC root region of mainline (p8, blkdevparts) starts at 796 MiB. The
 # stock Android system partition starts 8 MiB later, at 804 MiB (the table of
