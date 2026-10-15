@@ -210,7 +210,7 @@ log "== step 1: inputs"
 for c in sshpass ssh python3 sha256sum ip awk curl; do command -v $c >/dev/null || die "missing $c"; done
 check_bundle() {
 	[ -f "$BUNDLE/factory.manifest" ] && [ -f "$BUNDLE/emmc.manifest" ] && [ -f "$BUNDLE/SHA256SUMS" ] || die "$BUNDLE is not a factory-restore bundle"
-	(cd "$BUNDLE" && sha256sum -c --quiet SHA256SUMS) || die "bundle SHA256SUMS mismatch"
+	(cd "$BUNDLE" && sha256sum -c SHA256SUMS >/dev/null) || die "bundle SHA256SUMS mismatch"
 	log "  bundle OK: unit $(sed -n 's/^unit=//p' "$BUNDLE/factory.manifest"), fw $(sed -n 's/^firmware_version=//p' "$BUNDLE/factory.manifest"), $(grep -c '^region ' "$BUNDLE/emmc.manifest") eMMC regions, eMMC backup: $(grep -q '^boot0_sha256=any$' "$BUNDLE/emmc.manifest" && echo none || echo used)"
 	logblock "uboot-check.txt" "$(cat "$BUNDLE/uboot-check.txt")"
 	grep -q '^identity_and_hw=identical$' "$BUNDLE/env-identity.txt" || die "env-identity.txt: identity not identical"

@@ -193,7 +193,7 @@ if [ -z "$FETCH" ]; then
 for f in "$RESCUE_IMG" "$FLAVOR_DIR/manifest" "$FLAVOR_DIR/root.img" "$FLAVOR_DIR/boot.img"; do
 	[ -f "$f" ] || die "missing payload file: $f (see installer/emmc/mk-tsxroot-emmc.sh, mk-v2-bundle.sh, installer/rescue-v2/mkrescue-v2.sh)"
 done
-(cd "$FLAVOR_DIR" && sha256sum -c --quiet SHA256SUMS) || die "$FLAVOR_DIR/SHA256SUMS mismatch"
+(cd "$FLAVOR_DIR" && sha256sum -c SHA256SUMS >/dev/null) || die "$FLAVOR_DIR/SHA256SUMS mismatch"
 [ ! -f "$RESCUE_IMG.sha256" ] || { GOT=$(sha256sum < "$RESCUE_IMG" | cut -d' ' -f1); WANT=$(awk '{print $1}' "$RESCUE_IMG.sha256"); [ "$GOT" = "$WANT" ] || die "$RESCUE_IMG sha256 mismatch"; }
 fi
 # Root login (docs/rootfs.md "Root login"): the install stops unless it has a
@@ -545,7 +545,7 @@ STAGE1=$(mktemp -d "$RESULTS.arm.XXXXXX")
 mkdir -p "$STAGE1/steps" "$STAGE1/android" "$STAGE1/lib"
 cp "$HERE/steps/tsx-rescue-arm.sh" "$STAGE1/steps/"; cp "$HERE/android/tsx-lib.sh" "$STAGE1/android/"; cp "$HERE/lib/tsx-rescue.sh" "$STAGE1/lib/"
 cp "$RESCUE_IMG" "$STAGE1/rescue.img"
-tar --owner=0 --group=0 -C "$STAGE1" -cf "$STAGE1.tar" steps android lib rescue.img || die "could not pack the arm payload"
+tsx_tar_c -C "$STAGE1" -cf "$STAGE1.tar" steps android lib rescue.img || die "could not pack the arm payload"
 RSHA=$(sha256sum < "$RESCUE_IMG" | cut -d' ' -f1)
 log "  copying the arm payload ($(( $(stat -c %s "$STAGE1.tar") / 1048576 )) MiB: tsx-rescue-arm.sh, tsx-lib.sh, tsx-rescue.sh, rescue.img) to /data/tsx-inst over the root shell"
 run_stream_cmd "$HERE/steps/rootsh" --put "$PANEL" "$STAGE1.tar" /data/tsx-inst.tar \

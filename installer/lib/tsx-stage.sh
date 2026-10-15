@@ -210,7 +210,7 @@ tsx_stage_push_android() {
 	fi
 	log "  stage: copying $((need / 1024 - 16)) MiB to $mnt/tsx-stage on the panel ($((free / 1024)) MiB free)"
 	t=$(mktemp "$RESULTS.stage-tar.XXXXXX"); TMPFILES+=("$t")
-	tar -h --owner=0 --group=0 -C "$out" -cf "$t" STAGE SHA256SUMS bundle || return 1
+	tsx_tar_c -h -C "$out" -cf "$t" STAGE SHA256SUMS bundle || return 1
 	"$HERE/steps/rootsh" "$h" "mkdir -p $mnt/tsx-stage.new" >/dev/null 2>>"$RESULTS" || return 1
 	run_stream_cmd "$HERE/steps/rootsh" --put "$h" "$t" "$mnt/tsx-stage.new/stage.tar" || return 1
 	run_stream_cmd "$HERE/steps/rootsh" --put "$h" "$out/root.img.gz" "$mnt/tsx-stage.new/root.img.gz" || return 1

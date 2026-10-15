@@ -167,6 +167,37 @@ The stick boot: U-Boot finds `jabil.txt` on the stick and boots `tsx-rescue.img`
 
 The DSP and PSR files come from the panel. With `--tfa-source puf` (or `--psr-source puf`), the stick carries the files of the `.puf` download.
 
+### Install from another panel
+
+A panel that runs mainline can install other panels in the same network, for example a panel network with no route to a PC. This panel is the seed. The seed runs `tsx-install-mainline` itself and pushes the images over ssh, as a host does.
+
+Before you start, make sure these items are ready:
+
+- The seed runs mainline and has about 2.5 GiB free in `/data` for the payload.
+- The seed has `bash`: `apk add bash`. For a stock Android target, it also needs `sshpass`: `apk add sshpass`. The other tools of the installer are on the panel already (`ssh`, `curl`, `python3` and busybox).
+- The seed can log in to the target: an ssh key that the target accepts, for example through `ssh -A` from your PC to the seed.
+
+Steps:
+
+1. Copy the `installer` folder of this repository to `/data/tsx-seed/installer` on the seed.
+2. Put a payload on the seed. Copy one to `/data/tsx-seed/payload`, or let the seed download the signed release:
+
+   ```sh
+   sh /data/tsx-seed/installer/steps/tsx-netinstall --base \
+     https://github.com/tsx-mainline/tsx-xx60-linux/releases/download/<tag> \
+     --flavor lts --payload-out /data/tsx-seed/payload
+   ```
+
+   The script checks the signature of the release with the key in `/etc/apk/keys` and the sha256 of every file. A download that stops goes on from the partial file the next time.
+3. Run the installer on the seed:
+
+   ```sh
+   bash /data/tsx-seed/installer/tsx-install-mainline <target-ip> \
+     --payload /data/tsx-seed/payload --kernel lts
+   ```
+
+The installer uses the `tsx-config` of the seed for the prompts and the checks of `panel.conf`. The host scripts work with the busybox tools of the panel. On a PC they use GNU tar, which also writes the owner root into the archives.
+
 ### Change the kernel flavor or the boot image
 
 For the two flavors see [kernel.md](kernel.md).

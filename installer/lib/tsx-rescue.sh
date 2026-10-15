@@ -438,6 +438,13 @@ tsx_rescue_ssh() {
 # command string that holds this function name keeps the password out of it.
 tsx_rescue_ssh_cur() { tsx_rescue_ssh "${RESCUE_SSH_PW:-}" "$@"; }
 
+# tsx_tar_c ARGS...: tar with the owner root:root in the archive when the tar of
+# the host can (GNU tar). The busybox tar of a mainline panel that runs the
+# installer (a seed panel, docs/install.md "Install from another panel") has no
+# --owner. Its archive keeps the numeric owner, and the rescue extracts as root
+# anyway.
+tsx_tar_c() { if tar --help 2>&1 | grep -q -- '--owner='; then tar --owner=0 --group=0 "$@"; else tar "$@"; fi; }
+
 # The cipher order for the ssh streams into the rescue. Its dropbear takes the
 # first one that it supports. It has no GCM. chacha20-poly1305 is the fastest
 # one there (4.5 MiB/s on the TSS-10, aes128-ctr 3.1 MiB/s), faster than the
@@ -475,7 +482,7 @@ tsx_push_dir() {
 	[ -f "$src/SHA256SUMS" ] || { echo "tsx_push_dir: $src has no SHA256SUMS"; return 1; }
 	case "$op$label" in *[\'\"\\\$\`]*) echo "tsx_push_dir: no quotes or \$ in TSX_PUSH_OP or TSX_PUSH_LABEL"; return 1;; esac
 	for k in $keep; do mv="$mv [ -e '$dest/$k' ] && [ ! -e '$dest.new/$k' ] && mv '$dest/$k' '$dest.new/$k' && echo 'kept $dest/$k from an earlier attempt';"; done
-	totalb=$(find -L "$src" -type f -printf '%s\n' | awk '{s += $1} END {print s + 0}')
+	totalb=$(find -L "$src" -type f -exec stat -L -c %s {} + | awk '{s += $1} END {print s + 0}')
 	totalm=$(( (totalb + 1048575) / 1048576 ))
 	[ "$totalm" -lt "${TSX_PUSH_PROGRESS_MIB:-32}" ] || print=1
 	# The receiver. @X@ are filled in below. The reporter stops by itself when
@@ -506,7 +513,7 @@ echo "pushed $D: $(wc -l < "$D/SHA256SUMS") files, sha256 checked"'
 	r=${r//@DEST@/"'$dest'"}; r=${r//@LABEL@/"$label"}; r=${r//@OP@/"$op"}
 	r=${r//@TOTALB@/"$totalb"}; r=${r//@TOTALMD@/"$(( totalm > 0 ? totalm : 1 ))"}; r=${r//@TOTALM@/"$totalm"}
 	r=${r//@TICK@/"${TSX_PR_DD_TICK:-15}"}; r=${r//@PRINT@/"$print"}; r=${r//@MV@/"$mv"}
-	tar -h --owner=0 --group=0 -C "$src" -cf - . | "$@" "$r"
+	tsx_tar_c -h -C "$src" -cf - . | "$@" "$r"
 }
 
 # tsx_push_bundle SRC DEST SSH...: push the files that SRC/SHA256SUMS lists,

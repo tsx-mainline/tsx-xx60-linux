@@ -218,7 +218,6 @@ wait $PP; rc=$?
 [ $rc = 0 ] || cat "$W/scr.out"
 case "$ST" in "receiving the factory bundle from the host: "[0-9]*" of "[0-9]*" MiB") ok "state while data arrives: $ST";; *) bad "state: '$ST'";; esac
 case "$OP" in [0-9]*" factory restore") ok "tsx-op: PID and the name of the operation";; *) bad "tsx-op: '$OP'";; esac
-TOTALB=$(find -L "$W/fb" -type f \( -name system.img -o -name boot-golden.img -o -name tsx-emmc-restore -o -name SHA256SUMS \) -printf '%s\n' | awk '{s += $1} END {print s}')
 set -- $PR
 [ "${2:-}" = 0 ] && [ "${1:-0}" -gt 0 ] && [ "${4:-} ${5:-} ${6:-}" = "the factory bundle" ] && ok "tsx-progress: POS 0 LEN NAME, as pr_dd writes it ($PR)" || bad "tsx-progress: '$PR'"
 [ $rc = 0 ] && grep -q '^idle: received the factory bundle$' "$W/scr/tsx-install-state" && ok "after the push: the state goes back to idle (the screen hides it)" || bad "after: rc $rc $(cat "$W/scr/tsx-install-state")"

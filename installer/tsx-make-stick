@@ -67,7 +67,7 @@ trap cleanup EXIT
 
 RESCUE=$PAYLOAD/rescue.img FLAVOR_DIR=$PAYLOAD/$KERNEL
 for f in "$RESCUE" "$FLAVOR_DIR/manifest" "$FLAVOR_DIR/root.img" "$FLAVOR_DIR/boot.img"; do [ -f "$f" ] || die "missing payload file: $f"; done
-(cd "$FLAVOR_DIR" && sha256sum -c --quiet SHA256SUMS) || die "$FLAVOR_DIR/SHA256SUMS mismatch"
+(cd "$FLAVOR_DIR" && sha256sum -c SHA256SUMS >/dev/null) || die "$FLAVOR_DIR/SHA256SUMS mismatch"
 tsx_stage_rescue_ok "$RESCUE" || die "$RESCUE cannot run a stage (an older payload: no steps/tsx-rescue-staged in it)"
 log "== tsx-make-stick: payload $PAYLOAD, kernel $KERNEL, out $OUT"
 
@@ -118,5 +118,5 @@ TSX - LINUX install stick ($(sed -n 's/^kernel_flavor=//p' "$FLAVOR_DIR/manifest
 6. When the screen says so, remove the stick. The panel restarts.
 EOF
 (cd "$OUT" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | sort | xargs sha256sum > SHA256SUMS)
-(cd "$OUT/tsx-stage" && sha256sum -c --quiet SHA256SUMS) || die "the stage in $OUT does not match its SHA256SUMS"
+(cd "$OUT/tsx-stage" && sha256sum -c SHA256SUMS >/dev/null) || die "the stage in $OUT does not match its SHA256SUMS"
 log "== done: $OUT ($(du -sm "$OUT" | cut -f1) MiB). Copy everything in it to the root of a FAT32 USB stick, then check the copy: (cd STICK && sha256sum -c SHA256SUMS)"

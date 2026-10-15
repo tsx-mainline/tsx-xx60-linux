@@ -21,6 +21,16 @@
 #      (default /data/tsx-stage, the format of installer/steps/tsx-rescue-staged):
 #      STAGE, bundle/, root.img.gz, and rescue.img for the arm step. It renames
 #      DIR.new to DIR only at the end.
+#
+#   tsx-netinstall --base URL --flavor lts|stable --payload-out DIR [--keys GLOB]
+#
+# --payload-out: no stage. After the same downloads and checks, write a payload
+# folder in the layout of tsx-install-mainline --payload: DIR/rescue.img and
+# DIR/FLAVOR/{manifest,boot.img,root.img,SHA256SUMS}. root.img comes from
+# root.img.gz through gunzip, and its sha256 must be root_sha256 of the
+# signed manifest. root.img.gz stays next to it with root.img.gz.info, so a
+# stage of tsx-install-mainline uses it again. A seed panel gets its payload
+# this way (docs/install.md "Install from another panel").
 # The last line is
 #   NETINSTALL-RESULT ok=1 rescue_sha256=X boot_sha256=Y root_sha256=Z
 # Progress: a line with the MiB, the percent and the seconds about every 15 s
@@ -29,20 +39,26 @@
 # the folder of this script).
 set -u
 NET=${TSX_NET_DIR:-$(cd "$(dirname "$0")" && pwd)}
-BASE= FLAVOR= KEEP=0 GOLDEN=0 TFA=auto PSR=auto KEYS="/etc/apk/keys/tsx-mainline-*.rsa.pub" STAGE=/data/tsx-stage
+BASE= FLAVOR= KEEP=0 GOLDEN=0 TFA=auto PSR=auto KEYS="/etc/apk/keys/tsx-mainline-*.rsa.pub" STAGE=/data/tsx-stage POUT=
 # Every line also goes to the system log of the kiosk (logger -t tsx-install).
 say() { echo "tsx-netinstall: $*"; logger -t tsx-install "tsx-netinstall: $*" 2>/dev/null; :; }
 die() { say "ERROR: $*"; echo "NETINSTALL-RESULT ok=0"; exit 1; }
 while [ $# -gt 0 ]; do case "$1" in
 	--base) BASE=$2; shift 2;; --flavor) FLAVOR=$2; shift 2;; --keep) KEEP=$2; shift 2;; --golden) GOLDEN=$2; shift 2;;
 	--tfa-source) TFA=$2; shift 2;; --psr-source) PSR=$2; shift 2;; --keys) KEYS=$2; shift 2;; --stage) STAGE=$2; shift 2;;
+	--payload-out) POUT=$2; shift 2;;
 	*) sed -n '2,/^set -u$/p' "$0" | sed '$d'; exit 2;;
 esac; done
 case "$FLAVOR" in lts|stable) ;; *) die "--flavor lts|stable is required";; esac
 [ -n "$BASE" ] || die "--base URL is required"
-[ -f "$NET/bundle/SHA256SUMS" ] || die "$NET/bundle has no SHA256SUMS (the host copies the bundle first)"
+[ -n "$POUT" ] || [ -f "$NET/bundle/SHA256SUMS" ] || die "$NET/bundle has no SHA256SUMS (the host copies the bundle first)"
 for t in curl python3 sha256sum; do command -v $t >/dev/null 2>&1 || die "$t is missing on this panel"; done
-DL=$NET/dl; mkdir -p "$DL"
+# The verifier: next to this script (/data/tsx-net), or in lib/ of the installer
+# folder (a seed panel runs installer/steps/tsx-netinstall).
+VERIFY=$NET/tsx-verify-sig.py; [ -f "$VERIFY" ] || VERIFY=$NET/../lib/tsx-verify-sig.py
+[ -f "$VERIFY" ] || die "no tsx-verify-sig.py next to this script or in ../lib"
+DL=$NET/dl; [ -z "$POUT" ] || DL=$POUT/.dl
+mkdir -p "$DL"
 
 # get NAME [BYTES]: download BASE/NAME to DL/NAME, with progress lines. A
 # NAME.part of an earlier try goes on where it stopped.
@@ -77,7 +93,7 @@ get SHA256SUMS && get SHA256SUMS.sig || die "cannot download SHA256SUMS and SHA2
 OK=
 for k in $KEYS; do
 	[ -f "$k" ] || continue
-	python3 -I "$NET/tsx-verify-sig.py" "$k" "$DL/SHA256SUMS" "$DL/SHA256SUMS.sig" >/dev/null 2>&1 && { OK=$k; break; }
+	python3 -I "$VERIFY" "$k" "$DL/SHA256SUMS" "$DL/SHA256SUMS.sig" >/dev/null 2>&1 && { OK=$k; break; }
 done
 [ -n "$OK" ] || die "SHA256SUMS of the release has no good signature of a project key ($KEYS). Nothing was downloaded beyond the list"
 say "SHA256SUMS: signature ok ($(basename "$OK"))"
@@ -88,7 +104,14 @@ for f in $R $M $BI $RG; do [ -n "$(want "$f")" ] || die "the release has no $f i
 # ---- 2. room, then the downloads -----------------------------------------------
 GZSIZE=$(size "$RG"); [ -n "$GZSIZE" ] || GZSIZE=0
 NEEDK=$(( GZSIZE / 1024 + 65536 ))
-FREEK=${TSX_NET_DF_KIB:-$(df -Pk "$(dirname "$STAGE")" | awk 'NR==2{print $4}')}
+DFDIR=$(dirname "$STAGE")
+if [ -n "$POUT" ]; then
+	mkdir -p "$POUT" || die "cannot make $POUT"
+	DFDIR=$POUT
+	# root.img (about 1 GiB) comes on top of root.img.gz: about 2.6 times the gzip
+	NEEDK=$(( GZSIZE / 1024 * 36 / 10 + 65536 ))
+fi
+FREEK=${TSX_NET_DF_KIB:-$(df -Pk "$DFDIR" | awk 'NR==2{print $4}')}
 [ "${FREEK:-0}" -ge "$NEEDK" ] || die "$(dirname "$STAGE") has ${FREEK:-?} KiB free, the download needs $NEEDK KiB"
 say "downloading the $FLAVOR images ($((GZSIZE / 1048576)) MiB for root.img.gz, ${FREEK} KiB free)"
 for f in $R $M $BI $RG; do
@@ -105,6 +128,21 @@ grep -q '^format=tsx-rescue-install-1$' "$DL/$M" || die "$M is not a tsx-rescue-
 mf() { sed -n "s/^$1=//p" "$DL/$M" | tail -n 1; }
 [ "$(mf kernel_flavor)" = "$FLAVOR" ] || die "$M names the flavor $(mf kernel_flavor), not $FLAVOR"
 [ "$(sha256sum < "$DL/$BI" | cut -d' ' -f1)" = "$(mf boot_sha256)" ] || die "$BI does not match boot_sha256 of $M"
+if [ -n "$POUT" ]; then
+	F=$POUT/$FLAVOR; rm -rf "$F"; mkdir -p "$F"
+	cp "$DL/$M" "$F/manifest" && cp "$DL/$BI" "$F/boot.img" && cp "$DL/$R" "$POUT/rescue.img" || die "cannot copy into $POUT"
+	(cd "$POUT" && sha256sum rescue.img > rescue.img.sha256)
+	mv "$DL/$RG" "$F/root.img.gz" || die "cannot move root.img.gz into $F"
+	say "unpacking root.img ($(( $(mf root_bytes) / 1048576 )) MiB) from root.img.gz"
+	gunzip -c "$F/root.img.gz" > "$F/root.img" || die "gunzip of root.img.gz failed"
+	[ "$(sha256sum < "$F/root.img" | cut -d' ' -f1)" = "$(mf root_sha256)" ] || { rm -f "$F/root.img"; die "root.img does not match root_sha256 of the signed manifest"; }
+	printf 'root_sha256=%s\ngz_sha256=%s\ngz_bytes=%s\n' "$(mf root_sha256)" "$(want "$RG")" "$(stat -c %s "$F/root.img.gz")" > "$F/root.img.gz.info"
+	(cd "$F" && sha256sum manifest root.img boot.img > SHA256SUMS)
+	rm -rf "$DL"; sync
+	say "payload complete: $POUT (from the signed release, root.img sha256 checked)"
+	echo "NETINSTALL-RESULT ok=1 rescue_sha256=$(want "$R") boot_sha256=$(mf boot_sha256) root_sha256=$(mf root_sha256)"
+	exit 0
+fi
 W=$STAGE.new; rm -rf "$W"; mkdir -p "$W"
 mv "$NET/bundle" "$W/bundle" || die "cannot move the bundle"
 cp "$DL/$M" "$W/bundle/manifest" && cp "$DL/$BI" "$W/bundle/boot.img" || die "cannot copy manifest and boot.img into the bundle"
