@@ -335,7 +335,7 @@ Speeds on a TSS-10 (100 Mbit/s Ethernet, routed path with a round trip of 1.9 ms
 
 The eMMC sets the speed of the install. The first 200 MiB go faster (4.5 MiB/s), until the page cache is full.
 
-The dropbear of the rescue has no GCM ciphers. So the installer puts `chacha20-poly1305@openssh.com` first. The receive window of dropbear (24 KiB) sets the ssh speed, not the CPU. On a path with a longer round trip, the ssh speed falls below the eMMC speed and the install takes longer. A test dropbear with a 2 MiB window (`-W`) gave 10 to 11 MiB/s on the same path.
+The dropbear of the rescue has no GCM ciphers. So the installer puts `chacha20-poly1305@openssh.com` first. The receive window of dropbear sets the ssh speed, not the CPU. With the default window (24 KiB) the speed falls below the eMMC speed on a path with a longer round trip. So the rescue starts dropbear with a 1 MiB window (`-W 1048576`). A test dropbear with a 2 MiB window gave 10 to 11 MiB/s on the same path.
 
 `installer/tsx-restore-factory` uses the same method. The host pushes the factory bundle (about 700 MiB) to `/tmp/b` of the rescue as one tar stream over ssh. The rescue shows the MiB received about every 15 s and checks `SHA256SUMS` before the restore uses the files.
 

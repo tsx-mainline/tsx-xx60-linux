@@ -80,7 +80,7 @@ echo "# changed" >> "$W/copy3/overlay/usr/local/lib/tsx/board.sh"
 # only warns while the published kernel packages have an older stamp, so this
 # value catches a change that nobody planned. Change it together with the
 # initramfs sources, and release new kernel packages.
-SOURCE_STAMP=c406788b5722
+SOURCE_STAMP=bb3b2e1fba59
 [ "${GOODSTAMP:0:12}" = "$SOURCE_STAMP" ] && ok "the stamp is the planned stamp ($SOURCE_STAMP)" || bad "the stamp is ${GOODSTAMP:0:12}, the planned stamp is $SOURCE_STAMP (a change of the initramfs sources needs new kernel packages: change SOURCE_STAMP with it)"
 
 echo "== 2. both images match the pins and the initramfs"
