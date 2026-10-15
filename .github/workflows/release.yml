@@ -414,6 +414,23 @@ jobs:
           done
           (cd out && sha256sum tsx-xx60-*-payload.tar.zst > SHA256SUMS)
 
+      # The files for the download mode of a mainline panel
+      # (tsx-install-mainline --fetch, installer/steps/tsx-netinstall): the
+      # kiosk downloads them one by one and checks each one against the signed
+      # SHA256SUMS. root.img.gz is gzip, because the kiosk and the rescue have
+      # gunzip (busybox) and no zstd.
+      - name: the files of the download mode (rescue, manifest, boot, root.img.gz per flavor)
+        run: |
+          set -eu
+          cp bundle/rescue.img out/tsx-xx60-rescue.img
+          for f in lts stable; do
+            cp bundle/$f/manifest out/tsx-xx60-$f-manifest
+            cp bundle/$f/boot.img out/tsx-xx60-$f-boot.img
+            gzip -6 -n -c bundle/$f/root.img > out/tsx-xx60-$f-root.img.gz
+          done
+          (cd out && sha256sum tsx-xx60-*-payload.tar.zst tsx-xx60-rescue.img tsx-xx60-*-manifest tsx-xx60-*-boot.img tsx-xx60-*-root.img.gz > SHA256SUMS)
+          ls -l out
+
       - uses: actions/upload-artifact@v4
         with:
           name: release-payload
@@ -477,6 +494,38 @@ jobs:
           (cd release/out && find . -maxdepth 1 -type f ! -name SHA256SUMS -exec sha256sum {} + | sort -k2 > SHA256SUMS)
           ls -l release/out
 
+      # The signature of SHA256SUMS (RSA, SHA-256, PKCS #1 v1.5) with the
+      # signing key of the project, the key of the apk repository. Its public
+      # half is rootfs/overlay/etc/apk/keys/tsx-mainline-*.rsa.pub, and every
+      # kiosk has it in /etc/apk/keys. The download mode of a mainline panel
+      # (installer/steps/tsx-netinstall) refuses a release without a good
+      # SHA256SUMS.sig. The secret TSX_APORTS_PRIVKEY holds the private key in
+      # base64. Without the secret, the release gets no signature and this
+      # step only warns.
+      - uses: actions/checkout@v4
+        with:
+          path: src
+          sparse-checkout: rootfs/overlay/etc/apk/keys
+      - name: sign SHA256SUMS (SHA256SUMS.sig)
+        env:
+          TSX_SIGNING_KEY: ${{ secrets.TSX_APORTS_PRIVKEY }}
+        run: |
+          set -eu
+          if [ -z "$TSX_SIGNING_KEY" ]; then
+            echo "::warning::no secret TSX_APORTS_PRIVKEY: the release gets no SHA256SUMS.sig, and the download mode (--fetch) refuses it"
+            exit 0
+          fi
+          umask 077
+          K=$(mktemp)
+          trap 'rm -f "$K"' EXIT
+          printf '%s' "$TSX_SIGNING_KEY" | base64 -d > "$K"
+          openssl dgst -sha256 -sign "$K" -out release/out/SHA256SUMS.sig release/out/SHA256SUMS
+          ok=0
+          for pub in src/rootfs/overlay/etc/apk/keys/tsx-mainline-*.rsa.pub; do
+            openssl dgst -sha256 -verify "$pub" -signature release/out/SHA256SUMS.sig release/out/SHA256SUMS && ok=1
+          done
+          [ "$ok" = 1 ] || { echo "the signature does not verify with a public key of rootfs/overlay/etc/apk/keys"; exit 1; }
+
       - name: attach the build to the GitHub release for this tag
         if: github.event_name == 'push'
         env:
@@ -493,6 +542,7 @@ jobs:
       - name: replace the payloads of the release (images only)
         if: github.event_name == 'workflow_dispatch'
         env:
+          TSX_SIGNING_KEY: ${{ secrets.TSX_APORTS_PRIVKEY }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ inputs.tag }}
@@ -502,10 +552,19 @@ jobs:
           mkdir -p release/old
           gh release download "$TAG" --pattern SHA256SUMS --dir release/old
           cd release/out
-          ls tsx-xx60-lts-payload.tar.zst tsx-xx60-stable-payload.tar.zst
-          { grep -v -E '  (\./)?tsx-xx60-(lts|stable)-payload\.tar\.zst$' ../old/SHA256SUMS || true
-            sha256sum tsx-xx60-lts-payload.tar.zst tsx-xx60-stable-payload.tar.zst | sed 's|  |  ./|'
+          NEW="tsx-xx60-lts-payload.tar.zst tsx-xx60-stable-payload.tar.zst tsx-xx60-rescue.img tsx-xx60-lts-manifest tsx-xx60-stable-manifest tsx-xx60-lts-boot.img tsx-xx60-stable-boot.img tsx-xx60-lts-root.img.gz tsx-xx60-stable-root.img.gz"
+          ls $NEW
+          { grep -v -E '  (\./)?tsx-xx60-((lts|stable)-payload\.tar\.zst|rescue\.img|(lts|stable)-(manifest|boot\.img|root\.img\.gz))$' ../old/SHA256SUMS || true
+            sha256sum $NEW | sed 's|  |  ./|'
           } | sort -k2 > SHA256SUMS.new
           mv SHA256SUMS.new SHA256SUMS
           cat SHA256SUMS
-          gh release upload "$TAG" tsx-xx60-lts-payload.tar.zst tsx-xx60-stable-payload.tar.zst SHA256SUMS --clobber
+          # The SHA256SUMS of this step is new: sign it again (the step above
+          # signed the SHA256SUMS of the artifact).
+          rm -f SHA256SUMS.sig
+          if [ -n "$TSX_SIGNING_KEY" ]; then
+            umask 077; K=$(mktemp); trap 'rm -f "$K"' EXIT
+            printf '%s' "$TSX_SIGNING_KEY" | base64 -d > "$K"
+            openssl dgst -sha256 -sign "$K" -out SHA256SUMS.sig SHA256SUMS
+          fi
+          gh release upload "$TAG" $NEW SHA256SUMS $( [ -f SHA256SUMS.sig ] && echo SHA256SUMS.sig ) --clobber

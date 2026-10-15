@@ -1,0 +1,120 @@
+#!/bin/sh
+# Download a signed release from the internet and stage it for the rescue
+# (docs/install.md "Download the release on the panel"). It runs on a mainline
+# panel (busybox sh, curl, python3). installer/tsx-install-mainline --fetch TAG
+# copies this folder to /data/tsx-net and runs it there:
+#
+#   tsx-netinstall --base URL --flavor lts|stable --keep 0|1 --golden 0|1
+#                  --tfa-source S --psr-source S [--keys GLOB] [--stage DIR]
+#
+# /data/tsx-net holds this script, tsx-verify-sig.py and bundle/ (the install
+# bundle of the host, without manifest and boot.img). The script:
+#   1. downloads SHA256SUMS and SHA256SUMS.sig of the release at URL and checks
+#      the signature with a project key (GLOB, default
+#      /etc/apk/keys/tsx-mainline-*.rsa.pub, the key of the apk repository).
+#      With no good signature it stops before the large downloads.
+#   2. checks the free space of /data, then downloads tsx-xx60-rescue.img and
+#      tsx-xx60-FLAVOR-{manifest,boot.img,root.img.gz}. curl goes on from a
+#      partial file of an earlier try (-C -). Every file must have the sha256
+#      of the signed SHA256SUMS.
+#   3. puts manifest and boot.img into the bundle and makes the stage in DIR
+#      (default /data/tsx-stage, the format of installer/steps/tsx-rescue-staged):
+#      STAGE, bundle/, root.img.gz, and rescue.img for the arm step. It renames
+#      DIR.new to DIR only at the end.
+# The last line is
+#   NETINSTALL-RESULT ok=1 rescue_sha256=X boot_sha256=Y root_sha256=Z
+# Progress: a line with the MiB, the percent and the seconds about every 15 s
+# (TSX_NET_TICK) for each download.
+# Test hooks: TSX_NET_DF_KIB (the free KiB of /data), TSX_NET_DIR (default
+# the folder of this script).
+set -u
+NET=${TSX_NET_DIR:-$(cd "$(dirname "$0")" && pwd)}
+BASE= FLAVOR= KEEP=0 GOLDEN=0 TFA=auto PSR=auto KEYS="/etc/apk/keys/tsx-mainline-*.rsa.pub" STAGE=/data/tsx-stage
+# Every line also goes to the system log of the kiosk (logger -t tsx-install).
+say() { echo "tsx-netinstall: $*"; logger -t tsx-install "tsx-netinstall: $*" 2>/dev/null; :; }
+die() { say "ERROR: $*"; echo "NETINSTALL-RESULT ok=0"; exit 1; }
+while [ $# -gt 0 ]; do case "$1" in
+	--base) BASE=$2; shift 2;; --flavor) FLAVOR=$2; shift 2;; --keep) KEEP=$2; shift 2;; --golden) GOLDEN=$2; shift 2;;
+	--tfa-source) TFA=$2; shift 2;; --psr-source) PSR=$2; shift 2;; --keys) KEYS=$2; shift 2;; --stage) STAGE=$2; shift 2;;
+	*) sed -n '2,/^set -u$/p' "$0" | sed '$d'; exit 2;;
+esac; done
+case "$FLAVOR" in lts|stable) ;; *) die "--flavor lts|stable is required";; esac
+[ -n "$BASE" ] || die "--base URL is required"
+[ -f "$NET/bundle/SHA256SUMS" ] || die "$NET/bundle has no SHA256SUMS (the host copies the bundle first)"
+for t in curl python3 sha256sum; do command -v $t >/dev/null 2>&1 || die "$t is missing on this panel"; done
+DL=$NET/dl; mkdir -p "$DL"
+
+# get NAME [BYTES]: download BASE/NAME to DL/NAME, with progress lines. A
+# NAME.part of an earlier try goes on where it stopped.
+get() {
+	local name=$1 size=${2:-} pid t0 n mib rc
+	t0=$(date +%s)
+	curl -fsSL --retry 5 --retry-delay 5 --connect-timeout 20 -C - -o "$DL/$name.part" "$BASE/$name" &
+	pid=$!
+	while kill -0 "$pid" 2>/dev/null; do
+		n=0
+		while [ $n -lt "${TSX_NET_TICK:-15}" ] && kill -0 "$pid" 2>/dev/null; do sleep 1; n=$((n + 1)); done
+		kill -0 "$pid" 2>/dev/null || break
+		mib=$(( $(stat -c %s "$DL/$name.part" 2>/dev/null || echo 0) / 1048576 ))
+		if [ -n "$size" ] && [ "$size" -gt 0 ]; then say "  $name: $mib/$((size / 1048576)) MiB ($((mib * 1048576 * 100 / size))%), $(( $(date +%s) - t0 )) s"
+		else say "  $name: $mib MiB, $(( $(date +%s) - t0 )) s"; fi
+	done
+	wait "$pid"; rc=$?
+	# 33: the server cannot go on from an offset. Start again from zero.
+	if [ $rc = 33 ]; then rm -f "$DL/$name.part"; curl -fsSL --retry 5 --retry-delay 5 -o "$DL/$name.part" "$BASE/$name"; rc=$?; fi
+	[ $rc = 0 ] || { say "download of $name failed (curl exit $rc)"; return 1; }
+	mv "$DL/$name.part" "$DL/$name"
+}
+# size NAME: the Content-Length of BASE/NAME after the redirects (empty if unknown)
+size() { curl -fsSIL --connect-timeout 20 "$BASE/$1" 2>/dev/null | tr -d '\r' | awk 'tolower($1) == "content-length:" {n = $2} END {print n}'; }
+# want NAME: the sha256 of NAME in the signed SHA256SUMS ("NAME" or "./NAME")
+want() { awk -v n="$1" '$2 == n || $2 == "./" n {print $1; exit}' "$DL/SHA256SUMS"; }
+
+# ---- 1. the signed list of the release ---------------------------------------
+say "release: $BASE"
+rm -f "$DL/SHA256SUMS" "$DL/SHA256SUMS.sig"
+get SHA256SUMS && get SHA256SUMS.sig || die "cannot download SHA256SUMS and SHA256SUMS.sig of the release (no internet access, or a release with no signature)"
+OK=
+for k in $KEYS; do
+	[ -f "$k" ] || continue
+	python3 -I "$NET/tsx-verify-sig.py" "$k" "$DL/SHA256SUMS" "$DL/SHA256SUMS.sig" >/dev/null 2>&1 && { OK=$k; break; }
+done
+[ -n "$OK" ] || die "SHA256SUMS of the release has no good signature of a project key ($KEYS). Nothing was downloaded beyond the list"
+say "SHA256SUMS: signature ok ($(basename "$OK"))"
+
+R=tsx-xx60-rescue.img M=tsx-xx60-$FLAVOR-manifest BI=tsx-xx60-$FLAVOR-boot.img RG=tsx-xx60-$FLAVOR-root.img.gz
+for f in $R $M $BI $RG; do [ -n "$(want "$f")" ] || die "the release has no $f in SHA256SUMS (a release from before the download mode?)"; done
+
+# ---- 2. room, then the downloads -----------------------------------------------
+GZSIZE=$(size "$RG"); [ -n "$GZSIZE" ] || GZSIZE=0
+NEEDK=$(( GZSIZE / 1024 + 65536 ))
+FREEK=${TSX_NET_DF_KIB:-$(df -Pk "$(dirname "$STAGE")" | awk 'NR==2{print $4}')}
+[ "${FREEK:-0}" -ge "$NEEDK" ] || die "$(dirname "$STAGE") has ${FREEK:-?} KiB free, the download needs $NEEDK KiB"
+say "downloading the $FLAVOR images ($((GZSIZE / 1048576)) MiB for root.img.gz, ${FREEK} KiB free)"
+for f in $R $M $BI $RG; do
+	if [ -f "$DL/$f" ] && [ "$(sha256sum < "$DL/$f" | cut -d' ' -f1)" = "$(want "$f")" ]; then say "  $f: already here (sha256 ok)"; continue; fi
+	rm -f "$DL/$f"
+	if [ "$f" = "$RG" ]; then get "$f" "$GZSIZE" || die "download of $f failed. Run the install again: the download goes on where it stopped"
+	else get "$f" || die "download of $f failed"; fi
+	[ "$(sha256sum < "$DL/$f" | cut -d' ' -f1)" = "$(want "$f")" ] || { rm -f "$DL/$f"; die "$f has a wrong sha256 (not the file of the signed SHA256SUMS)"; }
+	say "  $f: sha256 ok"
+done
+
+# ---- 3. the stage -----------------------------------------------------------------
+grep -q '^format=tsx-rescue-install-1$' "$DL/$M" || die "$M is not a tsx-rescue-install-1 manifest"
+mf() { sed -n "s/^$1=//p" "$DL/$M" | tail -n 1; }
+[ "$(mf kernel_flavor)" = "$FLAVOR" ] || die "$M names the flavor $(mf kernel_flavor), not $FLAVOR"
+[ "$(sha256sum < "$DL/$BI" | cut -d' ' -f1)" = "$(mf boot_sha256)" ] || die "$BI does not match boot_sha256 of $M"
+W=$STAGE.new; rm -rf "$W"; mkdir -p "$W"
+mv "$NET/bundle" "$W/bundle" || die "cannot move the bundle"
+cp "$DL/$M" "$W/bundle/manifest" && cp "$DL/$BI" "$W/bundle/boot.img" || die "cannot copy manifest and boot.img into the bundle"
+(cd "$W/bundle" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | sort | xargs sha256sum > SHA256SUMS) || die "SHA256SUMS of the bundle"
+mv "$DL/$RG" "$W/root.img.gz" && mv "$DL/$R" "$W/rescue.img" || die "cannot move the images into the stage"
+{ echo "format=tsx-stage-1"; echo "kernel=$FLAVOR"; echo "keep_data=$KEEP"; echo "golden=$GOLDEN"
+  echo "tfa_source=$TFA"; echo "psr_source=$PSR"
+  echo "root_gz_bytes=$(stat -c %s "$W/root.img.gz")"; echo "root_gz_sha256=$(want "$RG")"
+  echo "source=$BASE"; } > "$W/STAGE"
+sync
+rm -rf "$STAGE" && mv "$W" "$STAGE" && sync || die "cannot rename $W to $STAGE"
+say "stage complete: $STAGE (from the signed release)"
+echo "NETINSTALL-RESULT ok=1 rescue_sha256=$(want "$R") boot_sha256=$(mf boot_sha256) root_sha256=$(mf root_sha256)"

@@ -191,6 +191,7 @@ installer/tsx-install-mainline <panel-ip> --payload DIR --kernel lts|stable [opt
 | `--results FILE` | none | Write a timestamped log of every step. |
 | `--tfa-source auto\|panel\|puf\|none` | `auto` | Where to get the speaker DSP files. |
 | `--psr-source auto\|panel\|puf\|none` | `auto` | Where to get the Bluetooth PSR file. |
+| `--fetch TAG` | none | A mainline panel downloads the release `TAG` itself (see "Download the release on the panel"). Needs no `--payload`. `TAG` can also be the full download URL of a release. |
 | `--stage auto\|yes\|no` | `auto` | Copy the install onto the card of the panel before the rescue boot (see "Stage on the panel first"). `auto` stages when it can and pushes over ssh when it cannot. `yes` stops when it cannot stage. `no` always pushes over ssh. |
 
 Environment variables:
@@ -201,6 +202,7 @@ Environment variables:
 | `TSX_ADMIN_USER` | Admin user. Default `admin`. |
 | `TSX_MAINLINE_PW` | Root password of a running mainline panel, when you log in with a password and not a key. If set, the installer skips the check for a root password or key. |
 | `TSX_RESCUE_PW` | The one-time password that the rescue shows on the panel screen. |
+| `TSX_RELEASE_URL` | The URL of the releases for `--fetch TAG`. Default `https://github.com/tsx-mainline/tsx-xx60-linux/releases/download`. |
 | `TSX_STAGE_WAIT_S` | The time in seconds that the installer waits for a staged install to finish. Default 2400. |
 | `TSX_SSH_CIPHERS` | The ssh cipher list for the streams into the rescue. The default puts `chacha20-poly1305@openssh.com` first (see "Network requirements"). |
 | `TSX_PANEL_KIND` | `android`, `mainline`, `rescue` or `unreachable`. The value skips the network probe of the installer. Without it, the installer finds the kind from the ssh banner. If no ssh answers, it assumes stock Android. |
@@ -304,6 +306,25 @@ The `.puf` files: the rescue looks on the panel first, as without a stage. The s
 - The copy to the panel fails.
 
 If the installer stops before it arms the rescue boot, it removes the stage again. To remove a stage by hand, delete `tsx-stage/` on card `p5` (stock Android) or `/data/tsx-stage` (mainline).
+
+### Download the release on the panel
+
+A panel that runs mainline can download a release from GitHub itself. The host then needs no payload and sends no images. Use it for a reinstall or an update when the panel has internet access:
+
+```sh
+installer/tsx-install-mainline <panel-ip> --fetch v0.4.0 --kernel lts
+```
+
+The host copies `installer/steps/tsx-netinstall`, `installer/lib/tsx-verify-sig.py` and the install bundle (the scripts and `panel.conf`, no images) to `/data/tsx-net` of the panel. The panel then runs these steps:
+
+1. It downloads `SHA256SUMS` and `SHA256SUMS.sig` of the release with `curl`.
+2. It checks the signature with the public key of the project in `/etc/apk/keys/tsx-mainline-*.rsa.pub`, the key of the package repository. With no good signature it stops before the large downloads.
+3. It checks the free space of `/data`, then downloads `tsx-xx60-rescue.img` and `tsx-xx60-<flavor>-manifest`, `-boot.img` and `-root.img.gz`. Each file must have the sha256 of the signed list. A download that stops goes on from the partial file the next time.
+4. It makes the stage in `/data/tsx-stage` (see "Stage on the panel first").
+
+Then the host arms the rescue of the release, and the rescue installs the stage with no network. After the boot, the host compares the sha256 values of boot and root with the signed manifest.
+
+The release workflow signs `SHA256SUMS` with the private key of the project (the secret `TSX_APORTS_PRIVKEY`). A release without `SHA256SUMS.sig`, or a release from before the download mode, does not install this way. Stock Android has no HTTPS client, so a first install always uses a payload on the host.
 
 ### Root over the Crestron sshd
 

@@ -50,7 +50,17 @@
 #                        [--config FILE] [--wipe-data] [--yes] [--dry-run]
 #                        [--tfa-source auto|panel|puf|none]
 #                        [--psr-source auto|panel|puf|none]
-#                        [--stage auto|yes|no]
+#                        [--stage auto|yes|no] [--fetch TAG]
+#
+# DOWNLOAD THE RELEASE ON THE PANEL (docs/install.md "Download the release on
+# the panel"), --fetch TAG: a reinstall of a mainline panel without a payload
+# on this host. The kiosk downloads the release TAG of tsx-xx60-linux from
+# GitHub itself (steps/tsx-netinstall, curl), checks the signature of its
+# SHA256SUMS with the project key in /etc/apk/keys, and makes the stage of
+# --stage. This host sends only the scripts, panel.conf and the commands.
+# TAG can also be the full download URL of a release (a fork or a mirror).
+# TSX_RELEASE_URL sets the URL of the releases (default
+# https://github.com/tsx-mainline/tsx-xx60-linux/releases/download).
 #
 # STAGE ON THE PANEL FIRST (docs/install.md "Stage on the panel first"),
 # --stage (default auto): before the rescue boot, while Android or the kiosk
@@ -148,12 +158,12 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/lib/tsx-stage.sh" # stage on the panel first (host side)
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' >&2; }   # the whole header comment
-PANEL= PAYLOAD=$HERE/out/payload KERNEL= UART_OPT=auto URL= SSHSHELL= CONFIG= YES=0 DRYRUN=0 RESULTS= WIPE_DATA=0 TFA_SOURCE=auto PSR_SOURCE=auto STAGE_OPT=auto
+PANEL= PAYLOAD=$HERE/out/payload KERNEL= UART_OPT=auto URL= SSHSHELL= CONFIG= YES=0 DRYRUN=0 RESULTS= WIPE_DATA=0 TFA_SOURCE=auto PSR_SOURCE=auto STAGE_OPT=auto FETCH=
 while [ $# -gt 0 ]; do case "$1" in
 	--payload) PAYLOAD=$2; shift 2;; --kernel) KERNEL=$2; shift 2;; --uart) UART_OPT=$2; shift 2;;
 	--kiosk-url) URL=$2; shift 2;; --sshshell) SSHSHELL=$2; shift 2;; --results) RESULTS=$2; shift 2;;
 	--config) CONFIG=$2; shift 2;; --wipe-data) WIPE_DATA=1; shift;; --tfa-source) TFA_SOURCE=$2; shift 2;;
-	--psr-source) PSR_SOURCE=$2; shift 2;; --stage) STAGE_OPT=$2; shift 2;;
+	--psr-source) PSR_SOURCE=$2; shift 2;; --stage) STAGE_OPT=$2; shift 2;; --fetch) FETCH=$2; shift 2;;
 	--yes) YES=1; shift;; --dry-run) DRYRUN=1; shift;; -h|--help) usage; exit 0;;
 	--*) echo "unknown option $1" >&2; usage; exit 2;;
 	*) [ -z "$PANEL" ] || { echo "extra argument $1" >&2; exit 2; }; PANEL=$1; shift;;
@@ -164,6 +174,11 @@ case "$UART_OPT" in auto|yes|no) ;; *) echo "--uart must be auto, yes, or no" >&
 case "$TFA_SOURCE" in auto|panel|puf|none) ;; *) echo "--tfa-source must be auto, panel, puf, or none" >&2; exit 2;; esac
 case "$PSR_SOURCE" in auto|panel|puf|none) ;; *) echo "--psr-source must be auto, panel, puf, or none" >&2; exit 2;; esac
 case "$STAGE_OPT" in auto|yes|no) ;; *) echo "--stage must be auto, yes, or no" >&2; exit 2;; esac
+if [ -n "$FETCH" ]; then
+	case "$FETCH" in *[!A-Za-z0-9._/:+-]*) echo "--fetch: a tag or a URL with plain characters only" >&2; exit 2;; esac
+	[ "$STAGE_OPT" != no ] || { echo "--fetch needs the stage (not --stage no)" >&2; exit 2; }
+	case "$FETCH" in *://*) FETCH_BASE=$FETCH;; *) FETCH_BASE=${TSX_RELEASE_URL:-https://github.com/tsx-mainline/tsx-xx60-linux/releases/download}/$FETCH;; esac
+fi
 [ -z "$CONFIG" ] || [ -f "$CONFIG" ] || { echo "tsx-install-mainline: --config file not found: $CONFIG" >&2; exit 2; }
 . "$HERE/lib/tsx-config-prompt.sh"   # the prompts and the root login check
 [ -n "$RESULTS" ] || RESULTS="$HERE/results/tsx-install-mainline-$(date +%Y%m%d-%H%M).txt"
@@ -174,11 +189,13 @@ die() { log "ERROR: $*"; exit 1; }
 
 RESCUE_IMG=$PAYLOAD/rescue.img
 FLAVOR_DIR=$PAYLOAD/$KERNEL
+if [ -z "$FETCH" ]; then
 for f in "$RESCUE_IMG" "$FLAVOR_DIR/manifest" "$FLAVOR_DIR/root.img" "$FLAVOR_DIR/boot.img"; do
 	[ -f "$f" ] || die "missing payload file: $f (see installer/emmc/mk-tsxroot-emmc.sh, mk-v2-bundle.sh, installer/rescue-v2/mkrescue-v2.sh)"
 done
 (cd "$FLAVOR_DIR" && sha256sum -c --quiet SHA256SUMS) || die "$FLAVOR_DIR/SHA256SUMS mismatch"
 [ ! -f "$RESCUE_IMG.sha256" ] || { GOT=$(sha256sum < "$RESCUE_IMG" | cut -d' ' -f1); WANT=$(awk '{print $1}' "$RESCUE_IMG.sha256"); [ "$GOT" = "$WANT" ] || die "$RESCUE_IMG sha256 mismatch"; }
+fi
 # Root login (docs/rootfs.md "Root login"): the install stops unless it has a
 # root password hash or an SSH public key. A test build with its own fixed
 # password (TSX_DEV_ROOT_HASH) is the one exception: give its password in
@@ -190,7 +207,7 @@ elif [ -n "$CONFIG" ]; then
 	ROOT_LOGIN_CHECK=done
 else ROOT_LOGIN_CHECK=later
 fi
-log "== tsx-install-mainline v2: PANEL=$PANEL PAYLOAD=$PAYLOAD KERNEL=$KERNEL uart=$UART_OPT tfa-source=$TFA_SOURCE psr-source=$PSR_SOURCE stage=$STAGE_OPT dry-run=$DRYRUN"
+log "== tsx-install-mainline v2: PANEL=$PANEL PAYLOAD=$([ -n "$FETCH" ] && echo "(none: --fetch $FETCH)" || echo "$PAYLOAD") KERNEL=$KERNEL uart=$UART_OPT tfa-source=$TFA_SOURCE psr-source=$PSR_SOURCE stage=$STAGE_OPT dry-run=$DRYRUN"
 
 MPW=${TSX_MAINLINE_PW:-}
 # The rescue has no fixed password (docs/recovery.md "Rescue login"). It takes the
@@ -257,7 +274,8 @@ build_bundle() {
 	STAGE2=$(mktemp -d "$RESULTS.bundle.XXXXXX")
 	[ -n "$URL" ] && printf '%s\n' "$URL" > "$STAGE2/kiosk-url.txt"
 	[ -n "$CONFIG" ] && { install -m 600 "$CONFIG" "$STAGE2/panel.conf"; log "  panel.conf included in the install bundle ($(TSX_CONF="$CONFIG" "$TSX_CONFIG_BIN" show | wc -l) keys set)"; }
-	cp "$FLAVOR_DIR/manifest" "$FLAVOR_DIR/boot.img" "$STAGE2/"
+	# --fetch: the panel adds manifest and boot.img of the release (steps/tsx-netinstall)
+	[ -n "$FETCH" ] || cp "$FLAVOR_DIR/manifest" "$FLAVOR_DIR/boot.img" "$STAGE2/"
 	cp "$HERE/lib/tsx-rescue.sh" "$HERE/lib/tsx-tfa.sh" "$HERE/lib/tsx-psr.sh" "$HERE/lib/tsx-ledstock.sh" "$HERE/emmc/tsx-usb-recovery" "$HERE/steps/tsx-rescue-install" "$STAGE2/"
 	chmod +x "$STAGE2/tsx-rescue-install" "$STAGE2/tsx-usb-recovery"
 	bundle_sums
@@ -308,17 +326,12 @@ stage_skip() {
 	[ "$STAGE_OPT" = yes ] && die "stage: $* (--stage yes)"
 	log "  stage: $*. The images go over ssh during the rescue instead (--stage auto)"
 }
-# stage_panel: --stage. Copy the install (bundle and root.img.gz) onto the card
-# of the panel before the arm step (lib/tsx-stage.sh).
-stage_panel() {
-	local golden=0 tfa_cached psr_cached
-	[ "$STAGE_OPT" != no ] || { log "== stage: --stage no: the images go over ssh during the rescue"; return 0; }
-	log "== stage (--stage $STAGE_OPT): copy the install onto the card of the panel before the rescue boot"
-	tsx_stage_rescue_ok "$RESCUE_IMG" || { stage_skip "the rescue image of the payload cannot run a stage (an older payload)"; return 0; }
-	build_bundle
-	# The .puf files: the rescue looks on the panel first. With --tfa-source
-	# puf (or --psr-source puf), the stage carries the download. With auto, it
-	# carries the files only if this host has them in its cache already.
+# stage_puf_files: the .puf files for a stage. The rescue looks on the panel
+# first. With --tfa-source puf (or --psr-source puf), the stage carries the
+# download. With auto, it carries the files only if this host has them in its
+# cache already.
+stage_puf_files() {
+	local tfa_cached psr_cached
 	tfa_cached=$(ls "${TFA_VENDOR_LOCAL:-$HERE/../rootfs/vendor-local/tfa9890}"/*/stereo.cnt 2>/dev/null | head -n 1) || tfa_cached=
 	psr_cached=$(ls "${PSR_VENDOR_LOCAL:-$HERE/../rootfs/vendor-local/csr8811}/$TSX_PSR_NAME" 2>/dev/null) || psr_cached=
 	case "$TFA_SOURCE" in
@@ -330,6 +343,44 @@ stage_panel() {
 	auto) [ -z "$psr_cached" ] || psr_puf_fetch "$STAGE2/psr-puf" || true;;
 	esac
 	bundle_sums
+}
+# fetch_stage: --fetch. The kiosk downloads the signed release and makes the
+# stage (steps/tsx-netinstall). Sets NET_RESCUE_SHA, BOOT_SHA_WANT and
+# ROOT_SHA_WANT from the signed release.
+fetch_stage() {
+	local res
+	log "== stage from the release (--fetch $FETCH): the panel downloads the signed release itself: $FETCH_BASE"
+	build_bundle
+	stage_puf_files
+	STAGE3=$(mktemp -d "$RESULTS.stage.XXXXXX"); mkdir -p "$STAGE3/net"
+	ln -s "$STAGE2" "$STAGE3/net/bundle"
+	cp "$HERE/steps/tsx-netinstall" "$HERE/lib/tsx-verify-sig.py" "$STAGE3/net/"
+	(cd "$STAGE3/net" && sha256sum tsx-netinstall tsx-verify-sig.py > SHA256SUMS)
+	STAGE_REMOTE=kiosk
+	# --keep dl: the partial downloads of an earlier try stay, and curl goes on there.
+	TSX_PUSH_LABEL="the download scripts" run_stream_cmd tsx_push_dir "$STAGE3/net" /data/tsx-net --keep dl $MSSH </dev/null || die "copying the download scripts to /data/tsx-net of the panel failed (see above)"
+	run_stream_cmd $MSSH "sh /data/tsx-net/tsx-netinstall --base '$FETCH_BASE' --flavor $KERNEL --keep $KEEP_DATA --golden 1 --tfa-source $TFA_SOURCE --psr-source $PSR_SOURCE" </dev/null \
+		|| die "the panel could not download and stage the release (see above). The panel needs internet access to github.com. Nothing was armed"
+	res=$(printf '%s\n' "$RS_OUT" | grep '^NETINSTALL-RESULT ok=1 ' | tail -n 1)
+	[ -n "$res" ] || die "no NETINSTALL-RESULT line from the panel"
+	NET_RESCUE_SHA=$(sed -n 's/.* rescue_sha256=\([0-9a-f]*\).*/\1/p' <<<"$res")
+	BOOT_SHA_WANT=$(sed -n 's/.* boot_sha256=\([0-9a-f]*\).*/\1/p' <<<"$res")
+	ROOT_SHA_WANT=$(sed -n 's/.* root_sha256=\([0-9a-f]*\).*/\1/p' <<<"$res")
+	[ ${#NET_RESCUE_SHA} = 64 ] && [ ${#BOOT_SHA_WANT} = 64 ] && [ ${#ROOT_SHA_WANT} = 64 ] || die "bad NETINSTALL-RESULT line: $res"
+	$MSSH 'rm -rf /data/tsx-net' </dev/null >/dev/null 2>&1 || true
+	OLD_BOOT_ID=$($MSSH 'cat /proc/sys/kernel/random/boot_id' </dev/null 2>/dev/null) || OLD_BOOT_ID=
+	STAGED=1
+	log "  the stage of the release is complete on the panel (signature and sha256 checked there)"
+}
+# stage_panel: --stage. Copy the install (bundle and root.img.gz) onto the card
+# of the panel before the arm step (lib/tsx-stage.sh).
+stage_panel() {
+	local golden=0
+	[ "$STAGE_OPT" != no ] || { log "== stage: --stage no: the images go over ssh during the rescue"; return 0; }
+	log "== stage (--stage $STAGE_OPT): copy the install onto the card of the panel before the rescue boot"
+	tsx_stage_rescue_ok "$RESCUE_IMG" || { stage_skip "the rescue image of the payload cannot run a stage (an older payload)"; return 0; }
+	build_bundle
+	stage_puf_files
 	tsx_stage_gzip "$FLAVOR_DIR/root.img" || { stage_skip "gzip of root.img failed"; return 0; }
 	[ "$KIND" = mainline ] && golden=1
 	STAGE3=$(mktemp -d "$RESULTS.stage.XXXXXX")
@@ -370,6 +421,10 @@ esac
 # tsxdata. The Android path always formats it.
 KEEP_DATA=0
 case "$KIND" in mainline|rescue) [ "$WIPE_DATA" = 1 ] || KEEP_DATA=1;; esac
+case "$FETCH:$KIND" in
+:*|*:mainline|*:rescue) ;;
+*) die "--fetch needs a panel that runs mainline (the kiosk downloads the release). For stock Android, use --payload DIR";;
+esac
 if [ "$KEEP_DATA" = 1 ]; then log "== /data (card p4 tsxdata): kept if it is a clean tsxdata file system (--wipe-data formats it)"
 elif [ "$KIND" = mainline ] || [ "$KIND" = rescue ]; then log "== /data (card p4 tsxdata): --wipe-data: formatted again, only panel.conf is carried over"
 fi
@@ -398,6 +453,7 @@ if [ "$DRYRUN" = 1 ]; then
 	[ "$KIND" = mainline ] || log "[dry-run] 2: record eth0 MAC over rootsh. Copy one tar (steps/tsx-rescue-arm.sh + android/tsx-lib.sh + lib/tsx-rescue.sh + rescue.img) to /data/tsx-inst over the root shell (steps/rootsh --put: raw tty, sha256 checked), unpack it. Run 'preflight' then 'install --yes' over rootsh (reboots the panel)"
 	[ "$KIND" = mainline ] || log "[dry-run] 3: wait_for_rescue (kiosk IP first, then a MAC sweep, installer/lib/tsx-rescue.sh). Push a bundle ($KERNEL manifest+boot.img, tsx-rescue.sh, tsx-tfa.sh, tsx-psr.sh, tsx-usb-recovery, tsx-rescue-install, kiosk-url.txt, panel.conf if --config or prompts were used) to /tmp/b as one tar stream over ssh (tsx_push_dir: sha256sum -c in the rescue)"
 	log "[dry-run] network: push only. This host opens every connection (ssh), the panel opens none to this host. ssh ciphers for the image streams: $SSH_CIPHERS"
+	[ -z "$FETCH" ] || log "[dry-run] stage from the release (--fetch $FETCH): copy steps/tsx-netinstall, lib/tsx-verify-sig.py and the bundle (no images) to /data/tsx-net of the kiosk. The kiosk downloads SHA256SUMS and SHA256SUMS.sig of $FETCH_BASE, checks the signature with /etc/apk/keys/tsx-mainline-*.rsa.pub, downloads tsx-xx60-rescue.img and tsx-xx60-$KERNEL-{manifest,boot.img,root.img.gz} (sha256 of the signed list), and makes /data/tsx-stage. The arm step uses the rescue.img of the release"
 	case "$STAGE_OPT" in
 	no) log "[dry-run] stage: --stage no: the bundle and root.img go over ssh during the rescue (below)";;
 	*) log "[dry-run] stage (--stage $STAGE_OPT): before the arm, gzip root.img here and copy the bundle and root.img.gz to $([ "$KIND" = mainline ] && echo "/data/tsx-stage on the kiosk (tsx_push_dir)" || echo "card p5 (sdcard)/tsx-stage over the root shell (rootsh --put)"). Then the rescue runs steps/tsx-rescue-staged by itself (no network needed) and this host only watches. If the stage is not possible$([ "$STAGE_OPT" = yes ] && echo ": stop" || echo ", or the staged run fails while this host reaches the rescue: the push path below")";;
@@ -507,13 +563,19 @@ log "== step 1: $PANEL runs the mainline kiosk: no Android root needed (kiosk ss
 log "== step 2: arm the rescue boot from the kiosk"
 MAC=$($MSSH 'cat /sys/class/net/eth0/address' 2>/dev/null) || die "could not read the panel's eth0 MAC before the reboot (needed for rescue discovery)"
 log "  panel MAC (for rescue discovery): $MAC"
-RSHA=$(sha256sum < "$RESCUE_IMG" | cut -d' ' -f1)
-log "  copying rescue.img ($(( $(stat -c %s "$RESCUE_IMG") / 1048576 )) MiB) to the kiosk's /tmp over ssh"
-$MSSH 'cat > /tmp/tsx-rescue.img' < "$RESCUE_IMG" || die "copying rescue.img to the kiosk failed"
+if [ -n "$FETCH" ]; then
+	fetch_stage
+	RSHA=$NET_RESCUE_SHA
+	$MSSH 'cp /data/tsx-stage/rescue.img /tmp/tsx-rescue.img' </dev/null || die "copying the rescue.img of the release to /tmp failed"
+else
+	RSHA=$(sha256sum < "$RESCUE_IMG" | cut -d' ' -f1)
+	log "  copying rescue.img ($(( $(stat -c %s "$RESCUE_IMG") / 1048576 )) MiB) to the kiosk's /tmp over ssh"
+	$MSSH 'cat > /tmp/tsx-rescue.img' < "$RESCUE_IMG" || die "copying rescue.img to the kiosk failed"
+fi
 GOT=$($MSSH 'sha256sum < /tmp/tsx-rescue.img' 2>/dev/null | cut -d' ' -f1)
 [ "$GOT" = "$RSHA" ] || die "rescue.img on the kiosk has sha256 ${GOT:-none}, want $RSHA"
 log "  rescue.img on the kiosk verified (${RSHA:0:16}...)"
-stage_panel
+[ -n "$FETCH" ] || stage_panel
 if [ "$YES" != 1 ]; then
 	if [ "$KEEP_DATA" = 1 ]; then what="keeps the card's tsxdata (/data) if it is clean"; else what="formats the card's tsxdata (/data)"; fi
 	[ "$STAGED" = 1 ] && what="$what. The rescue installs the stage by itself"
@@ -588,8 +650,10 @@ fi
 WSIP=$(WSIP_FOR "$PANEL"); [ -n "$WSIP" ] || die "no workstation IP towards $PANEL"
 RESCUE_SSH_PW=$RPW
 set_rip() { RIP=$1; RSSH="tsx_rescue_ssh_cur -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=6 -o Ciphers=$SSH_CIPHERS root@$RIP"; }
-ROOT_SHA_WANT=$(sed -n 's/^root_sha256=//p' "$FLAVOR_DIR/manifest" | tail -n 1)
-BOOT_SHA_WANT=$(sed -n 's/^boot_sha256=//p' "$FLAVOR_DIR/manifest" | tail -n 1)
+if [ -z "$FETCH" ]; then
+	ROOT_SHA_WANT=$(sed -n 's/^root_sha256=//p' "$FLAVOR_DIR/manifest" | tail -n 1)
+	BOOT_SHA_WANT=$(sed -n 's/^boot_sha256=//p' "$FLAVOR_DIR/manifest" | tail -n 1)
+fi
 
 # ------------------------------------------- step 3: a staged install --------
 # The rescue runs the stage by itself (steps/tsx-rescue-staged). This host only
@@ -666,6 +730,7 @@ fi
 if [ "$STAGED_DONE" != 1 ]; then
 # ------------------------------------------------- the push path (option A) --
 # The bundle and the images go over the ssh connections of this host.
+[ -z "$FETCH" ] || die "the staged install of the release did not finish, and --fetch has no payload on this host to push. The rescue stays up: look at its log (ssh root@$PANEL cat /run/tsx-staged.log). Run the install again with --payload DIR, or power-cycle the panel"
 if [ -z "$RIP" ]; then
 	cand=$(wait_for_rescue "$PANEL" "$MAC" "$WSIP" "$RPW" "$RESCUE_WAIT_S") || die "could not find the rescue's IP within ${RESCUE_WAIT_S}s (MAC $MAC, ssh at $PANEL, sweep of ${PANEL%.*}.0/24 only when on-link). If the panel screen shows a one-time password, run this command again with TSX_RESCUE_PW set to it"
 	set_rip "$cand"

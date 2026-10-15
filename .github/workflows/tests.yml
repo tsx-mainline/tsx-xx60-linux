@@ -106,6 +106,8 @@ jobs:
         run: installer/tests/test-install-push.sh
       - name: installer/tests/test-install-stage.sh - stage on the panel first, the rescue installs it by itself (fake kiosk, fake tsx-rescue-install)
         run: installer/tests/test-install-stage.sh
+      - name: installer/tests/test-install-netinstall.sh - the panel downloads a signed release (file:// release, throwaway key)
+        run: installer/tests/test-install-netinstall.sh
       - name: installer/lib/tests/test-tsx-tfa.sh - TFA9890 DSP files from the panel itself (synthetic boot images/containers)
         run: installer/lib/tests/test-tsx-tfa.sh
       - name: installer/lib/tests/test-tsx-psr.sh - Bluetooth PSR file from the panel itself (made-up PSR files)
