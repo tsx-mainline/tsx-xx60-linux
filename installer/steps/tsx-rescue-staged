@@ -322,7 +322,12 @@ if [ -z "${TSX_STAGE_DIR:-}${TSX_STICK_DIR:-}" ] && tsx_find_disk 2>/dev/null; t
 	D=$RUN/tsx-staged-data; mkdir -p "$D"
 	if mount -t ext4 "$P4" "$D" 2>/dev/null; then
 		mkdir -p "$D/tsx"
-		[ -f "$TMP/tsx-p1-boot.old" ] && mkdir -p "$D/tsx/backup" && cp "$TMP/tsx-p1-boot.old" "$D/tsx/backup/p1-boot.img.$(date +%Y%m%d%H%M%S)"
+		# The name has the sha256 of the image: the rescue has no clock, and the
+		# same image is kept only once.
+		if [ -f "$TMP/tsx-p1-boot.old" ]; then
+			n=$(sha256sum < "$TMP/tsx-p1-boot.old" | cut -c1-16)
+			mkdir -p "$D/tsx/backup" && [ -f "$D/tsx/backup/p1-boot-$n.img" ] || cp "$TMP/tsx-p1-boot.old" "$D/tsx/backup/p1-boot-$n.img"
+		fi
 		cp "$LOG" "$D/tsx/install-staged.log"; sync; umount "$D"
 	fi
 fi
