@@ -73,7 +73,7 @@ run() { "$SCRIPT" --leak-patterns "$W/fixture-patterns.txt" --repo xx60-linux="$
 out=$(run --squash-branch squashed --linux-branch tsx-xx60-stable 2>&1); rc=$?
 echo "$out" | grep -q 'squash: refs/heads/squashed' && ok "squash branch created" || bad "no squash message in output"
 [ "$(git -C "$W/xxl" rev-list --count squashed)" = 1 ] && ok "squash branch has exactly one commit" || bad "squash branch commit count wrong"
-git -C "$W/xxl" log -1 --format='%an <%ae>' squashed | grep -qF 'unex <7575866+unex@users.noreply.github.com>' \
+git -C "$W/xxl" log -1 --format='%an <%ae>' squashed | grep -F 'unex <7575866+unex@users.noreply.github.com>' > /dev/null \
 	&& ok "squash commit authored as unex" || bad "squash commit author wrong"
 [ "$(git -C "$W/xxl" branch --show-current)" != "squashed" ] && ok "squash never checked out a branch (no working tree touched)" || bad "squash switched HEAD"
 echo "$out" | grep -q '^-- tsx-xx60-linux:squashed' && echo "$out" | sed -n '/^-- tsx-xx60-linux:squashed/,/^$/p' | grep -q 'ok: no leak-pattern hits' \
@@ -95,7 +95,9 @@ echo "$out" | grep -q 'local/pre-scrub-\* tags present\|local-only tags present'
 # history walk (a pathspec on git log/rev-list prunes TREESAME commits.
 # This is what the AI-attribution assertion above already exercises, but
 # assert directly that the commit is not just accidentally absent upstream) -
-git -C "$W/linux" log --oneline tsx-xx60-lts | grep -q '^[0-9a-f]* oops$' && ok "fixture's empty commit exists on the branch" || bad "test fixture itself is wrong"
+# No grep -q after git log: with pipefail, grep -q stops at the first match, git
+# log gets SIGPIPE when it writes the next commit, and the check fails at random.
+git -C "$W/linux" log --oneline tsx-xx60-lts | grep '^[0-9a-f]* oops$' > /dev/null && ok "fixture's empty commit exists on the branch" || bad "test fixture itself is wrong"
 
 # --- never pushes, never adds a remote -------------------------------------
 echo "$out" | grep -q '^git push ' && ok "prints push commands" || bad "no push commands printed"
