@@ -13,6 +13,10 @@
 #   tsx-rescue-install psr   BUNDLE_DIR
 #   tsx-rescue-install ledstock BUNDLE_DIR
 #   tsx-rescue-install run   BUNDLE_DIR [--yes] [--keep-data] [--root-from -|FILE]
+#                            [--no-reboot]
+#
+# --no-reboot: "run" does not reboot at the end. installer/steps/tsx-rescue-staged
+# uses it: it copies its log onto the new tsxdata first, then it reboots.
 #
 # --root-from (default BUNDLE_DIR/root.img): where the root image comes from.
 # "-" is stdin: the host streams root.img over the ssh connection that it
@@ -105,9 +109,9 @@ STATUS=${TSX_STATUS:-/run/tsx-install-state}
 set_state() { printf '%s\n' "$1" > "$STATUS" 2>/dev/null || true; }
 die() { set_state "failed: $*"; say "ERROR: $*"; exit 1; }
 CMD=${1:-}; B=${2:-}; [ $# -ge 2 ] && shift 2 || { sed -n '2,/^set -eu$/p' "$0" | sed '$d'; exit 2; }
-YES=0 KEEP_DATA=0 ROOT_FROM=
+YES=0 KEEP_DATA=0 ROOT_FROM= REBOOT=1
 while [ $# -gt 0 ]; do case "$1" in
-	--yes) YES=1;; --keep-data) KEEP_DATA=1;;
+	--yes) YES=1;; --keep-data) KEEP_DATA=1;; --no-reboot) REBOOT=0;;
 	--root-from) [ $# -ge 2 ] || die "--root-from needs - or a FILE"; ROOT_FROM=$2; shift;;
 	*) die "unknown option $1";;
 esac; shift; done
@@ -463,9 +467,10 @@ mount -t vfat "$CP1" "$RUN/p1" 2>/dev/null || { mkdir -p "$RUN/p1"; mount -t vfa
 touch "$RUN/p1/tsxboot.off"; sync; umount "$RUN/p1"
 say "p1:tsxboot.off written: the hook is disabled, stock bootcmd now boots eMMC boot (p7) directly"
 
+sync
+if [ "$REBOOT" = 0 ]; then set_state "done"; say "DONE (--no-reboot: the caller reboots into the kiosk)."; exit 0; fi
 set_state "done, rebooting"
 say "DONE. Rebooting into the kiosk from the eMMC (boot p7, root p8)."
-sync
 # Reboot in the background. Then the ssh session of the host ends cleanly and
 # does not hang on a connection that the reboot never closes. tsx-restore-factory
 # uses the same pattern.

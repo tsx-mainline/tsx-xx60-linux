@@ -128,7 +128,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: rescue-out
-          key: rescue-${{ hashFiles('installer/rescue/**', 'installer/rescue-v2/**', 'installer/initramfs/**', 'rootfs/initramfs/**', 'kernel/KERNEL_REV.lts', 'apk-tree/*/*/armv7/APKINDEX.tar.gz') }}
+          key: rescue-${{ hashFiles('installer/rescue/**', 'installer/rescue-v2/**', 'installer/steps/tsx-rescue-staged', 'installer/initramfs/**', 'rootfs/initramfs/**', 'kernel/KERNEL_REV.lts', 'apk-tree/*/*/armv7/APKINDEX.tar.gz') }}
 
       - uses: actions/download-artifact@v4
         if: steps.cache.outputs.cache-hit != 'true'

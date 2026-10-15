@@ -241,7 +241,7 @@ open(sys.argv[2], "wb").write(pad(h) + pad(k) + pad(rd) + pad(s2))
 	if bash "$HERE/installer/rescue/mkrescue.sh" --base "$T/base.img" --out "$T/rescue.img" > "$T/mk.log" 2>&1; then
 		ok "mkrescue.sh accepts a BASE with tsx-rescue, tsx-boot-ok and uboot-env.conf"
 		ov=$(sed -n 's/^rescue overlay: //p' "$T/mk.log")
-		[ "$ov" = "./etc/inittab ./etc/tsx/rescue-image " ] && ok "the rescue overlay adds only inittab and the rescue-image flag" || bad "rescue overlay: $ov"
+		[ "$ov" = "./etc/inittab ./etc/tsx/rescue-image ./usr/sbin/tsx-rescue-staged " ] && ok "the rescue overlay adds only inittab, the rescue-image flag and the staged-install runner" || bad "rescue overlay: $ov"
 	else bad "mkrescue.sh refused a good BASE: $(tail -n 1 "$T/mk.log")"; fi
 	rm -f "$B/usr/sbin/tsx-rescue"; mkbase "$T/base2.img"
 	if bash "$HERE/installer/rescue/mkrescue.sh" --base "$T/base2.img" --out "$T/rescue2.img" > "$T/mk2.log" 2>&1; then bad "mkrescue.sh accepted a BASE without tsx-rescue"

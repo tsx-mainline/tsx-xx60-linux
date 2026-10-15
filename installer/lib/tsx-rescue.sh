@@ -251,6 +251,30 @@ tsx_rootinfo_set_flavor() {
 	fi
 }
 
+# ------------------------------------------------------- golden slot -------
+# tsx_golden_update: in the rescue after a reinstall arm, copy p1:tsxboot.img
+# (the rescue that just booted) to the golden slot p1:boot.img, so later
+# recovery (tsx-restore-factory, docs/recovery.md) uses this version. The copy
+# is verified. If p1 is too full for a side copy, the copy replaces the old
+# file in place. Needs tsx_find_disk (tsx-lib.sh). Returns 1 on a failure.
+tsx_golden_update() {
+	local m t g rc=0 free need
+	tsx_find_disk || { echo "no card found"; return 1; }
+	m=${TSX_RUN:-/run}/tsx-p1g; mkdir -p "$m"; mount -t vfat "$P1" "$m" || { echo "cannot mount $P1"; return 1; }
+	t=$(sha256sum < "$m/tsxboot.img" | cut -d" " -f1); g=; [ -f "$m/boot.img" ] && g=$(sha256sum < "$m/boot.img" | cut -d" " -f1)
+	if [ "$t" = "$g" ]; then echo "golden p1:boot.img is already this rescue"
+	else
+		free=$(df -k "$m" | awk 'NR==2{print $4}'); need=$(( $(stat -c %s "$m/tsxboot.img") / 1024 + 256 ))
+		if [ "$free" -gt "$need" ]; then cp "$m/tsxboot.img" "$m/boot.new"; sync
+			if [ "$(sha256sum < "$m/boot.new" | cut -d" " -f1)" = "$t" ]; then mv "$m/boot.new" "$m/boot.img"; else rm -f "$m/boot.new"; echo "copy corrupt"; rc=1; fi
+		else rm -f "$m/boot.img"; sync; cp "$m/tsxboot.img" "$m/boot.img"; sync
+			[ "$(sha256sum < "$m/boot.img" | cut -d" " -f1)" = "$t" ] || { echo "copy corrupt"; rc=1; }
+		fi
+		[ $rc = 0 ] && echo "golden p1:boot.img = rescue $t"
+	fi
+	sync; umount "$m"; return $rc
+}
+
 # ------------------------------------------- the old root file system ------
 # The eMMC root region of mainline (p8, blkdevparts) starts at 796 MiB. The
 # stock Android system partition starts 8 MiB later, at 804 MiB (the table of

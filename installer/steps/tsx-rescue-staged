@@ -1,0 +1,215 @@
+#!/bin/sh
+# Run a staged install in the mainline rescue (docs/install.md "Stage on the
+# panel first"). It runs INSIDE the rescue system (RAM root, busybox ash).
+#
+#   tsx-rescue-staged auto            find a stage on the card and run it
+#   tsx-rescue-staged start           the same, in the background (for the host)
+#   tsx-rescue-staged status          print the state: none | searching | nostage |
+#                                     running | done | failed: REASON
+#   tsx-rescue-staged follow [LINE]   print the log from LINE (default 1) and
+#                                     follow it until the run ends
+#
+# Before the rescue boot, installer/tsx-install-mainline copies a stage to the
+# card of the panel: tsx-stage/ on card p5 (stock Android, the "sdcard" ext2)
+# or on card p4 (tsxdata, a mainline panel). The stage has:
+#   STAGE         key=value: format=tsx-stage-1, kernel, keep_data, golden,
+#                 tfa_source, psr_source, root_gz_bytes, root_gz_sha256
+#   bundle/       the install bundle of tsx-rescue-install, with SHA256SUMS.
+#                 Optional bundle/tfa-puf/ and bundle/psr-puf/: files of the
+#                 .puf download that the host already had, used only if the
+#                 panel has none
+#   root.img.gz   the root image, gzip
+# The rescue image starts "tsx-rescue-staged auto" once at boot (inittab,
+# installer/rescue/mkrescue.sh). If an older rescue has no such line, the host
+# copies this script to /run and runs "start". After that the install needs no
+# network: a lost link or a network move does not stop it.
+#
+# What "auto" does:
+#   1. Find the card (tsx-lib.sh). Mount p5 (stock layout) or p4 (folded card)
+#      and look for tsx-stage/STAGE. No stage: exit 0, nothing changes.
+#   2. Check that the RAM can hold the bundle and root.img.gz (plus 64 MiB).
+#      If not, rename STAGE to STAGE.failed and stop: the host then pushes
+#      the images over ssh.
+#   3. Rename STAGE to STAGE.taken (a stage runs once). Copy the bundle to
+#      /tmp/b and root.img.gz to /tmp. Check SHA256SUMS and the sha256 of
+#      root.img.gz. Remove tsx-stage/ from the card and unmount it.
+#   4. golden=1 (a reinstall): copy p1:tsxboot.img to the golden slot
+#      p1:boot.img (tsx_golden_update).
+#   5. The DSP files, the PSR file and the stock LED bar image from the panel
+#      (tsx-rescue-install tfa, psr, ledstock). The .puf files of the stage are
+#      the fallback.
+#   6. tsx-rescue-install check, then run --no-reboot with root.img.gz through
+#      gunzip on stdin. The readback checks the sha256 of boot and root.
+#   7. Copy the log to /data/tsx/install-staged.log on the new tsxdata, so the
+#      host can compare the WRITE-RESULT lines after the boot. Reboot.
+# A failure stops the run and keeps the rescue up with the files in RAM. The
+# log is /run/tsx-staged.log.
+# Test hooks: TSX_RUN, TSX_TMP (default /tmp), TSX_STAGE_DIR (a stage folder:
+# no card, no mount), TSX_STAGED_INSTALL (the tsx-rescue-install to run),
+# TSX_MEMAVAIL_KIB, TSX_NO_REBOOT=1, TSX_STAGED_FOLLOW_S (the follow limit).
+RUN=${TSX_RUN:-/run}; TMP=${TSX_TMP:-/tmp}
+LOG=$RUN/tsx-staged.log STATE=$RUN/tsx-staged.state PIDF=$RUN/tsx-staged.pid
+# One runner per boot: the first one makes this folder (mkdir is atomic). It
+# stays after a run, so a stage never runs twice in one boot.
+LOCK=$RUN/tsx-staged.lock
+MNT=$RUN/tsx-stage-mnt
+B=$TMP/b
+CMD=${1:-}
+
+state() { cat "$STATE" 2>/dev/null || echo none; }
+running() { p=$(cat "$PIDF" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+
+case "$CMD" in
+status)
+	s=$(state); case "$s" in searching|running) running || s="failed: the runner stopped";; esac
+	echo "$s"; exit 0;;
+follow)
+	# Print the log from line N and follow it. End when the run ends. The last
+	# line is STAGED-RESULT state=... with the line count, so a host that lost
+	# the connection can go on from there.
+	n=${2:-1}; t0=$(date +%s)
+	while :; do
+		if [ -f "$LOG" ]; then
+			tail -n +"$n" "$LOG" > "$RUN/tsx-staged.follow" 2>/dev/null
+			c=$(wc -l < "$RUN/tsx-staged.follow")
+			[ "$c" -gt 0 ] && { cat "$RUN/tsx-staged.follow"; n=$((n + c)); }
+		fi
+		s=$(state)
+		case "$s" in
+		searching|running) running || { echo "STAGED-RESULT state=failed lines=$((n - 1)) the runner stopped"; exit 1; };;
+		done*) echo "STAGED-RESULT state=done lines=$((n - 1))"; exit 0;;
+		none|nostage) echo "STAGED-RESULT state=$s lines=$((n - 1))"; exit 3;;
+		*) echo "STAGED-RESULT state=failed lines=$((n - 1)) $s"; exit 1;;
+		esac
+		[ $(( $(date +%s) - t0 )) -lt "${TSX_STAGED_FOLLOW_S:-3600}" ] || { echo "STAGED-RESULT state=running lines=$((n - 1))"; exit 2; }
+		sleep 1
+	done;;
+start)
+	[ -d "$LOCK" ] && { echo "tsx-rescue-staged: state $(state): a runner started in this boot already"; exit 0; }
+	nohup sh "$0" auto </dev/null >/dev/null 2>&1 &
+	# Wait until the runner holds the lock, so a "follow" right after this
+	# sees "searching" and not "none".
+	n=0; while [ ! -d "$LOCK" ] && [ $n -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+	echo "tsx-rescue-staged: started (pid $!)"; exit 0;;
+auto) ;;
+*) sed -n '2,/^RUN=/p' "$0" | sed '$d'; exit 2;;
+esac
+
+mkdir "$LOCK" 2>/dev/null || exit 0
+echo $$ > "$PIDF"
+echo searching > "$STATE"
+: > "$LOG"
+nostage() { rm -f "$PIDF" "$LOG"; echo nostage > "$STATE"; exit 0; }
+say() { echo "tsx-rescue-staged: $(date +%T 2>/dev/null) $*" >> "$LOG"; }
+STATUS=${TSX_STATUS:-$RUN/tsx-install-state}
+fail() { say "ERROR: $*"; echo "failed: $*" > "$STATE"; printf '%s\n' "failed: $*" > "$STATUS" 2>/dev/null; exit 1; }
+unmount() { [ -n "${TSX_STAGE_DIR:-}" ] || { sync; umount "$MNT" 2>/dev/null; }; }
+
+# ---- 1. find the stage --------------------------------------------------------
+if [ -n "${TSX_STAGE_DIR:-}" ]; then S=$TSX_STAGE_DIR
+else
+	[ -f /usr/share/tsx/tsx-lib.sh ] || nostage
+	# Never next to a run of the push path: it can format p4 at any moment.
+	p=$(cat "$RUN/tsx-install-run.pid" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null && nostage
+	. /usr/share/tsx/tsx-lib.sh
+	# The card can probe a few seconds after init starts.
+	n=0; until tsx_find_disk 2>/dev/null; do n=$((n + 1)); [ $n -lt 20 ] || nostage; sleep 1; done
+	if [ "$TSX_DISK_LAYOUT" = stock ]; then DEV=$P5; else DEV=$P4; fi
+	mkdir -p "$MNT"
+	mount -t ext4 -o rw,noatime "$DEV" "$MNT" 2>/dev/null || mount -t ext2 -o rw,noatime "$DEV" "$MNT" 2>/dev/null \
+		|| nostage
+	S=$MNT/tsx-stage
+fi
+if [ ! -f "$S/STAGE" ]; then unmount; nostage; fi
+echo running > "$STATE"
+echo "$$ staged install" > "$RUN/tsx-op" 2>/dev/null
+printf '%s\n' "staged install: starting" > "$STATUS" 2>/dev/null
+say "stage found: ${DEV:-$S}"
+conf() { sed -n "s/^$1=//p" "$S/STAGE" | tail -n 1; }
+grep -q '^format=tsx-stage-1$' "$S/STAGE" || { mv "$S/STAGE" "$S/STAGE.failed"; unmount; fail "$S/STAGE is not a tsx-stage-1 file"; }
+GZB=$(conf root_gz_bytes); GZS=$(conf root_gz_sha256); KEEP=$(conf keep_data); GOLDEN=$(conf golden)
+TFA_SOURCE=$(conf tfa_source); PSR_SOURCE=$(conf psr_source)
+say "kernel $(conf kernel), keep_data=$KEEP, golden=$GOLDEN, tfa_source=$TFA_SOURCE, psr_source=$PSR_SOURCE, root.img.gz $GZB bytes"
+
+# ---- 2. room in RAM -------------------------------------------------------------
+BK=$(du -sk "$S/bundle" | cut -f1)
+NEEDK=$(( GZB / 1024 + BK + 65536 ))
+AVK=${TSX_MEMAVAIL_KIB:-$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)}
+if [ "${AVK:-0}" -lt "$NEEDK" ]; then
+	mv "$S/STAGE" "$S/STAGE.failed"; unmount
+	fail "the RAM has ${AVK:-?} KiB available, the stage needs $NEEDK KiB. The host can push the images over ssh instead"
+fi
+
+# ---- 3. take the stage, copy it to RAM, check it, remove it from the card --------
+mv "$S/STAGE" "$S/STAGE.taken" && sync || { unmount; fail "cannot mark the stage as taken"; }
+say "copying the stage to RAM ($((NEEDK / 1024 - 64)) MiB, ${AVK} KiB available)"
+printf '%s\n' "staged install: copying the stage to RAM" > "$STATUS" 2>/dev/null
+rm -rf "$B" "$TMP/tsx-root.img.gz"
+cp -a "$S/bundle" "$B" && cp "$S/root.img.gz" "$TMP/tsx-root.img.gz" || { unmount; fail "copying the stage to RAM failed"; }
+( cd "$B" && sha256sum -c SHA256SUMS > "$RUN/tsx-staged.sums" 2>&1 ) || { grep -v ': OK$' "$RUN/tsx-staged.sums" >> "$LOG"; mv "$S" "$S.failed" 2>/dev/null; unmount; fail "the bundle of the stage does not match its SHA256SUMS (it stays on the card as tsx-stage.failed)"; }
+[ "$(stat -c %s "$TMP/tsx-root.img.gz")" = "$GZB" ] && [ "$(sha256sum < "$TMP/tsx-root.img.gz" | cut -d' ' -f1)" = "$GZS" ] \
+	|| { mv "$S" "$S.failed" 2>/dev/null; unmount; fail "root.img.gz of the stage has a wrong size or sha256 (it stays on the card as tsx-stage.failed)"; }
+say "stage checked: bundle SHA256SUMS ok, root.img.gz sha256 $GZS"
+rm -rf "$S" && sync || say "WARNING: could not remove $S from the card"
+unmount
+say "the stage is in RAM and gone from the card. From here the install needs no network"
+
+# ---- 4. the golden slot (a reinstall) -------------------------------------------
+. "$B/tsx-rescue.sh"
+if [ "$GOLDEN" = 1 ] && [ -z "${TSX_STAGE_DIR:-}" ]; then
+	say "golden slot: p1:boot.img <- the rescue that just booted"
+	tsx_golden_update >> "$LOG" 2>&1 || say "WARNING: could not update the golden slot (p1:boot.img). The install goes on"
+fi
+
+# ---- 5. DSP, PSR and LED bar files from the panel --------------------------------
+INST=${TSX_STAGED_INSTALL:-$B/tsx-rescue-install}
+step() { sh "$INST" "$@" >> "$LOG" 2>&1; }
+printf '%s\n' "staged install: looking for the vendor files" > "$STATUS" 2>/dev/null
+case "$TFA_SOURCE" in
+auto|panel)
+	step tfa "$B" || say "WARNING: tsx-rescue-install tfa failed"
+	N=$(sed -n 's/^TFA-RESULT .*count=\([0-9]*\).*/\1/p' "$LOG" | tail -n 1)
+	if [ "${N:-0}" = 3 ] || { [ "${N:-0}" -gt 0 ] && { [ "$TFA_SOURCE" = panel ] || [ ! -d "$B/tfa-puf" ]; }; }; then
+		rm -rf "$B/tfa"; mv "$B/tfa-panel" "$B/tfa" && say "tfa: the panel set ($N of 3 variants)"
+	elif [ "$TFA_SOURCE" = auto ] && [ -d "$B/tfa-puf" ]; then
+		rm -rf "$B/tfa"; mv "$B/tfa-puf" "$B/tfa" && say "tfa: the .puf files of the stage (the panel has ${N:-0} of 3 variants)"
+	else
+		rm -rf "$B/tfa" "$B/tfa-panel"; say "tfa: no DSP files: the speakers run without the vendor tuning (later: installer/steps/tsx-deploy-tfa.sh)"
+	fi;;
+puf) say "tfa: the .puf files that the host put in the stage";;
+*) rm -rf "$B/tfa" "$B/tfa-panel"; say "tfa: none (--tfa-source none)";;
+esac
+rm -rf "$B/tfa-puf"
+case "$PSR_SOURCE" in
+auto|panel)
+	step psr "$B" || say "WARNING: tsx-rescue-install psr failed"
+	if [ ! -f "$B/psr/PSR-CSR8811.psr" ] && ! grep -q '^source=not-needed' "$B/psr/SOURCE" 2>/dev/null; then
+		if [ "$PSR_SOURCE" = auto ] && [ -d "$B/psr-puf" ]; then rm -rf "$B/psr"; mv "$B/psr-puf" "$B/psr" && say "psr: the .puf file of the stage"
+		else say "psr: no PSR file: Bluetooth loads only its address"; fi
+	fi;;
+puf) say "psr: the .puf file that the host put in the stage";;
+*) rm -rf "$B/psr"; say "psr: none (--psr-source none)";;
+esac
+rm -rf "$B/psr-puf"
+step ledstock "$B" || say "WARNING: tsx-rescue-install ledstock failed (the install goes on)"
+
+# ---- 6. check and run ----------------------------------------------------------------
+KEEP_ARG=; [ "$KEEP" = 1 ] && KEEP_ARG=--keep-data
+step check "$B" $KEEP_ARG --root-from - || fail "tsx-rescue-install check failed (see the log)"
+say "writing the eMMC from root.img.gz in RAM (gunzip on the panel)"
+gunzip -c "$TMP/tsx-root.img.gz" | sh "$INST" run "$B" --yes --no-reboot $KEEP_ARG --root-from - >> "$LOG" 2>&1 \
+	|| fail "tsx-rescue-install run failed (see the log). The rescue stays up. Run the install command on the host again: it pushes the images over ssh"
+grep -q '^WRITE-RESULT name=root .* ok=1$' "$LOG" || fail "no good WRITE-RESULT line for root"
+rm -f "$TMP/tsx-root.img.gz"
+
+# ---- 7. the log onto the new tsxdata, then reboot --------------------------------
+echo "done" > "$STATE"
+printf '%s\n' "done: the install is complete, the panel reboots into the kiosk" > "$STATUS" 2>/dev/null
+say "DONE. The log goes to /data/tsx/install-staged.log. Rebooting into the kiosk"
+if [ -z "${TSX_STAGE_DIR:-}" ] && tsx_find_disk 2>/dev/null; then
+	D=$RUN/tsx-staged-data; mkdir -p "$D"
+	if mount -t ext4 "$P4" "$D" 2>/dev/null; then mkdir -p "$D/tsx"; cp "$LOG" "$D/tsx/install-staged.log"; sync; umount "$D"; fi
+fi
+rm -f "$PIDF"
+[ "${TSX_NO_REBOOT:-0}" = 1 ] || { sleep "${TSX_STAGED_REBOOT_S:-10}"; sync; reboot -f; }
+exit 0

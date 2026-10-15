@@ -30,7 +30,7 @@ Steps:
    ```
 
 3. Answer the panel configuration prompts (see "Panel configuration"). Give a root password or an SSH public key.
-4. Type `INSTALL` at each confirmation. The installer asks before it arms the rescue boot (this reboots the panel) and before it writes the eMMC.
+4. Type `INSTALL` at each confirmation. The installer asks before it arms the rescue boot (this reboots the panel). Without a stage, it also asks before it writes the eMMC. With a stage, the rescue writes the eMMC with no more questions (see "Stage on the panel first").
 5. Wait for the summary. The installer prints progress for each step. The panel reboots into the mainline kiosk.
 6. If the panel screen shows a one-time rescue password, set `TSX_RESCUE_PW` to it and run the same command again. The installer asks for it on a terminal.
 
@@ -191,6 +191,7 @@ installer/tsx-install-mainline <panel-ip> --payload DIR --kernel lts|stable [opt
 | `--results FILE` | none | Write a timestamped log of every step. |
 | `--tfa-source auto\|panel\|puf\|none` | `auto` | Where to get the speaker DSP files. |
 | `--psr-source auto\|panel\|puf\|none` | `auto` | Where to get the Bluetooth PSR file. |
+| `--stage auto\|yes\|no` | `auto` | Copy the install onto the card of the panel before the rescue boot (see "Stage on the panel first"). `auto` stages when it can and pushes over ssh when it cannot. `yes` stops when it cannot stage. `no` always pushes over ssh. |
 
 Environment variables:
 
@@ -200,6 +201,7 @@ Environment variables:
 | `TSX_ADMIN_USER` | Admin user. Default `admin`. |
 | `TSX_MAINLINE_PW` | Root password of a running mainline panel, when you log in with a password and not a key. If set, the installer skips the check for a root password or key. |
 | `TSX_RESCUE_PW` | The one-time password that the rescue shows on the panel screen. |
+| `TSX_STAGE_WAIT_S` | The time in seconds that the installer waits for a staged install to finish. Default 2400. |
 | `TSX_SSH_CIPHERS` | The ssh cipher list for the streams into the rescue. The default puts `chacha20-poly1305@openssh.com` first (see "Network requirements"). |
 | `TSX_PANEL_KIND` | `android`, `mainline`, `rescue` or `unreachable`. The value skips the network probe of the installer. Without it, the installer finds the kind from the ssh banner. If no ssh answers, it assumes stock Android. |
 
@@ -269,6 +271,39 @@ The dropbear of the rescue has no GCM ciphers. So the installer puts `chacha20-p
 `installer/tsx-restore-factory` uses the same method. The host pushes the factory bundle (about 700 MiB) to `/tmp/b` of the rescue as one tar stream over ssh. The rescue shows the MiB received about every 15 s and checks `SHA256SUMS` before the restore uses the files.
 
 If a run stops while the rescue is up, run the same command again. The new run stops an earlier run that is still busy, for example a `dd` that flushes the eMMC after a lost connection. It keeps the DSP and PSR files that the earlier attempt found. After the root stream ends, a lost connection does not stop the rescue: the install goes on and reboots the panel.
+
+### Stage on the panel first
+
+Before the rescue boot, while stock Android or the kiosk still runs, the installer copies the install onto the card of the panel. The rescue then installs from that copy by itself. After the rescue boot the install needs no network. A lost link or a move of the panel to another network does not stop it.
+
+| Panel | Where the stage goes | How it gets there |
+|---|---|---|
+| Stock Android | Card `p5` (the `sdcard` partition, ext2, about 1.4 GiB): `tsx-stage/` | `installer/steps/rootsh --put`, one file at a time, each sha256 checked |
+| Mainline (a reinstall) | Card `p4` (`tsxdata`, `/data`): `/data/tsx-stage/` | One tar stream over ssh, `SHA256SUMS` checked on the panel |
+
+The stage holds the install bundle (the boot image, the scripts of the rescue, `panel.conf` and the kiosk URL) and the root image as gzip (about 390 MiB for a 1 GiB root image). The installer makes `root.img.gz` next to `root.img` once and uses it again while the root image stays the same. The files arrive in `tsx-stage.new/` first. The installer renames the folder only after the last check, so the rescue never finds half a stage.
+
+In the rescue, `installer/steps/tsx-rescue-staged` starts once at boot. It runs these steps:
+
+1. It looks for `tsx-stage/STAGE` on card `p5` (stock layout) or `p4` (folded card). With no stage, it does nothing.
+2. It checks that the RAM holds the stage plus 64 MiB. If not, it stops, and the installer pushes the images over ssh.
+3. It marks the stage as taken, copies it to RAM, checks the sha256 of every file and removes the stage from the card.
+4. On a reinstall, it copies the rescue to the golden slot (`p1:boot.img`).
+5. It gets the DSP, PSR and LED bar files from the panel. The `.puf` files in the stage are the fallback (see below).
+6. It runs `tsx-rescue-install check`, then `run` with the root image through `gunzip`. The readback checks the sha256 of boot and root.
+7. It copies its log to `/data/tsx/install-staged.log` on the new `tsxdata` and reboots into the kiosk.
+
+The installer follows the log of the rescue while it can reach the rescue, and it waits for the kiosk. After the boot it reads `/data/tsx/install-staged.log` and compares the sha256 values with the payload. If the staged run fails while the host reaches the rescue, the installer pushes the images over ssh instead.
+
+The `.puf` files: the rescue looks on the panel first, as without a stage. The stage cannot download the `.puf` during the rescue. With `--tfa-source puf` or `--psr-source puf`, the installer downloads the files before the stage. With `auto`, the stage carries the files only if the host has them in its cache already (`rootfs/vendor-local/`). If the panel and the stage have no DSP files, install them later with `installer/steps/tsx-deploy-tfa.sh`.
+
+`--stage auto` pushes over ssh in these cases:
+
+- The rescue image of the payload has no `tsx-rescue-staged` (an older payload).
+- The card has not enough room for the stage.
+- The copy to the panel fails.
+
+If the installer stops before it arms the rescue boot, it removes the stage again. To remove a stage by hand, delete `tsx-stage/` on card `p5` (stock Android) or `/data/tsx-stage` (mainline).
 
 ### Root over the Crestron sshd
 

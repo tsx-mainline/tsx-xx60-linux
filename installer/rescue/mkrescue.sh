@@ -7,6 +7,11 @@
 # kernel unpacks concatenated archives in order. The second archive adds:
 #   /etc/tsx/rescue-image      flag: /init goes straight to the rescue system
 #   /etc/inittab               the one of BASE + "::once:/usr/sbin/tsx-rescue banner"
+#                              + "::once:/usr/sbin/tsx-rescue-staged auto"
+#   /usr/sbin/tsx-rescue-staged installer/steps/tsx-rescue-staged: runs an install
+#                              that the host staged on the card (docs/install.md
+#                              "Stage on the panel first"). It does nothing when
+#                              the card has no stage
 # BASE already has the rescue screen (tsx-rescue-status), tsx-rescue,
 # /usr/local/sbin/tsx-boot-ok and /etc/tsx/uboot-env.conf
 # (rootfs/initramfs/mkinitramfs-switchroot.sh). The script refuses a BASE
@@ -33,7 +38,8 @@ for f in usr/sbin/tsx-rescue usr/local/sbin/tsx-boot-ok; do
 done
 grep -q '^ENV_VERIFIED=yes' "$W/base/etc/tsx/uboot-env.conf" 2>/dev/null || { echo "BASE's initramfs has no verified /etc/tsx/uboot-env.conf: rebuild the initramfs"; exit 1; }
 R=$W/ov; mkdir -p "$R"; cp -a "$HERE/overlay/." "$R/"
-{ cat "$W/base/etc/inittab"; echo "::once:/usr/sbin/tsx-rescue banner"; } > "$R/etc/inittab"
+mkdir -p "$R/usr/sbin"; install -m 755 "$INSTALLER_DIR/steps/tsx-rescue-staged" "$R/usr/sbin/tsx-rescue-staged"
+{ cat "$W/base/etc/inittab"; echo "::once:/usr/sbin/tsx-rescue banner"; echo "::once:/usr/sbin/tsx-rescue-staged auto"; } > "$R/etc/inittab"
 (cd "$R" && find . -mindepth 1 | sort | cpio -o -H newc -R 0:0 --quiet | gzip -9n) > "$W/ov.gz"
 cat "$W/base-rd.gz" "$W/ov.gz" > "$W/rd.gz"
 python3 "$INSTALLER_DIR/initramfs/repack-bootimg.py" "$BASE" "$W/rd.gz" "$OUT"
