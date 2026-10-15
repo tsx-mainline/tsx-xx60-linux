@@ -335,7 +335,7 @@ if [ "$FROM_STEP" -le 3 ] && [ "$TO_STEP" -ge 3 ]; then
 	freek=$($SSH "awk '/MemAvailable/{print \$2}' /proc/meminfo" </dev/null); [ "${freek:-0}" -ge "$NEEDK" ] || die "only ${freek:-?} KiB available in the rescue, the bundle needs $NEEDK KiB (its size plus 64 MiB)"
 	log "  pushing the bundle to /tmp/b of the rescue over ssh ($(( NEEDK / 1024 - 64 )) MiB, ${freek} KiB available). Files: $FILES"
 	t0=$(date +%s)
-	run_stream_cmd tsx_push_bundle "$BUNDLE" /tmp/b $SSH </dev/null || die "pushing the bundle failed (see the output above). The rescue is still up: run step 3 again (--from-step 3)"
+	TSX_PUSH_OP="factory restore" TSX_PUSH_LABEL="the factory bundle" run_stream_cmd tsx_push_bundle "$BUNDLE" /tmp/b $SSH </dev/null || die "pushing the bundle failed (see the output above). The rescue is still up: run step 3 again (--from-step 3)"
 	run_stream 'chmod +x /tmp/b/tsx-emmc-restore /tmp/b/tsx-factory-restore; echo "files in /tmp/b: $(ls /tmp/b | wc -l)"; free -m | sed -n 2p' </dev/null || die "the bundle in /tmp/b is not complete"
 	log "  payload done in $(( $(date +%s) - t0 )) s"
 fi

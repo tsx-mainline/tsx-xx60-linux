@@ -693,7 +693,7 @@ tfa_puf() {  # rootfs/vendor-fetch.sh here, then push the files into /tmp/b/tfa
 	tfa_puf_fetch "$STAGE2/tfa" || return 1
 	files=$(cd "$STAGE2/tfa" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | sort | tr '\n' ' ')
 	log "  pushing the .puf's DSP files to the rescue over ssh: $files"
-	run_stream_cmd tsx_push_dir "$STAGE2/tfa" /tmp/b/tfa $RSSH </dev/null \
+	TSX_PUSH_LABEL="the speaker DSP files" run_stream_cmd tsx_push_dir "$STAGE2/tfa" /tmp/b/tfa $RSSH </dev/null \
 		|| { log "  WARNING: pushing the .puf's DSP files to the rescue failed"; return 1; }
 	TFA_USED="puf (rootfs/vendor-fetch.sh), $TFA_PUF_N of 3 variants"
 }
@@ -733,7 +733,7 @@ esac
 psr_puf() {  # rootfs/vendor-fetch.sh --psr here, then push the file into /tmp/b/psr
 	psr_puf_fetch "$STAGE2/psr" || return 1
 	log "  pushing the .puf's PSR file to the rescue over ssh"
-	run_stream_cmd tsx_push_dir "$STAGE2/psr" /tmp/b/psr $RSSH </dev/null \
+	TSX_PUSH_LABEL="the Bluetooth PSR file" run_stream_cmd tsx_push_dir "$STAGE2/psr" /tmp/b/psr $RSSH </dev/null \
 		|| { log "  WARNING: pushing the .puf's PSR file to the rescue failed"; return 1; }
 	PSR_USED="puf (rootfs/vendor-fetch.sh --psr), sha256 $PSR_PUF_SHA"
 }

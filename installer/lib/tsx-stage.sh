@@ -109,7 +109,7 @@ tsx_stage_push_kiosk() {
 		return 1
 	fi
 	log "  stage: copying $((need / 1024 - 16)) MiB to $d on the panel ($((free / 1024)) MiB free)"
-	run_stream_cmd tsx_push_dir "$out" "$d" "$@" </dev/null
+	TSX_PUSH_LABEL="the stage" run_stream_cmd tsx_push_dir "$out" "$d" "$@" </dev/null
 }
 
 # tsx_stage_push_android OUT HOST: copy the stage folder to card p5 of a stock

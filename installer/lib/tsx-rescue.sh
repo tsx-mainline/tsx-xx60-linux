@@ -32,6 +32,9 @@ pr_dd() {
 	exec 7<&0
 	dd "$@" <&7 1>&8 2>/dev/null 7<&- 8<&- &
 	_pd_dp=$!
+	# A 0% line at the start, so the rescue screen never shows the bar of the
+	# step before for the first tick. The file goes away at the end.
+	printf '%.0f %.0f %.0f %s\n' "$((_pd_off * 1048576))" "$((_pd_off * 1048576))" "$((_pd_len * 1048576))" "$_pd_name" > "${TSX_PROGRESS_FILE:-/run/tsx-progress}" 2>/dev/null || true
 	( _pd_t0=$(date +%s)
 	  while kill -0 $_pd_dp 2>/dev/null; do
 		_pd_i=0
@@ -59,6 +62,7 @@ pr_dd() {
 	# check and ends itself. A stray signal to an already recycled PID must not
 	# happen here (see docs/recovery.md).
 	wait $_pd_rp 2>/dev/null
+	rm -f "${TSX_PROGRESS_FILE:-/run/tsx-progress}" 2>/dev/null
 	exec 7<&- 8<&-
 	return $_pd_rc
 }
@@ -429,27 +433,57 @@ TSX_SSH_CIPHERS_DEFAULT=chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes
 # one does not have them. The install bundle keeps tfa, psr and ledstock this
 # way: a run again in the same rescue session (a resume) finds the files of
 # the earlier attempt there, after the earlier attempt wrote over the old
-# root. For a push of TSX_PUSH_PROGRESS_MIB (default 32) MiB or more, the
-# rescue prints a progress line every TSX_PR_DD_TICK (default 15) seconds:
-# the MiB received, the percent and the seconds since the start. It prints
-# "pushed DEST: N files, sha256 checked", or the failed files. Use it on the
-# host only (it needs a shell with pipefail for the tar status).
+# root.
+# Progress: in the rescue, the receiver registers on the rescue screen
+# (tsx-rescue-status): it writes "PID OP" to /run/tsx-op, the state
+# "receiving LABEL from the host: N of T MiB" to /run/tsx-install-state and
+# the bytes to /run/tsx-progress (the format of pr_dd) about every second.
+# TSX_PUSH_OP (default "install") and TSX_PUSH_LABEL (default "the install
+# files") set the words. On a running kiosk (no rescue screen) the receiver
+# writes the progress to the system log (logger -t tsx-install) instead. For
+# a push of TSX_PUSH_PROGRESS_MIB (default 32) MiB or more, it also prints a
+# progress line every TSX_PR_DD_TICK (default 15) seconds. It prints "pushed
+# DEST: N files, sha256 checked", or the failed files. Use it on the host only
+# (it needs a shell with pipefail for the tar status). Test hook:
+# TSX_PUSH_SCREEN=1 writes the screen files on a host with no rescue image.
 tsx_push_dir() {
-	local src=$1 dest=$2 keep= k mv= total prog=; shift 2
+	local src=$1 dest=$2 keep= k mv= totalb totalm print=0 op=${TSX_PUSH_OP:-install} label=${TSX_PUSH_LABEL:-the install files} r; shift 2
 	[ "${1:-}" = --keep ] && { keep=$2; shift 2; }
 	[ -f "$src/SHA256SUMS" ] || { echo "tsx_push_dir: $src has no SHA256SUMS"; return 1; }
+	case "$op$label" in *[\'\"\\\$\`]*) echo "tsx_push_dir: no quotes or \$ in TSX_PUSH_OP or TSX_PUSH_LABEL"; return 1;; esac
 	for k in $keep; do mv="$mv [ -e '$dest/$k' ] && [ ! -e '$dest.new/$k' ] && mv '$dest/$k' '$dest.new/$k' && echo 'kept $dest/$k from an earlier attempt';"; done
-	total=$(du -sLm "$src" | cut -f1)
-	if [ "$total" -ge "${TSX_PUSH_PROGRESS_MIB:-32}" ]; then
-		# The reporter stops by itself when the marker file exists. It is never
-		# killed (see pr_dd).
-		prog="( i=0; while [ ! -e '$dest.new.done' ]; do sleep 1; i=\$((i + 1)); [ \$((i % ${TSX_PR_DD_TICK:-15})) = 0 ] || continue; \
-			n=\$(du -sm '$dest.new' 2>/dev/null | cut -f1); echo \"  push $dest: \${n:-0}/$total MiB (\$(( \${n:-0} * 100 / $total ))%), \${i} s\"; done ) &"
-	fi
-	tar -h --owner=0 --group=0 -C "$src" -cf - . | "$@" "rm -rf '$dest.new' '$dest.new.done' && mkdir -p '$dest.new' \
-		&& { $prog tar -xf - -C '$dest.new'; r=\$?; : > '$dest.new.done'; wait; rm -f '$dest.new.done'; [ \$r = 0 ] || echo 'tar stream FAILED'; [ \$r = 0 ]; } && cd '$dest.new' \
-		&& { sha256sum -c SHA256SUMS > ../.tsx-sumcheck 2>&1 || { grep -v ': OK\$' ../.tsx-sumcheck; echo 'sha256 check FAILED'; exit 1; }; } \
-		&& cd / && { $mv true; } && rm -rf '$dest' && mv '$dest.new' '$dest' && echo \"pushed $dest: \$(wc -l < '$dest/SHA256SUMS') files, sha256 checked\""
+	totalb=$(find -L "$src" -type f -printf '%s\n' | awk '{s += $1} END {print s + 0}')
+	totalm=$(( (totalb + 1048575) / 1048576 ))
+	[ "$totalm" -lt "${TSX_PUSH_PROGRESS_MIB:-32}" ] || print=1
+	# The receiver. @X@ are filled in below. The reporter stops by itself when
+	# the marker file exists. It is never killed (see pr_dd).
+	r='D=@DEST@; R=${TSX_RUN:-/run}; P=${TSX_PROGRESS_FILE:-$R/tsx-progress}; L="@LABEL@"
+scr=0; { [ -f /etc/tsx/rescue-image ] || [ -n "${TSX_PUSH_SCREEN:-}" ]; } && scr=1
+st() { [ $scr = 1 ] && printf "%s\n" "$1" > "$R/tsx-install-state" 2>/dev/null; :; }
+rm -rf "$D.new" "$D.new.done" && mkdir -p "$D.new" || exit 1
+[ $scr = 1 ] && echo "$$ @OP@" > "$R/tsx-op" 2>/dev/null
+st "receiving $L from the host: 0 of @TOTALM@ MiB"
+( i=0; while [ ! -e "$D.new.done" ]; do sleep 1; i=$((i + 1))
+	n=$(du -sk "$D.new" 2>/dev/null | cut -f1); n=${n:-0}; m=$((n / 1024))
+	[ $scr = 1 ] && { printf "%s 0 %s %s\n" $((n * 1024)) @TOTALB@ "$L" > "$P" 2>/dev/null; st "receiving $L from the host: $m of @TOTALM@ MiB"; }
+	[ $((i % @TICK@)) = 0 ] || continue
+	line="push $D: $m/@TOTALM@ MiB ($((m * 100 / @TOTALMD@))%), $i s"
+	[ @PRINT@ = 1 ] && echo "  $line"
+	[ $scr = 1 ] || logger -t tsx-install "$line" 2>/dev/null
+  done ) &
+tar -xf - -C "$D.new"; rc=$?; : > "$D.new.done"; wait; rm -f "$D.new.done"
+[ $rc = 0 ] || { echo "tar stream FAILED"; st "failed: receiving $L from the host (the stream stopped)"; exit 1; }
+cd "$D.new" || exit 1
+sha256sum -c SHA256SUMS > ../.tsx-sumcheck 2>&1 || { grep -v ": OK$" ../.tsx-sumcheck; echo "sha256 check FAILED"; st "failed: $L from the host: sha256 check"; exit 1; }
+cd / && { @MV@ true; } && rm -rf "$D" && mv "$D.new" "$D" || { st "failed: $L: cannot replace $D"; exit 1; }
+st "idle: received $L"
+[ $scr = 1 ] || logger -t tsx-install "push $D: complete, sha256 checked" 2>/dev/null
+echo "pushed $D: $(wc -l < "$D/SHA256SUMS") files, sha256 checked"'
+	# A quoted replacement: bash 5.2 reads "&" in an unquoted one as the match.
+	r=${r//@DEST@/"'$dest'"}; r=${r//@LABEL@/"$label"}; r=${r//@OP@/"$op"}
+	r=${r//@TOTALB@/"$totalb"}; r=${r//@TOTALMD@/"$(( totalm > 0 ? totalm : 1 ))"}; r=${r//@TOTALM@/"$totalm"}
+	r=${r//@TICK@/"${TSX_PR_DD_TICK:-15}"}; r=${r//@PRINT@/"$print"}; r=${r//@MV@/"$mv"}
+	tar -h --owner=0 --group=0 -C "$src" -cf - . | "$@" "$r"
 }
 
 # tsx_push_bundle SRC DEST SSH...: push the files that SRC/SHA256SUMS lists,

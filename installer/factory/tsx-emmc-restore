@@ -55,6 +55,9 @@ pr_dd() {
 	exec 7<&0
 	dd "$@" <&7 1>&8 2>/dev/null 7<&- 8<&- &
 	_pd_dp=$!
+	# A 0% line at the start, so the rescue screen never shows the bar of the
+	# step before for the first tick. The file goes away at the end.
+	printf '%.0f %.0f %.0f %s\n' "$((_pd_off * 1048576))" "$((_pd_off * 1048576))" "$((_pd_len * 1048576))" "$_pd_name" > "${TSX_PROGRESS_FILE:-/run/tsx-progress}" 2>/dev/null || true
 	( _pd_t0=$(date +%s)
 	  while kill -0 $_pd_dp 2>/dev/null; do
 		_pd_i=0
@@ -72,6 +75,8 @@ pr_dd() {
 				else printf "  %s: %.0f/%.0f MiB (%.0f%%), %.1f MiB/s, ~%.0f s left\n", name, d, len, pct, rate, left;
 			} else printf "  %s: %.0f/%.0f MiB (%.0f%%), %.1f MiB/s\n", name, d, len, pct, rate;
 		}' >&2
+		# The progress bar of the rescue screen (tsx-rescue-status).
+		printf '%.0f %.0f %.0f %s\n' "$_pd_pos" "$((_pd_off * 1048576))" "$((_pd_len * 1048576))" "$_pd_name" > "${TSX_PROGRESS_FILE:-/run/tsx-progress}" 2>/dev/null || true
 	  done
 	) &
 	_pd_rp=$!
@@ -82,6 +87,7 @@ pr_dd() {
 	# been recycled by the OS. A stray signal to an unrelated, reused PID took
 	# down the whole script once.
 	wait $_pd_rp 2>/dev/null
+	rm -f "${TSX_PROGRESS_FILE:-/run/tsx-progress}" 2>/dev/null
 	exec 7<&- 8<&-
 	return $_pd_rc
 }

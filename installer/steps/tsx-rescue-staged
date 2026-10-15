@@ -145,7 +145,12 @@ mv "$S/STAGE" "$S/STAGE.taken" && sync || { unmount; fail "cannot mark the stage
 say "copying the stage to RAM ($((NEEDK / 1024 - 64)) MiB, ${AVK} KiB available)"
 printf '%s\n' "staged install: copying the stage to RAM" > "$STATUS" 2>/dev/null
 rm -rf "$B" "$TMP/tsx-root.img.gz"
-cp -a "$S/bundle" "$B" && cp "$S/root.img.gz" "$TMP/tsx-root.img.gz" || { unmount; fail "copying the stage to RAM failed"; }
+cp -a "$S/bundle" "$B" || { unmount; fail "copying the stage to RAM failed"; }
+# pr_dd (tsx-rescue.sh of the bundle) shows the copy of root.img.gz on the
+# rescue screen and in the log.
+. "$B/tsx-rescue.sh"
+pr_dd "$TMP/tsx-root.img.gz" 0 $(( (GZB + 1048575) / 1048576 )) "stage copy to RAM" -- if="$S/root.img.gz" bs=1M 2>> "$LOG" \
+	|| { unmount; fail "copying root.img.gz to RAM failed"; }
 ( cd "$B" && sha256sum -c SHA256SUMS > "$RUN/tsx-staged.sums" 2>&1 ) || { grep -v ': OK$' "$RUN/tsx-staged.sums" >> "$LOG"; mv "$S" "$S.failed" 2>/dev/null; unmount; fail "the bundle of the stage does not match its SHA256SUMS (it stays on the card as tsx-stage.failed)"; }
 [ "$(stat -c %s "$TMP/tsx-root.img.gz")" = "$GZB" ] && [ "$(sha256sum < "$TMP/tsx-root.img.gz" | cut -d' ' -f1)" = "$GZS" ] \
 	|| { mv "$S" "$S.failed" 2>/dev/null; unmount; fail "root.img.gz of the stage has a wrong size or sha256 (it stays on the card as tsx-stage.failed)"; }
@@ -155,7 +160,6 @@ unmount
 say "the stage is in RAM and gone from the card. From here the install needs no network"
 
 # ---- 4. the golden slot (a reinstall) -------------------------------------------
-. "$B/tsx-rescue.sh"
 if [ "$GOLDEN" = 1 ] && [ -z "${TSX_STAGE_DIR:-}" ]; then
 	say "golden slot: p1:boot.img <- the rescue that just booted"
 	tsx_golden_update >> "$LOG" 2>&1 || say "WARNING: could not update the golden slot (p1:boot.img). The install goes on"

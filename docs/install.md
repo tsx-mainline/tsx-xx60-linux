@@ -457,6 +457,8 @@ Every driver script prints progress and does not run silently:
 - During large writes it prints per-region lines and a tick with MiB written, percent and ETA about every 15 s.
 - It streams the output of remote commands live.
 - It prints heartbeat lines in every wait loop (Android settle, kiosk start, reboot).
+- While the host pushes files into the rescue, the rescue screen shows the state, for example "receiving the install files from the host: 120 of 642 MiB", and a progress bar. The rescue writes the progress to `/run/tsx-progress`, as for its own writes.
+- A copy to a running kiosk (the stage) writes its progress to the system log of the kiosk (`logger -t tsx-install`), because the kiosk shows its dashboard and has no rescue screen.
 
 ## Troubleshooting
 

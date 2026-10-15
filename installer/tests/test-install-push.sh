@@ -24,6 +24,8 @@
 #   8. tsx_push_bundle (the factory bundle of tsx-restore-factory): only the
 #      files of SHA256SUMS go, the old DEST goes first, progress lines for a
 #      large push, and a dry run of tsx-restore-factory names the push
+#   9. the rescue screen while a push arrives: tsx-op, the state line with
+#      the MiB, and /run/tsx-progress in the format of pr_dd
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 LIB="$HERE/lib/tsx-rescue.sh"
@@ -94,11 +96,19 @@ OUT=$(push_root); rc=$?
 
 echo "== 4. progress lines while the stream runs"
 fresh_dev
-OUT=$( (for i in 0 1 2 3 4 5; do dd if="$W/root.img" bs=$MIB skip=$i count=1 2>/dev/null; sleep 0.7; done) \
-	| TSX_PR_DD_TICK=1 ssh root@rescue ". '$LIB'; tsx_write_verify '$W/p8' - $BYTES $SHA root 'eMMC root'" 2>&1)
+rm -f "$W/progress"
+( (for i in 0 1 2 3 4 5; do dd if="$W/root.img" bs=$MIB skip=$i count=1 2>/dev/null; sleep 0.7; done) \
+	| TSX_PR_DD_TICK=1 ssh root@rescue ". '$LIB'; tsx_write_verify '$W/p8' - $BYTES $SHA root 'eMMC root'" > "$W/slow.out" 2>&1 ) &
+SP=$!
+n=0; while [ ! -s "$W/progress" ] && [ $n -lt 30 ]; do sleep 0.1; n=$((n + 1)); done
+FIRST=$(cat "$W/progress" 2>/dev/null)
+sleep 2; LATER=$(cat "$W/progress" 2>/dev/null)
+wait $SP; OUT=$(cat "$W/slow.out")
 case "$OUT" in *"eMMC root: "*"/6 MiB ("*"%)"*) ok "progress: $(printf '%s\n' "$OUT" | grep -m1 'eMMC root: ' | sed 's/^ *//')";; *) bad "no progress line: $OUT";; esac
 tsx_write_result_check "$OUT" root "$SHA" && ok "the slow stream verifies" || bad "slow stream: $OUT"
-[ -s "$W/progress" ] && grep -q ' eMMC root$' "$W/progress" && ok "the rescue screen file names the image" || bad "progress file: $(cat "$W/progress" 2>/dev/null)"
+case "$FIRST" in "0 0 $((6 * MIB)) eMMC root") ok "the screen file has a 0% line at once (no bar of the step before)";; *) bad "first progress line: '$FIRST'";; esac
+case "$LATER" in [1-9]*" 0 $((6 * MIB)) eMMC root") ok "the screen file follows the write: $LATER";; *) bad "later progress line: '$LATER'";; esac
+[ ! -e "$W/progress" ] && ok "the screen file is gone after the write (no stale bar for the next step)" || bad "progress file left: $(cat "$W/progress")"
 
 echo "== 5. tsx_push_dir: one tar stream, sha256 check, replace only after a good check"
 mkdir -p "$W/src/sub" "$W/r"
@@ -194,6 +204,29 @@ OUT=$(PATH="$W/fbin:$PATH" "$HERE/tsx-restore-factory" --bundle "$W/fbd" --dry-r
 [ $rc = 0 ] && ok "tsx-restore-factory --dry-run rc 0" || bad "dry run rc $rc: $OUT"
 case "$OUT" in *"step 3: rm -rf /tmp/b"*"one tar stream over ssh (tsx_push_bundle"*"opens no connection to this host"*) ok "the dry run names the push over ssh";; *) bad "dry run: $OUT";; esac
 case "$OUT" in *"--port is ignored"*) ok "--port is accepted and ignored";; *) bad "no --port note: $OUT";; esac
+
+echo "== 9. the rescue screen while a push arrives"
+mkdir -p "$W/scr"; echo boot > "$W/fb/boot-golden.img"
+(cd "$W/fb" && sha256sum system.img boot-golden.img tsx-emmc-restore > SHA256SUMS)
+( TSX_PUSH_SCREEN=1 TSX_RUN=$W/scr TSX_PROGRESS_FILE=$W/scr/tsx-progress TSX_PR_DD_TICK=1 FAKE_SSH_SLOW=3 \
+	TSX_PUSH_OP="factory restore" TSX_PUSH_LABEL="the factory bundle" tsx_push_bundle "$W/fb" "$W/r4/b" ssh root@rescue > "$W/scr.out" 2>&1 ) &
+PP=$!
+n=0; while [ ! -s "$W/scr/tsx-progress" ] && [ $n -lt 40 ]; do sleep 0.1; n=$((n + 1)); done
+sleep 1.2
+ST=$(cat "$W/scr/tsx-install-state" 2>/dev/null); PR=$(cat "$W/scr/tsx-progress" 2>/dev/null); OP=$(cat "$W/scr/tsx-op" 2>/dev/null)
+wait $PP; rc=$?
+[ $rc = 0 ] || cat "$W/scr.out"
+case "$ST" in "receiving the factory bundle from the host: "[0-9]*" of "[0-9]*" MiB") ok "state while data arrives: $ST";; *) bad "state: '$ST'";; esac
+case "$OP" in [0-9]*" factory restore") ok "tsx-op: PID and the name of the operation";; *) bad "tsx-op: '$OP'";; esac
+TOTALB=$(find -L "$W/fb" -type f \( -name system.img -o -name boot-golden.img -o -name tsx-emmc-restore -o -name SHA256SUMS \) -printf '%s\n' | awk '{s += $1} END {print s}')
+set -- $PR
+[ "${2:-}" = 0 ] && [ "${1:-0}" -gt 0 ] && [ "${4:-} ${5:-} ${6:-}" = "the factory bundle" ] && ok "tsx-progress: POS 0 LEN NAME, as pr_dd writes it ($PR)" || bad "tsx-progress: '$PR'"
+[ $rc = 0 ] && grep -q '^idle: received the factory bundle$' "$W/scr/tsx-install-state" && ok "after the push: the state goes back to idle (the screen hides it)" || bad "after: rc $rc $(cat "$W/scr/tsx-install-state")"
+OUT=$( TSX_PUSH_SCREEN=1 TSX_RUN=$W/scr TSX_PROGRESS_FILE=$W/scr/tsx-progress FAKE_SSH_CUT=50000 tsx_push_bundle "$W/fb" "$W/r4/b" ssh root@rescue 2>&1 ); rc=$?
+[ $rc != 0 ] && grep -q '^failed: receiving the install files from the host' "$W/scr/tsx-install-state" && ok "a stream that stops: the screen state says failed" || bad "cut: rc $rc $(cat "$W/scr/tsx-install-state")"
+grep -q 'printf "%s 0 %s %s\\n" $((n \* 1024)) @TOTALB@ "$L" > "$P"' "$HERE/lib/tsx-rescue.sh" && ok "the receiver writes POS OFF LEN NAME" || bad "receiver format"
+grep -q 'echo "\$\$ install" > "\$RUN/tsx-op"' "$HERE/steps/tsx-rescue-install" && grep -q 'printf .*TSX_PROGRESS_FILE:-/run/tsx-progress' "$LIB" \
+	&& ok "the root stream (tsx-rescue-install run, pr_dd) still registers and writes its progress" || bad "root stream screen"
 
 echo "== $N ok, $F failed"
 [ $F = 0 ] && echo PASS test-install-push || echo FAIL test-install-push
