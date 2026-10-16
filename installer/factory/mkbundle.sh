@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Build the FULL factory-restore bundle for one xx60 unit. The card part comes from
 # puf-tool.sh (installer/factory) bundle: the Crestron table, the golden boot.img,
 # system.img for p2, empty p5..p8, and the env of the unit with the mainline hook

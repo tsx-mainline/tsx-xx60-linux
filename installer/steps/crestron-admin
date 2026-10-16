@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Host: make sure a stock-Android xx60 has a Crestron admin account. This is
 # what the first-run page of the web UI does. A factory-fresh /data has no
 # account: GET /Device/Authentication then says AuthenticationState.IsEnabled=false

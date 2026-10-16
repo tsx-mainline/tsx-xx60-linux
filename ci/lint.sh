@@ -4,7 +4,8 @@
 #   - every script with a "#!/bin/sh" shebang must pass `busybox sh -n`.
 #     This is the shell that runs on the panel and in the Alpine build
 #     containers, so bash-only syntax is not allowed there.
-#   - every script with a "#!/bin/bash" shebang must pass `bash -n`
+#   - every script with a "#!/bin/bash" or "#!/usr/bin/env bash" shebang must
+#     pass `bash -n`
 #   - every *.py file must byte-compile
 #   - the host installer drivers must support --help
 # The script skips work/ (old per-session reports, not part of the shipped tree).
@@ -24,7 +25,7 @@ sh_files=() bash_files=()
 while IFS= read -r -d '' f; do
 	case "$(head -c 4096 "$f" 2>/dev/null | tr -d '\0' | head -n1)" in
 	'#!/bin/sh') sh_files+=("$f");;
-	'#!/bin/bash') bash_files+=("$f");;
+	'#!/bin/bash'|'#!/usr/bin/env bash') bash_files+=("$f");;
 	esac
 done < <(find . -type f -not -path './work/*' -not -path './.git/*' -print0)
 

@@ -216,7 +216,7 @@ With `HA_LOGIN_METHOD=token` and a token, the kiosk logs in at first boot. With 
 
 ### Host requirements
 
-The installer runs on any Linux machine with `bash` and these tools:
+The installer runs on any Linux machine with `bash` in `PATH` (in any folder, not only `/bin`) and these tools:
 
 - `ssh`, `python3`, `curl`, `ip`, `tar`, `find`, `sha256sum`, `du`, `stat` and `gzip`. The busybox versions of `tar`, `find`, `sha256sum`, `du`, `stat` and `gzip` also work.
 - `sshpass` for a password login: the Crestron account of stock Android, and a root or rescue password instead of an ssh key.

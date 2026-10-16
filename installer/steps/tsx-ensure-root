@@ -105,6 +105,7 @@ admin_stop() {
 	2) die "steps/crestron-admin: a missing login (see above)";;
 	3) die "the Crestron sshd refused the login of $TSX_ADMIN_USER, or it blocks this host (see above). Check --admin-user and --admin-password-file. After 3 failed logins the sshd blocks the host for 24 hours, so the installer does not try again";;
 	4) die "the panel refused to create the Crestron account (see the answer above). Use another password, for example a longer one";;
+	126|127) die "this host cannot start steps/crestron-admin (see above): it needs bash in PATH and python3";;
 	esac
 }
 noroot_msg() { echo "the Crestron console accepts the login of $TSX_ADMIN_USER, but 'ssh -tt $TSX_ADMIN_USER@$PANEL rootsh' gives no root shell: the panel does not have the rootsh method in /system/bin/sshShell.sh (a panel as Crestron ships it does not). A network-only install REQUIRES this method, and the installer does not set it up over the network. Read docs/install.md \"Root over the Crestron sshd\": add the method once over the UART (--uart yes --sshshell FILE). Nothing was changed on the panel except the Crestron account"; }

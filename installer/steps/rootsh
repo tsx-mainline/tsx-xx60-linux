@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Host: run a command as root on a stock-Android xx60 through the Crestron
 # sshd. This needs the patched /system/bin/sshShell.sh (out/sshShell.sh: a
 # "rootsh" command drops into /system/bin/bash -l). The sshd wants a tty, so it

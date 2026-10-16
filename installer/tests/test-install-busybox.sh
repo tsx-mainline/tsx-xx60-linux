@@ -42,6 +42,15 @@ else
 	echo "  skip: no GNU tar on this host"
 fi
 
+echo "== the shebang of the host scripts"
+# A machine can have bash in another folder than /bin (an Alpine panel with a
+# bash in /tmp, NixOS). The drivers start these scripts directly, so they use
+# /usr/bin/env bash, not /bin/bash.
+for f in tsx-install-mainline tsx-restore-factory tsx-make-stick steps/tsx-ensure-root steps/rootsh steps/crestron-admin \
+	steps/tsx-deploy-tfa.sh factory/mkbundle.sh steps/legacy/tsx-android-to-card steps/legacy/tsx-card-to-emmc; do
+	case "$(head -n 1 "$HERE/$f")" in '#!/usr/bin/env bash'|'#!/bin/sh') ok "$f: $(head -n 1 "$HERE/$f")";; *) bad "$f starts with $(head -n 1 "$HERE/$f")";; esac
+done
+
 echo "== $N ok, $F failed"
 [ $F = 0 ] && echo PASS test-install-busybox || echo FAIL test-install-busybox
 exit $F
