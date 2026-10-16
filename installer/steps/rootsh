@@ -10,8 +10,7 @@
 # session never reads it.
 #   steps/rootsh [LOGIN] HOST 'command ...'
 #   steps/rootsh [LOGIN] --put HOST FILE DEST
-# LOGIN: --admin-user USER and --admin-password-file FILE (or --admin-password
-# PW). An option wins over the environment variable (TSX_ADMIN_USER,
+# LOGIN: --admin-user USER and --admin-password PW. An option wins over the environment variable (TSX_ADMIN_USER,
 # TSX_ADMIN_PW). Neither has a default: a missing value stops the script with
 # exit 2 before it contacts the panel. The drivers give both values in the
 # environment (lib/tsx-creds.sh).

@@ -40,7 +40,7 @@ The support status of each board revision and touch glass is in [docs/compatibil
 ## Start
 
 1. Read [docs/index.md](docs/index.md) for the list of pages.
-2. Follow [docs/install.md](docs/install.md) to install a panel.
+2. Follow [docs/install.md](docs/install.md) to install a panel. On a terminal, the installer asks for the Crestron login and offers to save your answers in an install config file (mode 600) for the next run (`--install-config FILE`, `installer/tsx-install.conf.example`).
 
    REQUIREMENT for an install from stock Android with no UART: the panel must have the `rootsh` method. `ssh -tt <user>@<panel-ip> rootsh` must give a root shell. In this method, the interactive branch of the `/system/bin/sshShell.sh` of the panel starts a root shell for the command `rootsh`. A panel as Crestron ships it does not have the method, and the installer does not set it up over the network. The other way in is the UART. See [install.md](docs/install.md) "Root over the Crestron sshd".
 

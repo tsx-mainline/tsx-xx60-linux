@@ -8,13 +8,12 @@
 # speaker DSP tuning"). Use this script for a panel that was installed without
 # them. The speakers still work, just without the vendor EQ and volume-step
 # presets.
-#   steps/tsx-deploy-tfa.sh PANEL_IP [--dry-run] [--mainline-password-file FILE]
+#   steps/tsx-deploy-tfa.sh PANEL_IP [--dry-run] [--mainline-password PW]
 # The exit status is 0 even if the fetch or deploy fails (the DSP is optional).
 # A caller that wants a hard failure must check the printed WARNING and ERROR lines.
 # Needs: rootfs/vendor-fetch.sh (this repo, unmodified, see docs/rootfs.md),
 # sshpass, ssh, scp. Panel login: root with your ssh key, or the root password
-# of --mainline-password-file FILE (or --mainline-password PW, or
-# TSX_MAINLINE_PW). The option wins over the environment variable.
+# of --mainline-password PW (or TSX_MAINLINE_PW). The option wins over the environment variable.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../lib/tsx-creds.sh"

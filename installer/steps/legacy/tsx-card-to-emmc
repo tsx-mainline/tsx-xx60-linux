@@ -18,9 +18,9 @@
 #   7 optional --wake-local: WAKE=local in /etc/tsx/voice.conf, restart tsx-voice,
 #     log check, 30 s CPU sample
 #   tsx-card-to-emmc PANEL_IP [--img FILE] [--from-step N] [--to-step N] [--wake-local]
-#                    [--results FILE] [--dry-run] [--mainline-password-file FILE]
-#   Login: your SSH key, or the root password of the panel in --mainline-password-file
-#           FILE (or --mainline-password PW, or TSX_MAINLINE_PW). The option wins
+#                    [--results FILE] [--dry-run] [--mainline-password PW]
+#   Login: your SSH key, or the root password of the panel in --mainline-password PW
+#           (or TSX_MAINLINE_PW). The option wins
 #           over the environment variable. There is no fixed password. With neither, the script stops before it changes anything.
 #   --img   the eMMC boot image (default emmc/out/tsxboot-emmc.img). Its sha256 comes
 #           from FILE.sha256 if that exists (as the default's does), else the script computes it.
@@ -74,7 +74,7 @@ if [ -f "$IMG.sha256" ]; then SHA=$(awk '{print $1}' "$IMG.sha256")
 else SHA=$(sha256sum < "$IMG" | cut -d' ' -f1); log "  no $IMG.sha256: computed sha256 $SHA"
 fi
 if [ "$DRY" != 1 ] && [ "$FROM" -le 1 ] && ! $SSH true >/dev/null 2>&1; then
-	die "no login to root@$PANEL. This panel has no fixed password. Use an ssh key that is in its panel.conf (SSH_AUTHORIZED_KEY), or give its root password with --mainline-password-file FILE. The script changed nothing"
+	die "no login to root@$PANEL. This panel has no fixed password. Use an ssh key that is in its panel.conf (SSH_AUTHORIZED_KEY), or give its root password with --mainline-password PW (or TSX_MAINLINE_PW). The script changed nothing"
 fi
 log "== tsx-card-to-emmc: PANEL=$PANEL image $(basename "$IMG") $SHA from=$FROM to=$TO dry=$DRY"
 [ "$(sha256sum < "$IMG" | cut -d' ' -f1)" = "$SHA" ] || die "$IMG does not match its .sha256"

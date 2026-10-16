@@ -22,21 +22,20 @@ Before you start, make sure these items are ready:
 Steps:
 
 1. Choose the Crestron admin user and password. On a factory-fresh panel, the installer creates the account with them. Otherwise, use the login of the account that exists.
-2. Write the password into a file that only you can read, for example `~/.tsx-admin-pw`.
-3. Run the installer:
+2. Run the installer on a terminal:
 
    ```sh
    installer/tsx-install-mainline <panel-ip> \
-     --payload installer/out/payload --kernel lts \
-     --admin-user <user> --admin-password-file ~/.tsx-admin-pw
+     --payload installer/out/payload --kernel lts
    ```
 
-   If you do not give `--admin-password-file`, the installer asks for the password on a terminal. The user and the password have no default (see "Options and environment variables").
+   The installer asks for the Crestron admin user and password. They have no default. Then it offers to save your answers and options in an install config file with mode 600 (see "Install config file"). The next time, run `installer/tsx-install-mainline --install-config FILE`.
+3. For a run with no terminal, write an install config file first (`installer/tsx-install.conf.example`), then run `installer/tsx-install-mainline --install-config FILE --yes`.
 
 4. Answer the panel configuration prompts (see "Panel configuration"). Give a root password or an SSH public key.
 5. Type `INSTALL` at each confirmation. The installer asks before it arms the rescue boot (this reboots the panel). Without a stage, it also asks before it writes the eMMC. With a stage, the rescue writes the eMMC with no more questions (see "Stage on the panel first").
 6. Wait for the summary. The installer prints progress for each step. The panel reboots into the mainline kiosk.
-7. If the panel screen shows a one-time rescue password, type it when the installer asks. For a run with no terminal, write it into a file and run the same command again with `--rescue-password-file FILE`.
+7. If the panel screen shows a one-time rescue password, type it when the installer asks. For a run with no terminal, put it in `RESCUE_PASSWORD` of the install config file and run the same command again.
 
 The install runs these stages:
 
@@ -46,7 +45,7 @@ The install runs these stages:
 | 2 | `installer/steps/tsx-rescue-arm.sh` | Backs up the env and the first 2 MiB of the disk. Writes the rescue image to `p1:boot.img` (golden slot, after it backs up the Crestron golden image) and to `p1:tsxboot.img` (one-shot hook target). Installs the U-Boot env hook with `tsx_once=1`. Reboots the panel. |
 | 3 | `installer/lib/tsx-rescue.sh` | Finds the rescue on the network by the MAC of the panel, which the installer records before the reboot. Pushes the install bundle over ssh: the boot image of the chosen flavor and `--kiosk-url`. |
 | 4 | `installer/steps/tsx-rescue-install` | Runs inside the rescue. Writes eMMC `boot` (`p7`) and root (`p8`) with live progress. The host streams the root image over ssh into this step. Verifies each image by readback. Runs `resize2fs` so the root fills `p8`. Folds card partitions `p5` to `p8` into `p4` (`tsxdata`). Deploys the TFA9890, PSR and `KIOSK_URL` files into the new root. Writes the final env (`tsx-usb-recovery enable`, `p1:tsxboot.off`). Reboots. |
-| 5 | host driver | Waits for the SSH of the kiosk. With your key (or `--mainline-password-file`) it checks that root is `/dev/mmcblk1p8` and prints a summary. Without login it waits for the OpenSSH banner on port 22 and prints which root login case applies. |
+| 5 | host driver | Waits for the SSH of the kiosk. With your key (or `MAINLINE_PASSWORD`) it checks that root is `/dev/mmcblk1p8` and prints a summary. Without login it waits for the OpenSSH banner on port 22 and prints which root login case applies. |
 
 Stage 2 never writes `p2` or the MBR of the card. The rescue does that after it verifies the eMMC writes. `tsx_once` is a true one-shot. U-Boot clears it before it loads `tsxboot.img`. One power cycle with no install progress therefore returns the panel to stock Android. See [boot.md](boot.md) "The `tsx_once` state machine".
 
@@ -54,9 +53,9 @@ The installer sends every file over the ssh connections that it opens: the rescu
 
 ### Reinstall or update a panel that runs mainline
 
-Use this task to install a payload on a panel that runs mainline, or to start from a clean root. You need no Crestron account, no `--admin-user` or `--admin-password-file`, and no `rootsh`.
+Use this task to install a payload on a panel that runs mainline, or to start from a clean root. You need no Crestron account, no Crestron login and no `rootsh`.
 
-1. Make sure your SSH key is in the root login of the panel. If you log in with the root password of the panel, give it with `--mainline-password-file FILE`.
+1. Make sure your SSH key is in the root login of the panel. If you log in with the root password of the panel, give it in `MAINLINE_PASSWORD` of the install config file.
 2. Run the installer:
 
    ```sh
@@ -253,26 +252,51 @@ installer/tsx-install-mainline <panel-ip> --payload DIR --kernel lts|stable [opt
 
 ### Options and environment variables
 
-Each setting of the installer has a command line option. The environment variable of a setting is for automation. If you give both, the option wins.
+Each setting of the installer has a command line option. Most settings also have a key in the install config file (see "Install config file"), and some have an environment variable for automation. The order is:
 
-The logins have no default value. If the installer needs a login and you gave none, it asks on a terminal. With no terminal, or with `--yes` or `--dry-run`, it stops with an error that names the option. It stops before it logs in to the panel.
+1. The command line option.
+2. The environment variable.
+3. The install config file.
 
-A password on the command line shows in the process list and in the shell history. Use the `-file` form or the prompt. The file holds the password on its first line.
+The logins have no default value. If the installer needs a login and you gave none, it asks on a terminal. With no terminal, or with `--yes` or `--dry-run`, it stops with an error that names the key and the option. It stops before it logs in to the panel.
 
-| Option | Variable | Meaning |
-|---|---|---|
-| `--admin-user USER` | `TSX_ADMIN_USER` | The Crestron admin user. Necessary for an install from stock Android. |
-| `--admin-password-file FILE`, `--admin-password PW` | `TSX_ADMIN_PW` | The Crestron console and web UI password of that user. Necessary for an install from stock Android. On a factory-fresh panel, the installer creates the account with this user and password. The prompt asks for the password two times. |
-| `--mainline-password-file FILE`, `--mainline-password PW` | `TSX_MAINLINE_PW` | The root password of a panel that runs mainline, when you log in with a password and not a key. If you give it, the installer skips the check for a root password or key in `panel.conf`. |
-| `--rescue-password-file FILE`, `--rescue-password PW` | `TSX_RESCUE_PW` | The one-time password that the rescue shows on the panel screen. Without it, the rescue login uses your key or the mainline password. |
-| `--release-url URL` | `TSX_RELEASE_URL` | See "Installer options". |
-| `--stage-wait SECONDS` | `TSX_STAGE_WAIT_S` | See "Installer options". |
-| `--ssh-ciphers LIST` | `TSX_SSH_CIPHERS` | See "Installer options". |
-| `--common DIR` | `TSX_COMMON` | See "Installer options". |
+A password on the command line shows in the process list and in the shell history. Put passwords in the install config file, or type them at the prompt.
 
-The step scripts `installer/steps/crestron-admin`, `installer/steps/rootsh` and `installer/steps/tsx-ensure-root` take the same login options. `installer/tsx-restore-factory` takes the admin and rescue options. The installer gives the logins to its steps in the environment.
+| Option | Variable | Key | Meaning |
+|---|---|---|---|
+| `<panel-ip>` | none | `PANEL` | The panel. |
+| `--payload DIR` | none | `PAYLOAD` | See "Installer options". |
+| `--kernel lts\|stable` | none | `KERNEL` | See "Installer options". |
+| `--config FILE` | none | `PANEL_CONF` | The `panel.conf` for the panel. |
+| `--admin-user USER` | `TSX_ADMIN_USER` | `ADMIN_USER` | The Crestron admin user. Necessary for an install from stock Android. |
+| `--admin-password PW` | `TSX_ADMIN_PW` | `ADMIN_PASSWORD` | The Crestron console and web UI password of that user. Necessary for an install from stock Android. On a factory-fresh panel, the installer creates the account with this user and password. The prompt asks for the password two times. |
+| `--mainline-password PW` | `TSX_MAINLINE_PW` | `MAINLINE_PASSWORD` | The root password of a panel that runs mainline, when you log in with a password and not a key. If you give it, the installer skips the check for a root password or key in `panel.conf`. |
+| `--rescue-password PW` | `TSX_RESCUE_PW` | `RESCUE_PASSWORD` | The one-time password that the rescue shows on the panel screen. Without it, the rescue login uses your key or the mainline password. |
+| `--kiosk-url URL` | none | `KIOSK_URL` | See "Installer options". |
+| `--uart`, `--stage`, `--tfa-source`, `--psr-source`, `--fetch`, `--sshshell` | none | `UART`, `STAGE`, `TFA_SOURCE`, `PSR_SOURCE`, `FETCH`, `SSHSHELL` | See "Installer options". |
+| `--release-url URL` | `TSX_RELEASE_URL` | `RELEASE_URL` | See "Installer options". |
+| `--stage-wait SECONDS` | `TSX_STAGE_WAIT_S` | `STAGE_WAIT` | See "Installer options". |
+| `--ssh-ciphers LIST` | `TSX_SSH_CIPHERS` | `SSH_CIPHERS` | See "Installer options". |
+| `--common DIR` | `TSX_COMMON` | `COMMON` | See "Installer options". |
 
-`TSX_PANEL_KIND` (`android`, `mainline`, `rescue` or `unreachable`) is a test hook with no option. It skips the network probe of the installer. Without it, the installer finds the kind from the ssh banner. If no ssh answers, it assumes stock Android.
+The step scripts `installer/steps/crestron-admin`, `installer/steps/rootsh` and `installer/steps/tsx-ensure-root` take the login options and the environment variables. The installer gives the logins to its steps in the environment.
+
+`TSX_PANEL_KIND` (`android`, `mainline`, `rescue`, `rescue-locked` or `unreachable`) is a test hook with no option. It skips the network probe of the installer. Without it, the installer finds the kind from the ssh banner. If no ssh answers, it assumes stock Android.
+
+### Install config file
+
+`--install-config FILE` reads the settings of a run from `FILE`. `installer/tsx-install-mainline` and `installer/tsx-restore-factory` read the same file. Each one uses the keys that apply to it. `installer/tsx-install.conf.example` lists all keys.
+
+- One `KEY=VALUE` per line. Lines that start with `#` and empty lines do not count.
+- A value in double or single quotes is the text between the quotes. The scripts take it literally, also `#`, `=`, `$` and spaces.
+- A value with no quotes loses the spaces at its start and end.
+- A key that the scripts do not know stops them, with the line number.
+- The scripts never run the file as shell code.
+- A file with a password must have mode 600 (`chmod 600 FILE`). The scripts refuse a file that the group or other users can read.
+
+On a terminal, the installer asks for a missing panel address, kernel flavor or Crestron login. Then it offers to save the answers and the options of the run in an install config file, for example `./tsx-install-<panel-ip>.conf`. It asks before it replaces a file. Type `-` to save no file.
+
+The install config file is not `panel.conf`. The installer puts `panel.conf` onto the panel. The Crestron password stays on your host.
 
 ### Panel configuration
 
@@ -302,9 +326,9 @@ The installer hashes the password on the host (sha512-crypt, with `openssl`, `mk
 | Password | The login on the panel screen and over SSH takes it. SSH also takes a key if you gave one. |
 | Key only | The root password is locked (`*` in `/etc/shadow`). SSH takes the key. The screen and serial console logins stay off until you run `passwd` over SSH. |
 
-A test image built with `TSX_DEV_ROOT_HASH` has a fixed password (see [rootfs.md](rootfs.md) "Root login"). Give it with `--mainline-password-file FILE`, for example a file that holds `tsx` when the hash is the hash of `tsx`.
+A test image built with `TSX_DEV_ROOT_HASH` has a fixed password (see [rootfs.md](rootfs.md) "Root login"). Give it in `MAINLINE_PASSWORD` of the install config file, for example `tsx` when the hash is the hash of `tsx`.
 
-The rescue has no fixed password. It uses the panel login from `/data`, so your key (or the password of `--mainline-password-file`) works on a reinstall. When the rescue cannot read `/data`, it shows a one-time password on the panel screen. See [recovery.md](recovery.md) "Rescue login".
+The rescue has no fixed password. It uses the panel login from `/data`, so your key (or `MAINLINE_PASSWORD`) works on a reinstall. When the rescue cannot read `/data`, it shows a one-time password on the panel screen. See [recovery.md](recovery.md) "Rescue login".
 
 ### Network requirements
 
@@ -399,7 +423,7 @@ A first install needs a Crestron admin account and a root shell on the panel ove
 
 **Requirement: the `rootsh` method.** An install from stock Android with no UART (`--uart no`, or `--uart auto` with no serial logger) needs the `rootsh` method on the panel. The Crestron sshd runs `/system/bin/sshShell.sh` for each login. In the method, the interactive (tty) branch of that script starts a root shell when the command is `rootsh`, and the Crestron console for any other command. So `ssh -tt <user>@<panel-ip> rootsh` gives a root shell, and a plain `ssh <user>@<panel-ip>` gives the console. The installer does not set up the method over the network. The other way in is the UART (see below).
 
-1. A Crestron admin account must exist. A factory-fresh panel has none. `installer/steps/crestron-admin --admin-user <user> --admin-password-file FILE <panel-ip>` creates it with the call that the first-run form makes. Some panels redirect every web UI page to that form. Others serve the web UI with authentication off. The script handles both. `installer/steps/crestron-admin --status <panel-ip>` shows whether an account exists. The installer runs the script for you.
+1. A Crestron admin account must exist. A factory-fresh panel has none. `installer/steps/crestron-admin <panel-ip>` (with `TSX_ADMIN_USER` and `TSX_ADMIN_PW` set) creates it with the call that the first-run form makes. Some panels redirect every web UI page to that form. Others serve the web UI with authentication off. The script handles both. `installer/steps/crestron-admin --status <panel-ip>` shows whether an account exists. The installer runs the script for you.
 2. The admin account must get a root shell over SSH. The installer gets it with `installer/steps/rootsh` (`ssh -tt <user>@<panel-ip> rootsh`).
 3. The `rootsh` method must be in `/system/bin/sshShell.sh` of the panel. A panel as Crestron ships it does not have the method. A panel that `installer/tsx-restore-factory` restored has it (see [recovery.md](recovery.md) "Root over SSH", which also shows the change).
 
@@ -577,10 +601,10 @@ Every driver script prints progress and does not run silently:
 | `Your IP address is blocked` from `rootsh` | The Crestron sshd blocked the host after 3 failed logins. | Run `REMBLOCKEDIP <blocked-ip>` on the Crestron console from another machine. |
 | The installer cannot get a root shell on stock Android | The admin account gets no root shell over SSH. | Set up the root shell (see "Root over the Crestron sshd"). Then run the installer again. |
 | `the Crestron console accepts the login ..., but ... rootsh gives no root shell` | The panel has the stock `sshShell.sh`, with no `rootsh` command. | Add the command once over the UART: `--uart yes --sshshell FILE` (see "Root over the Crestron sshd"). |
-| `the Crestron sshd refused the login` | A wrong admin user or password, or an account from an earlier run with another password. | Give the right login with `--admin-user` and `--admin-password-file`. The installer tried one login only. |
+| `the Crestron sshd refused the login` | A wrong admin user or password, or an account from an earlier run with another password. | Give the right login (`ADMIN_USER` and `ADMIN_PASSWORD` in the install config file). The installer tried one login only. |
 | `the panel refused to create the Crestron account` | The password does not meet the rules of the panel. The answer of the panel is in the output. | Use another password, for example a longer one. |
 | The install stops before it writes anything and asks for a root password or key | `panel.conf` has no `ROOT_PASSWORD_HASH` and no `SSH_AUTHORIZED_KEY`. | Give a password or a key in the prompts or in `--config FILE`. |
-| The rescue asks for a password, or the installer stops with `runs the rescue, and it takes none of the logins` | The rescue cannot read `/data` (first install). | Read the one-time password on the panel screen. Type it when the installer asks, or put it in a file and run the same command again with `--rescue-password-file FILE`. A power cycle also returns the panel to the system before the rescue boot. |
+| The rescue asks for a password, or the installer stops with `runs the rescue, and it takes none of the logins` | The rescue cannot read `/data` (first install). | Read the one-time password on the panel screen. Type it when the installer asks, or put it in `RESCUE_PASSWORD` of the install config file and run the same command again. A power cycle also returns the panel to the system before the rescue boot. |
 | `no stage on the panel, and this run has no terminal` | The stage was not possible, and from stock Android the push path needs the one-time password of the rescue screen. | Run the installer on a terminal, or fix the cause of the stage message. Nothing was armed. |
 | The run stops after the rescue is up | A network or host interruption. | Run the same command again. It resumes in the rescue. |
 | `eMMC root readback mismatch` | The root stream stopped early, for example after a lost connection. | Run the same command again. |

@@ -75,15 +75,14 @@ exit 0
 EOF
 printf '#!/bin/sh\necho "ssh $*" >> "$W/calls"\nexit 1\n' > "$W/bin/ssh"
 chmod +x "$W/bin/curl" "$W/bin/sshpass" "$W/bin/ssh"
-printf 'good"pw\\x\n' > "$W/pw"   # a quote and a backslash
 GOOD='good"pw\x'
 
 run() {   # run NAME [ENV...]: tsx-ensure-root --uart no against the stubs
 	local name=$1; shift
 	rm -f "$W/calls" "$W/posts" "$W/post.json"
-	OUT=$(env PATH="$W/bin:$PATH" TSX_ROOT_POLL_S=1 TSX_ADMIN_POLL_S=0 GOODPW="$GOOD" "$@" \
+	OUT=$(env PATH="$W/bin:$PATH" TSX_ROOT_POLL_S=1 TSX_ADMIN_POLL_S=0 GOODPW="$GOOD" TSX_ADMIN_PW="$GOOD" "$@" \
 		timeout 300 "$S" 192.0.2.10 --uart no --ws-ip 192.0.2.1 --results "$W/$name.txt" \
-		--admin-user tsxadmin --admin-password-file "$W/pw" </dev/null 2>&1); RC=$?
+		--admin-user tsxadmin </dev/null 2>&1); RC=$?
 }
 count() { grep -c -- "$1" "$W/calls" 2>/dev/null || true; }
 

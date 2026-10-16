@@ -1,0 +1,56 @@
+# Install config file of installer/tsx-install-mainline and
+# installer/tsx-restore-factory (--install-config FILE).
+#
+# Copy this file, fill in your values and keep the copy private:
+#   cp installer/tsx-install.conf.example ~/tsx-install-panel1.conf
+#   chmod 600 ~/tsx-install-panel1.conf
+# The scripts refuse a file with a password that other users can read.
+#
+# One KEY=VALUE per line. A value in "double" or 'single' quotes is the text
+# between the quotes, taken literally (also #, =, $ and spaces). A value with
+# no quotes loses the spaces at its start and end. A key that the scripts do
+# not know stops them. Leave out a key that you do not need.
+#
+# A command line option wins over its environment variable, and the variable
+# wins over this file. The logins have no default value.
+#
+# This file is not panel.conf (--config, PANEL_CONF): panel.conf goes onto the
+# panel. The Crestron password stays in this file on your host.
+
+# The panel: its IP address or name.
+PANEL="<panel-ip>"
+
+# The payload directory and the kernel flavor (lts or stable).
+PAYLOAD="/path/to/payload"
+KERNEL="lts"
+
+# The panel configuration file (panel.conf). Without it, the installer asks.
+#PANEL_CONF="/path/to/panel.conf"
+
+# The Crestron admin login, for an install from stock Android. On a
+# factory-fresh panel, the installer creates the account with these values.
+ADMIN_USER="<admin-user>"
+ADMIN_PASSWORD="<admin-password>"
+
+# The root password of a panel that runs mainline, when you log in with a
+# password and not with an ssh key.
+#MAINLINE_PASSWORD="<root-password>"
+
+# The one-time password that the rescue shows on the panel screen.
+#RESCUE_PASSWORD="<one-time-password>"
+
+# Other options (the values are the defaults, see docs/install.md).
+#UART="auto"
+#STAGE="auto"
+#TFA_SOURCE="auto"
+#PSR_SOURCE="auto"
+#KIOSK_URL="https://ha.example.org/"
+#FETCH="<release-tag>"
+#RELEASE_URL="https://github.com/tsx-mainline/tsx-xx60-linux/releases/download"
+#STAGE_WAIT="2400"
+#SSH_CIPHERS="chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes128-ctr,aes256-ctr"
+#COMMON="/path/to/tsx-linux-common"
+#SSHSHELL="/path/to/sshShell.sh"
+
+# tsx-restore-factory only: the Crestron firmware package.
+#PUF="/path/to/tsw-xx60_3.002.1061.001.puf"

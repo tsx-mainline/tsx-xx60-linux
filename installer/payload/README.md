@@ -176,7 +176,7 @@ With `--uart auto`, the script uses the serial console only if `serlog.py` seems
 Make sure of these conditions before you use this mode:
 
 - Root over ssh works through the Crestron sshd (`steps/rootsh`). The patched `/system/bin/sshShell.sh` (`out/sshShell.sh`, see [docs/install.md](../../docs/install.md) "Prerequisites") is already on the panel.
-- A Crestron admin account exists. Give its user and password with `--admin-user` and `--admin-password-file` (or `TSX_ADMIN_USER` and `TSX_ADMIN_PW`). They have no default.
+- A Crestron admin account exists. Give its user and password in the install config file (`ADMIN_USER`, `ADMIN_PASSWORD`, see `installer/tsx-install.conf.example`), or with `--admin-user` and `--admin-password` (or `TSX_ADMIN_USER` and `TSX_ADMIN_PW`). They have no default.
 
 A factory-fresh unit can have no account but already have the `sshShell.sh` patch. Run `steps/crestron-admin <panel-ip>` first. It creates the account through the first-run call of the web UI. The driver then reaches root without the UART. If the `sshShell.sh` patch is missing, network-only mode cannot install it. The install needs a root shell, from the UART or from an earlier root session. The driver then stops with an error that says so.
 

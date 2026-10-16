@@ -40,11 +40,11 @@
 #                       the preflight output first)
 #   --dry-run           print what each step would do, without hardware or an
 #                       HTTP server
-#   --admin-user USER, --admin-password-file FILE (or --admin-password PW)
+#   --admin-user USER, --admin-password PW
 #                       the Crestron login (also TSX_ADMIN_USER, TSX_ADMIN_PW;
 #                       the option wins). No default: the script stops before
 #                       it contacts the panel when one is missing.
-#   --mainline-password-file FILE (or --mainline-password PW, TSX_MAINLINE_PW)
+#   --mainline-password PW (or TSX_MAINLINE_PW)
 #                       the root password of a mainline panel (else your key)
 #
 # Needs on the host: bash, sshpass, ssh, python3, split, sha256sum, ip, awk.

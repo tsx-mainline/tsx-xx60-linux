@@ -76,8 +76,8 @@
 #      Both modes then check the Crestron account state (steps/crestron-admin
 #      --status, the /Device/Authentication page of the web UI). A factory-fresh
 #      /data has no account (expected). If an account exists, the Crestron SSH
-#      console must answer `ver` with the login of --admin-user and
-#      --admin-password-file. They have no default. Without them, step 7
+#      console must answer `ver` with the login of ADMIN_USER and
+#      ADMIN_PASSWORD. They have no default. Without them, step 7
 #      asks on a terminal, else it stops with an error that names them.
 #
 # Options:
@@ -90,14 +90,21 @@
 #   --bundle DIR  --results FILE  --from-step N  --to-step N  --yes  --dry-run
 #   --rescue-ip IP  overrides the rescue-IP discovery in UART and network-only mode
 #   --ws-ip IP  --stable-min N
-#   --rescue-password-file FILE (or --rescue-password PW, --rescue-pw PW,
-#          TSX_RESCUE_PW)  the rescue login. The default is your ssh key.
-#   --admin-user USER  --admin-password-file FILE (or --admin-password PW,
-#          TSX_ADMIN_USER, TSX_ADMIN_PW)  the Crestron login for step 7
+#   --install-config FILE  the install config file of tsx-install-mainline
+#          (KEY=VALUE, installer/tsx-install.conf.example). This script uses
+#          PANEL, PUF, UART, SSHSHELL, SSH_CIPHERS, ADMIN_USER, ADMIN_PASSWORD
+#          and RESCUE_PASSWORD, and it ignores the other keys.
+#   --rescue-password PW (or --rescue-pw PW, TSX_RESCUE_PW, RESCUE_PASSWORD)
+#          the rescue login. The default is your ssh key.
+#   --admin-user USER  --admin-password PW (or TSX_ADMIN_USER, TSX_ADMIN_PW,
+#          ADMIN_USER, ADMIN_PASSWORD)  the Crestron login for step 7
 #   --port N  ignored. The old HTTP download is gone: the bundle goes over ssh.
 #   --ssh-ciphers LIST (or TSX_SSH_CIPHERS)  the ssh cipher list for the push
 #          (lib/tsx-rescue.sh)
-#   An option wins over its environment variable. The logins have no default.
+#   An option wins over its environment variable, and the variable wins over
+#   the install config file. The logins have no default. A password on the
+#   command line shows in the process list: the install config file (mode 600)
+#   is the safe place.
 #   --uart auto|yes|no  the default is auto. UART mode runs only if the serial
 #          logger runs and uc.sh exists. Otherwise steps 2, 6 and 7 fall back to
 #          the network-only checks described above. --uart yes or no forces
@@ -122,14 +129,14 @@
 # it is not on a command line):
 #   SSHPASS=PASSWORD sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@IP '...'
 # The rescue has no fixed password (docs/recovery.md "Rescue login"):
-# --rescue-password-file is the one-time password on the panel screen, or the
+# RESCUE_PASSWORD is the one-time password on the panel screen, or the
 # panel's root password. With none, the script uses your SSH key.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); WORK=$(cd "$HERE/.." && pwd)
 SERIALDIR=$WORK/tools/bench; UC=$SERIALDIR/uc.sh; SERLOG=${TSX_SERIAL_LOG:-$SERIALDIR/boot-2200.log}
-BUNDLE= PANEL= RESULTS= FROM_STEP=1 TO_STEP=7 YES=0 DRYRUN=0 WSIP= STABLE_MIN=9 RPW=${TSX_RESCUE_PW:-} RIP= UART=auto
-PUF=${TSX_PUF:-} ENVFILE=
-ROOTSSH=1 ROOTSSH_SET=0 SSHSHELL=${SSHSHELL:-}   # rootsh patch by default
+BUNDLE= PANEL= RESULTS= FROM_STEP=1 TO_STEP=7 YES=0 DRYRUN=0 WSIP= STABLE_MIN=9 RPW= RIP= UART= ICFILE=
+PUF= ENVFILE=
+ROOTSSH=1 ROOTSSH_SET=0 SSHSHELL_OPT=   # rootsh patch by default
 PRISTINE_PUF_SHA=96438108e3175b66c09f1df284ded5fe155593ba06e069e154688b04f395e40b   # rootfs/vendor-fetch.sh TFA_PUF_SHA256
 PUF_CACHED=$WORK/rootfs/vendor-cache/tsw-xx60_3.002.1061.001.puf   # where rootfs/vendor-fetch.sh keeps it
 ENVPY="python3 $HERE/sdcard/tsx-env.py"
@@ -140,10 +147,22 @@ while [ $# -gt 0 ]; do case "$1" in
 	--bundle) BUNDLE=$2; shift 2;; --puf) PUF=$2; shift 2;; --env) ENVFILE=$2; shift 2;; --results) RESULTS=$2; shift 2;; --from-step) FROM_STEP=$2; shift 2;; --to-step) TO_STEP=$2; shift 2;;
 	--yes) YES=1; shift;; --dry-run) DRYRUN=1; shift;; --port) echo "note: --port is ignored: the bundle goes over ssh, with no HTTP server" >&2; shift 2;; --ws-ip) WSIP=$2; shift 2;;
 	--stable-min) STABLE_MIN=$2; shift 2;; --rescue-ip) RIP=$2; shift 2;; --rescue-pw) RPW=$2; shift 2;; --ssh-ciphers) export TSX_SSH_CIPHERS=$2; shift 2;; --uart) UART=$2; shift 2;;
-	--root-ssh) ROOTSSH=1; ROOTSSH_SET=1; shift;; --sshshell) ROOTSSH=1; ROOTSSH_SET=1; SSHSHELL=$2; shift 2;; --stock-sshshell) ROOTSSH=0; SSHSHELL=; shift;; -h|--help) usage; exit 0;;
+	--root-ssh) ROOTSSH=1; ROOTSSH_SET=1; shift;; --sshshell) ROOTSSH=1; ROOTSSH_SET=1; SSHSHELL_OPT=$2; shift 2;; --stock-sshshell) ROOTSSH=0; SSHSHELL_OPT=-; shift;; -h|--help) usage; exit 0;;
 	--rescue-password|--rescue-password-file) tsx_creds_opt "$@"; RPW=$TSX_RESCUE_PW; shift 2;;
+	--install-config) ICFILE=$2; shift 2;;
 	--*) if tsx_creds_opt "$@"; then shift "$TSX_CREDS_SHIFT"; else echo "unknown option $1" >&2; usage; exit 2; fi;; *) [ -z "$PANEL" ] || { echo "extra argument $1" >&2; exit 2; }; PANEL=$1; shift;; esac; done
-[ -n "$PANEL" ] || { usage; exit 2; }
+# option > environment variable > install config file (lib/tsx-creds.sh)
+RPW=${RPW:-${TSX_RESCUE_PW:-}} PUF=${PUF:-${TSX_PUF:-}}
+case "$SSHSHELL_OPT" in -) SSHSHELL=;; '') SSHSHELL=${SSHSHELL:-};; *) SSHSHELL=$SSHSHELL_OPT;; esac
+if [ -n "$ICFILE" ]; then
+	tsx_install_config_load "$ICFILE"
+	tsx_install_config_logins
+	PANEL=${PANEL:-$IC_PANEL} PUF=${PUF:-$IC_PUF} UART=${UART:-$IC_UART} RPW=${RPW:-$IC_RESCUE_PASSWORD}
+	[ "$SSHSHELL_OPT" = - ] || SSHSHELL=${SSHSHELL:-$IC_SSHSHELL}
+	[ -n "${TSX_SSH_CIPHERS:-}" ] || [ -z "$IC_SSH_CIPHERS" ] || export TSX_SSH_CIPHERS=$IC_SSH_CIPHERS
+fi
+UART=${UART:-auto}
+[ -n "$PANEL" ] || { echo "tsx-restore-factory: the panel address is missing: give PANEL_IP, or PANEL in the install config file" >&2; usage; exit 2; }
 case "$UART" in auto|yes|no) ;; *) echo "--uart must be auto, yes, or no" >&2; exit 2;; esac
 [ -n "$RESULTS" ] || RESULTS=$HERE/results/tsx-restore-factory-$(date +%Y%m%d-%H%M).txt
 mkdir -p "$(dirname "$RESULTS")" "$HERE/results"   # results/ also holds the live env

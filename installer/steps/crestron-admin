@@ -15,7 +15,7 @@
 # nothing. Afterwards the Crestron SSH console must answer `ver` with that
 # login.
 #
-#   steps/crestron-admin [--admin-user USER] [--admin-password-file FILE] PANEL
+#   steps/crestron-admin [--admin-user USER] [--admin-password PW] PANEL
 #        The user and the password have no default. An option wins over the
 #        environment variable (TSX_ADMIN_USER, TSX_ADMIN_PW). A missing value
 #        stops the script before it contacts the panel (lib/tsx-creds.sh).
@@ -56,7 +56,7 @@ while [ $# -gt 0 ]; do case "$1" in
 	--*) tsx_creds_opt "$@" && shift "$TSX_CREDS_SHIFT" || { echo "crestron-admin: unknown option $1" >&2; exit 2; };;
 	*) [ -z "$H" ] || { echo "crestron-admin: extra argument $1" >&2; exit 2; }; H=$1; shift;;
 esac; done
-[ -n "$H" ] || { echo "usage: crestron-admin [--status] [--admin-user USER --admin-password-file FILE] PANEL" >&2; exit 2; }
+[ -n "$H" ] || { echo "usage: crestron-admin [--status] [--admin-user USER --admin-password PW] PANEL" >&2; exit 2; }
 if [ "$STATUS" = 0 ]; then
 	tsx_creds_need_admin 0 || exit 2
 	U=$TSX_ADMIN_USER PW=$TSX_ADMIN_PW

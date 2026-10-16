@@ -46,9 +46,9 @@
 # boots, the script also copies it into the golden slot (p1:boot.img).
 #
 #   tsx-install-mainline PANEL_IP --payload DIR --kernel lts|stable
-#                        [--admin-user USER --admin-password-file FILE]
-#                        [--mainline-password-file FILE]
-#                        [--rescue-password-file FILE]
+#                        [--install-config FILE]
+#                        [--admin-user USER] [--admin-password PW]
+#                        [--mainline-password PW] [--rescue-password PW]
 #                        [--uart auto|yes|no] [--kiosk-url URL] [--sshshell FILE]
 #                        [--config FILE] [--wipe-data] [--yes] [--dry-run]
 #                        [--tfa-source auto|panel|puf|none]
@@ -66,9 +66,16 @@
 # UART (--uart yes --sshshell FILE). Without the method, step 1 stops with an
 # error that names the docs section.
 #
-# OPTIONS AND ENVIRONMENT VARIABLES: an option wins over its environment
-# variable. The environment variables are for automation. The logins have no
-# default value (see "Logins" at the end of this text).
+# OPTIONS, ENVIRONMENT VARIABLES AND THE INSTALL CONFIG FILE: an option wins
+# over its environment variable, and the variable wins over the install config
+# file (--install-config FILE: KEY=VALUE lines, installer/tsx-install.conf.example,
+# docs/install.md "Install config file"). The logins have no default value (see
+# "Logins" at the end of this text). On a terminal, the script asks for a
+# missing panel address, kernel flavor or login, and then offers to save the
+# answers in an install config file (mode 600). With no terminal, a missing
+# value stops the script with an error that names the key and the option.
+# The install config file is not panel.conf (--config): panel.conf goes onto
+# the panel, and the Crestron password must never go there.
 #
 # DOWNLOAD THE RELEASE ON THE PANEL (docs/install.md "Download the release on
 # the panel"), --fetch TAG: a reinstall of a mainline panel without a payload
@@ -114,8 +121,8 @@
 # only when that panel's own panel.conf has one of them. With a key and no
 # password, root has a locked password: ssh takes the key. The login on the
 # panel screen opens after you set a password over ssh. A test build with
-# TSX_DEV_ROOT_HASH has its own password: give it with --mainline-password-file
-# FILE (or TSX_MAINLINE_PW) and the check is skipped.
+# TSX_DEV_ROOT_HASH has its own password: give it in MAINLINE_PASSWORD of the
+# install config file (or TSX_MAINLINE_PW) and the check is skipped.
 #
 # PAYLOAD DIR: build it ahead of time (see installer/emmc/mk-tsxroot-emmc.sh,
 # installer/emmc/mk-v2-bundle.sh and installer/rescue-v2/mkrescue-v2.sh).
@@ -148,7 +155,7 @@
 # records "not-needed".
 #
 # Needs, from stock Android only (not for a reinstall): the Crestron admin
-# user and password (--admin-user, --admin-password-file). The script stops
+# user and password (ADMIN_USER, ADMIN_PASSWORD). The script stops
 # before it logs in to the panel when one of them is missing.
 # The prompts and the checks of panel.conf use the tsx-config of tsx-linux-common.
 # --common DIR (or TSX_COMMON) is the top of a checkout. The default is the
@@ -165,10 +172,10 @@
 # works. --ssh-ciphers LIST (or TSX_SSH_CIPHERS) sets the ssh cipher list for
 # the rescue (default chacha20-poly1305 first). Rescue login: the root password
 # or key of the panel, or a one-time password that the rescue shows on the
-# panel screen (--rescue-password-file, or the prompt). The installed system
+# panel screen (RESCUE_PASSWORD, or the prompt). The installed system
 # has no fixed root password (docs/rootfs.md "Root login"), so the script logs
 # in to a running mainline panel with your ssh key. If the panel has a root
-# password, give it with --mainline-password-file.
+# password, give it in MAINLINE_PASSWORD.
 # Test hook: TSX_PANEL_KIND=android|mainline|rescue|rescue-locked|unreachable skips the
 # network probe that picks the path.
 set -euo pipefail
@@ -180,7 +187,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' >&2; echo >&2; tsx_creds_help >&2; }   # the whole header comment
 . "$HERE/lib/tsx-creds.sh"   # --admin-user and the other logins: option, environment, prompt
-PANEL= PAYLOAD=$HERE/out/payload KERNEL= UART_OPT=auto URL= SSHSHELL= CONFIG= YES=0 DRYRUN=0 RESULTS= WIPE_DATA=0 TFA_SOURCE=auto PSR_SOURCE=auto STAGE_OPT=auto FETCH=
+PANEL= PAYLOAD= KERNEL= UART_OPT= URL= SSHSHELL= CONFIG= YES=0 DRYRUN=0 RESULTS= WIPE_DATA=0 TFA_SOURCE= PSR_SOURCE= STAGE_OPT= FETCH= ICFILE=
 while [ $# -gt 0 ]; do case "$1" in
 	--payload) PAYLOAD=$2; shift 2;; --kernel) KERNEL=$2; shift 2;; --uart) UART_OPT=$2; shift 2;;
 	--kiosk-url) URL=$2; shift 2;; --sshshell) SSHSHELL=$2; shift 2;; --results) RESULTS=$2; shift 2;;
@@ -188,12 +195,32 @@ while [ $# -gt 0 ]; do case "$1" in
 	--psr-source) PSR_SOURCE=$2; shift 2;; --stage) STAGE_OPT=$2; shift 2;; --fetch) FETCH=$2; shift 2;;
 	--release-url) export TSX_RELEASE_URL=$2; shift 2;; --stage-wait) export TSX_STAGE_WAIT_S=$2; shift 2;;
 	--ssh-ciphers) export TSX_SSH_CIPHERS=$2; shift 2;; --common) export TSX_COMMON=$2; shift 2;;
+	--install-config) ICFILE=$2; shift 2;;
 	--yes) YES=1; shift;; --dry-run) DRYRUN=1; shift;; -h|--help) usage; exit 0;;
 	--*) if tsx_creds_opt "$@"; then shift "$TSX_CREDS_SHIFT"; else echo "unknown option $1" >&2; usage; exit 2; fi;;
 	*) [ -z "$PANEL" ] || { echo "extra argument $1" >&2; exit 2; }; PANEL=$1; shift;;
 esac; done
-[ -n "$PANEL" ] || { usage; exit 2; }
-case "$KERNEL" in lts|stable) ;; *) echo "tsx-install-mainline: --kernel lts|stable is required" >&2; exit 2;; esac
+# The install config file fills what no option and no environment variable
+# gave (lib/tsx-creds.sh).
+if [ -n "$ICFILE" ]; then
+	tsx_install_config_load "$ICFILE"
+	tsx_install_config_logins
+	PANEL=${PANEL:-$IC_PANEL} PAYLOAD=${PAYLOAD:-$IC_PAYLOAD} KERNEL=${KERNEL:-$IC_KERNEL} CONFIG=${CONFIG:-$IC_PANEL_CONF}
+	URL=${URL:-$IC_KIOSK_URL} UART_OPT=${UART_OPT:-$IC_UART} STAGE_OPT=${STAGE_OPT:-$IC_STAGE} FETCH=${FETCH:-$IC_FETCH}
+	TFA_SOURCE=${TFA_SOURCE:-$IC_TFA_SOURCE} PSR_SOURCE=${PSR_SOURCE:-$IC_PSR_SOURCE} SSHSHELL=${SSHSHELL:-$IC_SSHSHELL}
+	[ -n "${TSX_RELEASE_URL:-}" ] || [ -z "$IC_RELEASE_URL" ] || export TSX_RELEASE_URL=$IC_RELEASE_URL
+	[ -n "${TSX_STAGE_WAIT_S:-}" ] || [ -z "$IC_STAGE_WAIT" ] || export TSX_STAGE_WAIT_S=$IC_STAGE_WAIT
+	[ -n "${TSX_SSH_CIPHERS:-}" ] || [ -z "$IC_SSH_CIPHERS" ] || export TSX_SSH_CIPHERS=$IC_SSH_CIPHERS
+	[ -n "${TSX_COMMON:-}" ] || [ -z "$IC_COMMON" ] || export TSX_COMMON=$IC_COMMON
+fi
+PAYLOAD=${PAYLOAD:-$HERE/out/payload} UART_OPT=${UART_OPT:-auto} STAGE_OPT=${STAGE_OPT:-auto} TFA_SOURCE=${TFA_SOURCE:-auto} PSR_SOURCE=${PSR_SOURCE:-auto}
+# A missing panel address or kernel flavor: ask on a terminal, else stop.
+ASK=0; [ "$YES" != 1 ] && [ "$DRYRUN" != 1 ] && [ -t 0 ] && ASK=1
+if [ -z "$PANEL" ] && [ "$ASK" = 1 ]; then read -r -p "Panel address (IP or name): " PANEL || PANEL=; [ -z "$PANEL" ] || TSX_CREDS_PROMPTED=1; fi
+[ -n "$PANEL" ] || { echo "tsx-install-mainline: the panel address is missing: give PANEL_IP, or PANEL in the install config file" >&2; usage; exit 2; }
+case "$PANEL" in *[!A-Za-z0-9.:_-]*) echo "tsx-install-mainline: the panel address has a character that an address does not have: $PANEL" >&2; exit 2;; esac
+if [ -z "$KERNEL" ] && [ "$ASK" = 1 ]; then read -r -p "Kernel flavor (lts or stable): " KERNEL || KERNEL=; [ -z "$KERNEL" ] || TSX_CREDS_PROMPTED=1; fi
+case "$KERNEL" in lts|stable) ;; *) echo "tsx-install-mainline: --kernel lts|stable is required (or KERNEL in the install config file)" >&2; exit 2;; esac
 case "$UART_OPT" in auto|yes|no) ;; *) echo "--uart must be auto, yes, or no" >&2; exit 2;; esac
 case "$TFA_SOURCE" in auto|panel|puf|none) ;; *) echo "--tfa-source must be auto, panel, puf, or none" >&2; exit 2;; esac
 case "$PSR_SOURCE" in auto|panel|puf|none) ;; *) echo "--psr-source must be auto, panel, puf, or none" >&2; exit 2;; esac
@@ -224,7 +251,7 @@ fi
 # Root login (docs/rootfs.md "Root login"): the install stops unless it has a
 # root password hash or an SSH public key. A test build with its own fixed
 # password (TSX_DEV_ROOT_HASH) is the one exception: give its password in
-# TSX_MAINLINE_PW (--mainline-password-file) and the check is skipped.
+# TSX_MAINLINE_PW (MAINLINE_PASSWORD) and the check is skipped.
 root_login_stop() { die "$(tsx_config_root_login_message | tr '\n' ' ')"; }
 if [ -n "${TSX_MAINLINE_PW:-}" ]; then ROOT_LOGIN_CHECK=skip
 elif [ -n "$CONFIG" ]; then
@@ -237,9 +264,9 @@ log "== tsx-install-mainline v2: PANEL=$PANEL PAYLOAD=$([ -n "$FETCH" ] && echo 
 MPW=${TSX_MAINLINE_PW:-}
 # The rescue has no fixed password (docs/recovery.md "Rescue login"). It takes the
 # root password or key of the panel from /data. Our ssh key works for that. If you
-# gave the panel's password (--mainline-password-file), the rescue takes it too.
+# gave the panel's password (MAINLINE_PASSWORD), the rescue takes it too.
 # Else the rescue shows a one-time password on the panel screen: give it with
-# --rescue-password-file (or type it when this script asks). A test rescue
+# RESCUE_PASSWORD (or type it when this script asks). A test rescue
 # (TSX_DEV_RESCUE_HASH) uses that password as well. An empty $RPW means: use
 # the ssh key.
 RPW=${TSX_RESCUE_PW:-${TSX_MAINLINE_PW:-}}
@@ -387,7 +414,7 @@ if [ "$KIND" = rescue-locked ]; then
 		echo >&2
 		[ -n "$RPW" ] && ssh_test_rescue "$PANEL" "$RPW" && KIND=rescue
 	fi
-	[ "$KIND" = rescue ] || die "$PANEL runs the rescue, and it takes none of the logins of this host. Read the one-time password on the panel screen and run the same command again with --rescue-password-file FILE (the file holds that password), or power-cycle the panel once to go back to the system before the rescue boot"
+	[ "$KIND" = rescue ] || die "$PANEL runs the rescue, and it takes none of the logins of this host. Read the one-time password on the panel screen and run the same command again with RESCUE_PASSWORD in the install config file (or type it on a terminal), or power-cycle the panel once to go back to the system before the rescue boot"
 fi
 case "$KIND" in
 android) log "== $PANEL: stock Android (Crestron sshd): Android -> mainline install";;
@@ -412,8 +439,28 @@ mainline|rescue) ;;
 *)	if [ "$DRYRUN" = 1 ] || [ "$YES" = 1 ]; then tsx_creds_need_admin 0 || die "stock Android needs the Crestron admin login (see above). Nothing was changed"
 	else tsx_creds_need_admin 1 || die "stock Android needs the Crestron admin login (see above). Nothing was changed"
 	fi
-	log "== Crestron admin login: user $TSX_ADMIN_USER, password given (from an option, the environment or the prompt)";;
+	log "== Crestron admin login: user $TSX_ADMIN_USER, password given (from an option, the environment, the install config file or the prompt)";;
 esac
+# Answers typed at the prompts above: offer to save them, with the other
+# options of this run, in an install config file (mode 600). The next run then
+# needs only --install-config FILE.
+if [ -z "$ICFILE" ] && [ "${TSX_CREDS_PROMPTED:-0}" = 1 ] && [ -t 0 ]; then
+	def=./tsx-install-$(printf '%s' "$PANEL" | tr -c 'A-Za-z0-9._-' '_').conf
+	read -r -p "Save these answers and options in an install config file (mode 600) [$def, or - for no file]: " ans || ans=-
+	ans=${ans:-$def}
+	if [ "$ans" != - ]; then
+		ok=1
+		if [ -e "$ans" ]; then read -r -p "$ans exists. Replace it? [y/N] " yn || yn=; case "$yn" in y|Y|yes) ;; *) ok=0;; esac; fi
+		if [ "$ok" = 1 ] && tsx_install_config_write "$ans" PANEL="$PANEL" PAYLOAD="$([ -n "$FETCH" ] || case "$PAYLOAD" in /*) echo "$PAYLOAD";; *) echo "$PWD/$PAYLOAD";; esac)" KERNEL="$KERNEL" \
+			PANEL_CONF="$([ -z "$CONFIG" ] || case "$CONFIG" in /*) echo "$CONFIG";; *) echo "$PWD/$CONFIG";; esac)" KIOSK_URL="$URL" UART="$UART_OPT" STAGE="$STAGE_OPT" FETCH="$FETCH" TFA_SOURCE="$TFA_SOURCE" PSR_SOURCE="$PSR_SOURCE" \
+			SSHSHELL="$SSHSHELL" COMMON="${TSX_COMMON:-}" ADMIN_USER="${TSX_ADMIN_USER:-}" ADMIN_PASSWORD="${TSX_ADMIN_PW:-}" MAINLINE_PASSWORD="${TSX_MAINLINE_PW:-}"; then
+			log "== install config saved: $ans (mode 600). Next time: tsx-install-mainline --install-config $ans"
+		else
+			log "  the install config was not saved"
+		fi
+	fi
+	[ -z "${TSX_TEST_STOP_AFTER_SAVE:-}" ] || exit 0
+fi
 if [ "$KEEP_DATA" = 1 ]; then log "== /data (card p4 tsxdata): kept if it is a clean tsxdata file system (--wipe-data formats it)"
 elif [ "$KIND" = mainline ] || [ "$KIND" = rescue ]; then log "== /data (card p4 tsxdata): --wipe-data: formatted again, only panel.conf is carried over"
 fi
@@ -605,7 +652,7 @@ stage_panel
 # Without a stage, the images go over ssh into the rescue. From stock Android
 # the rescue has no login of this host: it shows a one-time password on the
 # panel screen (docs/recovery.md "Rescue login"), and step 3 asks for it on a
-# terminal. With no terminal and no --rescue-password-file, stop before the arm
+# terminal. With no terminal and no RESCUE_PASSWORD, stop before the arm
 # step: the rescue would wait for a password that nobody can give.
 if [ "$STAGED" != 1 ] && [ -z "$RPW" ] && ! [ -t 0 ]; then
 	die "no stage on the panel, and this run has no terminal for the one-time password of the rescue. Run the installer on a terminal, or make the stage work (see above). Nothing was armed: the panel stays on stock Android"
@@ -735,7 +782,7 @@ if [ "$STAGED_DONE" != 1 ]; then
 # The bundle and the images go over the ssh connections of this host.
 [ -z "$FETCH" ] || die "the staged install of the release did not finish, and --fetch has no payload on this host to push. The rescue stays up: look at its log (ssh root@$PANEL cat /run/tsx-staged.log). Run the install again with --payload DIR, or power-cycle the panel"
 if [ -z "$RIP" ]; then
-	cand=$(wait_for_rescue "$PANEL" "$MAC" "$WSIP" "$RPW" "$RESCUE_WAIT_S") || die "could not find the rescue's IP within ${RESCUE_WAIT_S}s (MAC $MAC, ssh at $PANEL, sweep of ${PANEL%.*}.0/24 only when on-link). If the panel screen shows a one-time password, run this command again with --rescue-password-file FILE (the file holds that password)"
+	cand=$(wait_for_rescue "$PANEL" "$MAC" "$WSIP" "$RPW" "$RESCUE_WAIT_S") || die "could not find the rescue's IP within ${RESCUE_WAIT_S}s (MAC $MAC, ssh at $PANEL, sweep of ${PANEL%.*}.0/24 only when on-link). If the panel screen shows a one-time password, run this command again with RESCUE_PASSWORD in the install config file"
 	set_rip "$cand"
 fi
 log "  rescue reachable at $RIP"

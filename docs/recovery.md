@@ -67,7 +67,7 @@ Before you start:
 - The host needs `sshpass`, `python3`, `curl`, `unzip` and e2fsprogs (`mke2fs`, `e2fsck`, `debugfs`). On Debian, e2fsprogs is in `/sbin`, so add that to `PATH`.
 - The host must reach port 22 of the panel. The host pushes the restore bundle into the rescue over ssh, and the panel opens no connection to the host (see [install.md](install.md) "Network requirements"). The bundle stays in the RAM of the rescue, so the rescue needs about 750 MiB of free memory.
 - A restored panel has the Crestron auto update on, and its `ver` reports `PUF: Unknown`. If it has internet access, it downloads and installs the same firmware again at its `AUTIME` (once a day). The restore cannot turn this off, because the panel has no Crestron account yet. To turn it off, create the account (`installer/steps/crestron-admin`) and run `AUENABLE OFF` on the Crestron console. `tsx-install-mainline` does both for you and waits for an update that already runs. Do not power off a panel while Crestron installs an update.
-- If the unit already has a Crestron account, give its login with `--admin-user USER` and `--admin-password-file FILE` (or `TSX_ADMIN_USER` and `TSX_ADMIN_PW`). Step 7 of the driver needs it to verify the console. There is no default. On a terminal, step 7 asks for a missing value.
+- If the unit already has a Crestron account, give its login in the install config file (`ADMIN_USER`, `ADMIN_PASSWORD`, `--install-config FILE`, see [install.md](install.md) "Install config file"), or with `--admin-user` and `--admin-password` (or `TSX_ADMIN_USER` and `TSX_ADMIN_PW`). Step 7 of the driver needs it to verify the console. There is no default. On a terminal, step 7 asks for a missing value.
 
 Steps:
 
@@ -121,7 +121,7 @@ The initramfs also starts the same rescue when the root is missing or broken, wh
 2. If `/data` is not readable, or `panel.conf` has neither value, the script makes a random one-time password for this boot. The screen shows it on the `login` line. It goes nowhere else: not to the network, the kernel log, the serial console or a file on disk. It lives in `/run` (RAM, mode 600) until the panel restarts. Dropbear accepts only this password.
 3. If the script cannot make a password, the screen says `NONE`. Nobody can log in over the network. Use the keyboard shell on the panel.
 
-The installer scripts use your SSH key or the password of `--rescue-password-file FILE` (or `TSX_RESCUE_PW`). Without it, they use the mainline password (`--mainline-password-file`, or `TSX_MAINLINE_PW`). An option wins over its environment variable. `tsx-install-mainline` asks for the one-time password on a terminal when it starts from stock Android.
+The installer scripts use your SSH key or the rescue password (`RESCUE_PASSWORD` in the install config file, `--rescue-password`, or `TSX_RESCUE_PW`). Without it, they use the mainline password (`MAINLINE_PASSWORD`, `--mainline-password`, or `TSX_MAINLINE_PW`). An option wins over its environment variable, and the variable wins over the install config file. `tsx-install-mainline` asks for the one-time password on a terminal when it starts from stock Android.
 
 For test builds only, `TSX_DEV_RESCUE_HASH` (a sha512-crypt hash, passed to `rootfs/build-rootfs.sh initramfs` and `installer/initramfs/build-initramfs.sh`) puts a fixed password into the rescue image. The screen then says `the password of this test build`. The optional file `rootfs/authorized_keys` adds a developer key to the same image. Public images have neither.
 
@@ -195,8 +195,9 @@ Driver options:
 | `--env FILE` | A saved 64 KiB U-Boot env of this unit. It replaces the env that the driver reads from the card. The file must hold the unit's `ethaddr` |
 | `--uart auto\|yes\|no` | Same as in the install driver (see [install.md](install.md)). `auto` uses the serial console only if it seems active. `no` runs everything over the network. `yes` forces the serial console. The rescue is reachable over the network, so the UART is optional |
 | `--sshshell FILE`, `--stock-sshshell` | See "Root over SSH" |
-| `--rescue-password-file FILE` | Rescue password (see "Rescue login"). `--rescue-password PW` and `--rescue-pw PW` put it on the command line, where the process list shows it. |
-| `--admin-user USER`, `--admin-password-file FILE` | The login of an existing Crestron account, for the console check of step 7 |
+| `--install-config FILE` | The install config file of `tsx-install-mainline` ([install.md](install.md) "Install config file"). The driver uses `PANEL`, `PUF`, `UART`, `SSHSHELL`, `SSH_CIPHERS`, `ADMIN_USER`, `ADMIN_PASSWORD` and `RESCUE_PASSWORD`. |
+| `--rescue-password PW`, `--rescue-pw PW` | Rescue password (see "Rescue login"). The process list shows it: the install config file is the safe place. |
+| `--admin-user USER`, `--admin-password PW` | The login of an existing Crestron account, for the console check of step 7 |
 | `--ssh-ciphers LIST` | The ssh cipher list for the push (also `TSX_SSH_CIPHERS`) |
 
 ### Never write U-Boot

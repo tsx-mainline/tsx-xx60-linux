@@ -9,12 +9,13 @@
 #
 #   steps/tsx-ensure-root PANEL_IP [--uart auto|yes|no] [--sshshell FILE]
 #                         [--port N] [--ws-ip IP] [--results FILE] [--dry-run]
-#                         [--admin-user USER] [--admin-password-file FILE]
-#                         [--mainline-password-file FILE]
+#                         [--admin-user USER] [--admin-password PW]
+#                         [--mainline-password PW]
 #
 # On success, `steps/rootsh PANEL_IP id` answers uid=0. Needs the Crestron
 # admin user and password (the console and web UI login): --admin-user and
-# --admin-password-file, or TSX_ADMIN_USER and TSX_ADMIN_PW. An option wins
+# --admin-password, or TSX_ADMIN_USER and TSX_ADMIN_PW (the drivers give them
+# in the environment). An option wins
 # over the environment variable. There is no default. A missing value stops
 # the script before it contacts the panel.
 # --uart auto (the default) uses the UART only if serlog.py runs and
@@ -104,7 +105,7 @@ admin_console() {
 admin_stop() {
 	case "$ADMIN_RC" in
 	2) die "steps/crestron-admin: a missing login (see above)";;
-	3) die "the Crestron sshd refused the login of $TSX_ADMIN_USER, or it blocks this host (see above). Check --admin-user and --admin-password-file. After 3 failed logins the sshd blocks the host for 24 hours, so the installer does not try again";;
+	3) die "the Crestron sshd refused the login of $TSX_ADMIN_USER, or it blocks this host (see above). Check ADMIN_USER and ADMIN_PASSWORD (or --admin-user and --admin-password). After 3 failed logins the sshd blocks the host for 24 hours, so the installer does not try again";;
 	4) die "the panel refused to create the Crestron account (see the answer above). Use another password, for example a longer one";;
 	126|127) die "this host cannot start steps/crestron-admin (see above): it needs bash in PATH and python3";;
 	esac

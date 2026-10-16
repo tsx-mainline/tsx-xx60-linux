@@ -37,3 +37,5 @@ tools/regs/regdump
 tools/regs/i2crd/i2crd
 # a tsx-aports published tree mirrored to the build host (remote-build.sh rootfs, TSX_APK_LOCAL)
 /rootfs/aports-local/
+# install config files of tsx-install-mainline (they hold passwords)
+tsx-install-*.conf
