@@ -42,6 +42,15 @@ else
 	echo "  skip: no GNU tar on this host"
 fi
 
+echo "== tsx-config on a host that is a panel"
+# A host with /run/tsx/hw.conf (a panel with no camera) must not change the
+# checks of the panel.conf of the target.
+mkdir -p "$W/hostrun/tsx"; echo "CAMERA=no" > "$W/hostrun/tsx/hw.conf"
+OUT=$(TSX_RUN=$W/hostrun bash -c '. "$1"; TSX_CONF="$2" "$TSX_CONFIG_BIN" set CAMERA snapshot 2>&1; rm -rf "$TSX_CONFIG_STAGE"' _ "$HERE/lib/tsx-config-prompt.sh" "$W/target.conf")
+case "$OUT" in *"no camera"*) bad "the hw.conf of the host changed the check: $OUT";; *) grep -q '^CAMERA="*snapshot' "$W/target.conf" && ok "the hw.conf of the host does not count" || bad "set CAMERA: $OUT $(cat "$W/target.conf")";; esac
+OUT=$(TSX_RUN=$W/hostrun bash -c '. "$1"; TSX_HW_CONF=$3 TSX_CONF="$2" "$TSX_CONFIG_BIN" set CAMERA snapshot 2>&1; rm -rf "$TSX_CONFIG_STAGE"' _ "$HERE/lib/tsx-config-prompt.sh" "$W/t2.conf" "$W/hostrun/tsx/hw.conf")
+case "$OUT" in *"no camera"*) ok "control: with that hw.conf, tsx-config warns about the camera";; *) bad "control: no warning with the hw.conf: $OUT";; esac
+
 echo "== the shebang of the host scripts"
 # A machine can have bash in another folder than /bin (an Alpine panel with a
 # bash in /tmp, NixOS). The drivers start these scripts directly, so they use

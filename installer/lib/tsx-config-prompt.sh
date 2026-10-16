@@ -53,6 +53,11 @@ tsx_config_stage() {
 	cp "$top/rootfs/overlay/usr/local/lib/tsx/board.sh" "$TSX_CONFIG_STAGE/usr/local/lib/tsx/"
 	cp -r "$top/rootfs/overlay/usr/local/lib/tsx/config.d" "$TSX_CONFIG_STAGE/usr/local/lib/tsx/"
 	TSX_CONFIG_BIN=$TSX_CONFIG_STAGE/usr/local/sbin/tsx-config
+	# tsx-config checks some keys against the hardware facts of the panel
+	# (/run/tsx/hw.conf). The panel.conf is for the target panel, not for this
+	# host. A host that is itself a panel has its own hw.conf, so point
+	# tsx-config to a file that does not exist: a panel with all parts.
+	export TSX_HW_CONF=$TSX_CONFIG_STAGE/no-hw.conf
 }
 tsx_config_stage || exit 2
 
