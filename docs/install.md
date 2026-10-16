@@ -395,7 +395,7 @@ The host copies `installer/steps/tsx-netinstall`, `installer/lib/tsx-verify-sig.
 
 Then the host arms the rescue of the release, and the rescue installs the stage with no network. After the boot, the host compares the sha256 values of boot and root with the signed manifest.
 
-The release workflow signs `SHA256SUMS` with the private key of the project (the secret `TSX_APORTS_PRIVKEY`). A release without `SHA256SUMS.sig`, or a release from before the download mode, does not install this way. Stock Android has no HTTPS client, so a first install always uses a payload on the host.
+The release workflow signs `SHA256SUMS` with the private key of the project (the secret `TSX_APORTS_PRIVKEY`, as PEM text or as the base64 of the PEM text, `tools/release/sign-sums.sh`). If the secret holds another key, the release workflow fails. A release without `SHA256SUMS.sig`, or a release from before the download mode, does not install this way. Stock Android has no HTTPS client, so a first install always uses a payload on the host.
 
 ### Root over the Crestron sshd
 

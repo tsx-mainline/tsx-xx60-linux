@@ -499,32 +499,21 @@ jobs:
       # half is rootfs/overlay/etc/apk/keys/tsx-mainline-*.rsa.pub, and every
       # kiosk has it in /etc/apk/keys. The download mode of a mainline panel
       # (installer/steps/tsx-netinstall) refuses a release without a good
-      # SHA256SUMS.sig. The secret TSX_APORTS_PRIVKEY holds the private key in
-      # base64. Without the secret, the release gets no signature and this
-      # step only warns.
+      # SHA256SUMS.sig. The secret TSX_APORTS_PRIVKEY holds the private key as
+      # PEM text or as the base64 of the PEM text (tools/release/sign-sums.sh).
+      # Without the secret, the release gets no signature and this step only
+      # warns. A secret that does not decode, or that holds another key, fails
+      # the job.
       - uses: actions/checkout@v4
         with:
           path: src
-          sparse-checkout: rootfs/overlay/etc/apk/keys
+          sparse-checkout: |
+            rootfs/overlay/etc/apk/keys
+            tools/release
       - name: sign SHA256SUMS (SHA256SUMS.sig)
         env:
           TSX_SIGNING_KEY: ${{ secrets.TSX_APORTS_PRIVKEY }}
-        run: |
-          set -eu
-          if [ -z "$TSX_SIGNING_KEY" ]; then
-            echo "::warning::no secret TSX_APORTS_PRIVKEY: the release gets no SHA256SUMS.sig, and the download mode (--fetch) refuses it"
-            exit 0
-          fi
-          umask 077
-          K=$(mktemp)
-          trap 'rm -f "$K"' EXIT
-          printf '%s' "$TSX_SIGNING_KEY" | base64 -d > "$K"
-          openssl dgst -sha256 -sign "$K" -out release/out/SHA256SUMS.sig release/out/SHA256SUMS
-          ok=0
-          for pub in src/rootfs/overlay/etc/apk/keys/tsx-mainline-*.rsa.pub; do
-            openssl dgst -sha256 -verify "$pub" -signature release/out/SHA256SUMS.sig release/out/SHA256SUMS && ok=1
-          done
-          [ "$ok" = 1 ] || { echo "the signature does not verify with a public key of rootfs/overlay/etc/apk/keys"; exit 1; }
+        run: sh src/tools/release/sign-sums.sh release/out/SHA256SUMS src/rootfs/overlay/etc/apk/keys/tsx-mainline-*.rsa.pub
 
       - name: attach the build to the GitHub release for this tag
         if: github.event_name == 'push'
@@ -561,10 +550,5 @@ jobs:
           cat SHA256SUMS
           # The SHA256SUMS of this step is new: sign it again (the step above
           # signed the SHA256SUMS of the artifact).
-          rm -f SHA256SUMS.sig
-          if [ -n "$TSX_SIGNING_KEY" ]; then
-            umask 077; K=$(mktemp); trap 'rm -f "$K"' EXIT
-            printf '%s' "$TSX_SIGNING_KEY" | base64 -d > "$K"
-            openssl dgst -sha256 -sign "$K" -out SHA256SUMS.sig SHA256SUMS
-          fi
+          sh ../../src/tools/release/sign-sums.sh SHA256SUMS ../../src/rootfs/overlay/etc/apk/keys/tsx-mainline-*.rsa.pub
           gh release upload "$TAG" $NEW SHA256SUMS $( [ -f SHA256SUMS.sig ] && echo SHA256SUMS.sig ) --clobber

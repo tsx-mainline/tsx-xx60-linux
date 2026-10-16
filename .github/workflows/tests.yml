@@ -148,6 +148,8 @@ jobs:
         run: installer/tests/test-arm-from-mainline.sh
       - name: tools/release/tests/test-prepare-publish.sh - the publish scan on throwaway repos
         run: tools/release/tests/test-prepare-publish.sh
+      - name: tools/release/tests/test-sign-sums.sh - the signature of SHA256SUMS with throwaway keys (PEM and base64 secret)
+        run: tools/release/tests/test-sign-sums.sh
       - name: installer/tests/test-factory.sh - skips without PUF_FILE + CAPTURES_DIR
         run: installer/tests/test-factory.sh
       - name: installer/tests/test-sdcard.sh - skips without CAPTURES_DIR
