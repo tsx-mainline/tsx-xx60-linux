@@ -110,8 +110,8 @@ jobs:
         run: installer/tests/test-install-netinstall.sh
       - name: installer/tests/test-install-stick.sh - install from a USB stick (tsx-make-stick, the stick stage in the rescue, fake p1)
         run: installer/tests/test-install-stick.sh
-      - name: installer/tests/test-install-seed.sh - the host side with the busybox tools of a mainline panel (a seed panel)
-        run: installer/tests/test-install-seed.sh
+      - name: installer/tests/test-install-busybox.sh - the host side with busybox tar, find, sha256sum, du, stat and gzip
+        run: installer/tests/test-install-busybox.sh
       - name: installer/lib/tests/test-tsx-tfa.sh - TFA9890 DSP files from the panel itself (synthetic boot images/containers)
         run: installer/lib/tests/test-tsx-tfa.sh
       - name: installer/lib/tests/test-tsx-psr.sh - Bluetooth PSR file from the panel itself (made-up PSR files)

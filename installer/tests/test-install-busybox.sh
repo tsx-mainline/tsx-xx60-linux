@@ -1,8 +1,9 @@
 #!/bin/bash
-# Host test: the host side of the installer with the tools of a mainline
-# panel (a seed panel, docs/install.md "Install from another panel"). A panel
-# has busybox tar, find, sha256sum, du, stat and gzip, not the GNU tools of a
-# PC. This test puts busybox versions of them first in PATH and runs the push
+# Host test: the host side of the installer with busybox tools. The installer
+# runs on any Linux machine with bash and the tools of docs/install.md "Host
+# requirements". On some machines (Alpine, a mainline panel) tar, find,
+# sha256sum, du, stat and gzip are the busybox applets, not the GNU tools.
+# This test puts busybox versions of them first in PATH and runs the push
 # and stage tests again:
 #   1. installer/tests/test-install-push.sh (tsx_push_dir, tsx_push_bundle,
 #      the rescue screen of a push)
@@ -11,14 +12,14 @@
 #   3. tsx_tar_c: GNU tar gets --owner=0 --group=0, busybox tar does not
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-BB=$(command -v busybox) || { echo "SKIPPED test-install-seed: no busybox on this host"; exit 0; }
+BB=$(command -v busybox) || { echo "SKIPPED test-install-busybox: no busybox on this host"; exit 0; }
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 N=0 F=0
 ok() { echo "  ok: $*"; N=$((N+1)); }
 bad() { echo "  FAIL: $*"; F=$((F+1)); }
 mkdir -p "$W/bb"
 for t in tar find sha256sum du stat gzip; do
-	"$BB" --list | grep -qx "$t" || { echo "SKIPPED test-install-seed: busybox has no $t"; exit 0; }
+	"$BB" --list | grep -x "$t" >/dev/null || { echo "SKIPPED test-install-busybox: busybox has no $t"; exit 0; }
 	ln -s "$BB" "$W/bb/$t"
 done
 export PATH="$W/bb:$PATH"
@@ -42,5 +43,5 @@ else
 fi
 
 echo "== $N ok, $F failed"
-[ $F = 0 ] && echo PASS test-install-seed || echo FAIL test-install-seed
+[ $F = 0 ] && echo PASS test-install-busybox || echo FAIL test-install-busybox
 exit $F

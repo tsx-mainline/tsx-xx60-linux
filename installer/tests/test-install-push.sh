@@ -48,7 +48,14 @@ shift   # [user@]host
 if [ -n "${FAKE_SSH_CUT:-}" ]; then
 	head -c "$FAKE_SSH_CUT" | busybox sh -c "$*"
 elif [ -n "${FAKE_SSH_SLOW:-}" ]; then
-	(head -c 1048576; sleep "$FAKE_SSH_SLOW"; cat) | busybox sh -c "$*"
+	# python3, not head -c: busybox head reads more than 1 MiB from a pipe and drops the rest
+	python3 -I -c 'import sys, time
+i, o = sys.stdin.buffer, sys.stdout.buffer
+o.write(i.read(1048576)); o.flush(); time.sleep(float(sys.argv[1]))
+while True:
+    b = i.read(65536)
+    if not b: break
+    o.write(b)' "$FAKE_SSH_SLOW" | busybox sh -c "$*"
 elif [ -n "${FAKE_SSH_FLIP:-}" ]; then
 	python3 -I -c 'import sys; d=bytearray(sys.stdin.buffer.read()); n=int(sys.argv[1]); d[n]^=0xff; sys.stdout.buffer.write(d)' "$FAKE_SSH_FLIP" | busybox sh -c "$*"
 else

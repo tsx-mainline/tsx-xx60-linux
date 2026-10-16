@@ -37,14 +37,6 @@ tsx_config_stage() {
 	here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 	top=$(cd "$here/../.." && pwd -P)
 	common=${TSX_COMMON:-$top/../tsx-linux-common}
-	# On a mainline panel (a seed panel, docs/install.md "Install from another
-	# panel") the tsx-config of the panel has the board file and its plugins
-	# in place: use it when no checkout is there.
-	if [ ! -x "$common/base/usr/local/sbin/tsx-config" ] && [ -z "${TSX_COMMON:-}" ] \
-		&& [ -x /usr/local/sbin/tsx-config ] && [ -f /usr/local/lib/tsx/board.sh ]; then
-		TSX_CONFIG_BIN=/usr/local/sbin/tsx-config
-		return 0
-	fi
 	if [ ! -x "$common/base/usr/local/sbin/tsx-config" ]; then
 		echo "no tsx-linux-common checkout at $common" >&2
 		echo "Set TSX_COMMON to the top of a tsx-linux-common checkout." >&2
@@ -52,7 +44,7 @@ tsx_config_stage() {
 	fi
 	if [ ! -f "$top/rootfs/overlay/usr/local/lib/tsx/board.sh" ]; then
 		echo "no board files at $top/rootfs/overlay (only the installer folder is here?)" >&2
-		echo "Run the installer from a full checkout of tsx-xx60-linux, or on a mainline panel." >&2
+		echo "Run the installer from a full checkout of tsx-xx60-linux." >&2
 		return 2
 	fi
 	TSX_CONFIG_STAGE=$(mktemp -d) || return 1

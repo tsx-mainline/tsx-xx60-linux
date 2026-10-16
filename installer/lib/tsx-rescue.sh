@@ -439,10 +439,9 @@ tsx_rescue_ssh() {
 tsx_rescue_ssh_cur() { tsx_rescue_ssh "${RESCUE_SSH_PW:-}" "$@"; }
 
 # tsx_tar_c ARGS...: tar with the owner root:root in the archive when the tar of
-# the host can (GNU tar). The busybox tar of a mainline panel that runs the
-# installer (a seed panel, docs/install.md "Install from another panel") has no
-# --owner. Its archive keeps the numeric owner, and the rescue extracts as root
-# anyway.
+# the host can (GNU tar). busybox tar has no --owner (the installer runs on any
+# Linux machine with bash, docs/install.md "Host requirements"). Its archive
+# keeps the numeric owner, and the rescue extracts as root anyway.
 tsx_tar_c() { if tar --help 2>&1 | grep -q -- '--owner='; then tar --owner=0 --group=0 "$@"; else tar "$@"; fi; }
 
 # The cipher order for the ssh streams into the rescue. Its dropbear takes the

@@ -105,16 +105,6 @@ chmod +x "$W/fake-install"; mkdir -p "$W/run" "$W/tmp"
 TSX_RUN=$W/run TSX_TMP=$W/tmp TSX_STAGE_DIR=$S TSX_STAGED_INSTALL=$W/fake-install TSX_NO_REBOOT=1 TSX_STATUS=$W/run/st busybox sh "$HERE/steps/tsx-rescue-staged" auto; rc=$?
 [ $rc = 0 ] && [ "$(cat "$W/run/tsx-staged.state")" = done ] && cmp -s "$W/root.img" "$W/p8" && ok "the runner writes the downloaded root image (gunzip on stdin)" || bad "runner: rc $rc $(cat "$W/run/tsx-staged.log")"
 
-echo "== 5b. --payload-out: a payload folder for a seed panel"
-net_dir; rm -rf "$W/data/tsx-stage"
-# the seed layout: the script in installer/steps, the verifier in installer/lib
-OUT=$(TSX_NET_TICK=1 TSX_NET_DF_KIB=10000000 busybox sh "$HERE/steps/tsx-netinstall" --base "file://$REL" --flavor lts --keys "$W/k.pub" --payload-out "$W/pay" 2>&1); rc=$?
-[ $rc = 0 ] && ok "--payload-out rc 0" || bad "--payload-out rc $rc: $OUT"
-cmp -s "$W/root.img" "$W/pay/lts/root.img" && [ -f "$W/pay/rescue.img" ] && [ -f "$W/pay/lts/boot.img" ] && (cd "$W/pay/lts" && sha256sum -c SHA256SUMS >/dev/null) \
-	&& ok "the payload layout of --payload (rescue.img, lts/{manifest,boot.img,root.img,SHA256SUMS})" || bad "payload layout: $(find "$W/pay" | sort | tr '\n' ' ')"
-grep -q "^root_sha256=$ROOT_SHA$" "$W/pay/lts/root.img.gz.info" && ok "root.img.gz.info: the stage of the installer uses the gzip again" || bad "root.img.gz.info"
-[ ! -e "$W/data/tsx-stage" ] && [ ! -e "$W/pay/.dl" ] && [ ! -e "$HERE/steps/dl" ] && ok "--payload-out makes no stage and leaves no download folder" || bad "a stage or a download folder was left"
-
 echo "== 5. tsx-install-mainline --fetch"
 OUT=$(TSX_PANEL_KIND=mainline "$HERE/tsx-install-mainline" 192.0.2.10 --fetch v9.9.9 --kernel lts --yes --dry-run --results "$W/dry.txt" 2>&1); rc=$?
 [ $rc = 0 ] && case "$OUT" in *"PAYLOAD=(none: --fetch v9.9.9)"*"releases/download/v9.9.9, checks the signature"*) true;; *) false;; esac \
