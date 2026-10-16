@@ -73,7 +73,7 @@ grep -q -e envpw77 -e filepw2 "$W/r3.txt" "$W/r4.txt" && bad "a password is in t
 OUT=$(KIND=mainline drv --dry-run --yes --results "$W/r5.txt"); rc=$?
 case "$OUT" in *"admin login"*) bad "a reinstall asks for the Crestron login";; *) ok "a reinstall (mainline) needs no Crestron login";; esac
 OUT=$("$DRIVER" --help 2>&1)
-case "$OUT" in *"option wins over its environment variable"*"--admin-password-file FILE"*"--rescue-password-file FILE"*"process list"*) ok "--help shows the rule, the options and the warning";; *) bad "--help: $OUT";; esac
+case "$OUT" in *"REQUIREMENT"*"rootsh method"*"option wins over its environment variable"*"--admin-password-file FILE"*"--rescue-password-file FILE"*"process list"*) ok "--help shows the rule, the options and the warning";; *) bad "--help: $OUT";; esac
 OUT=$(drv --stage-wait soon --admin-user a --admin-password x 2>&1); rc=$?
 [ $rc = 2 ] && ok "--stage-wait takes only seconds" || bad "stage-wait: rc $rc"
 

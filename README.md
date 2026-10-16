@@ -33,7 +33,7 @@ The support status of each board revision and touch glass is in [docs/compatibil
 | Bluetooth (CSR8811) | Works as a Bluetooth proxy for Home Assistant, passive (`BT_PROXY`) or active (`BT_ACTIVE`). Both are off by default. The NC models have no working Bluetooth chip. |
 | Ambient light sensor | Works. Automatic brightness follows the sensor. |
 | Camera | Works on the TSW-1060 and TSS-10, up to 1920x1080 at 30 fps. The TSW-760 has the same camera. It is not tested on hardware. The camera is off by default. Home Assistant gets a camera entity in snapshot or live mode. See [camera.md](docs/camera.md) and [hardware.md](docs/hardware.md) "Camera". |
-| Install from stock Android over the network | Works, with or without a UART. |
+| Install from stock Android over the network | Works. With no UART, the panel must have the `rootsh` method (see "Start"). |
 | Install from an SD card to the eMMC | Works. |
 | Factory restore to stock Android | Works, with or without a UART and without a backup of the panel. |
 
@@ -41,6 +41,9 @@ The support status of each board revision and touch glass is in [docs/compatibil
 
 1. Read [docs/index.md](docs/index.md) for the list of pages.
 2. Follow [docs/install.md](docs/install.md) to install a panel.
+
+   REQUIREMENT for an install from stock Android with no UART: the panel must have the `rootsh` method. `ssh -tt <user>@<panel-ip> rootsh` must give a root shell. In this method, the interactive branch of the `/system/bin/sshShell.sh` of the panel starts a root shell for the command `rootsh`. A panel as Crestron ships it does not have the method, and the installer does not set it up over the network. The other way in is the UART. See [install.md](docs/install.md) "Root over the Crestron sshd".
+
 3. Follow [docs/ha.md](docs/ha.md) to add the panel to Home Assistant.
 
 Read [docs/recovery.md](docs/recovery.md) when an install fails or when you want stock Android back.

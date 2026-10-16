@@ -16,10 +16,17 @@
 # admin user and password (the console and web UI login): --admin-user and
 # --admin-password-file, or TSX_ADMIN_USER and TSX_ADMIN_PW. An option wins
 # over the environment variable. There is no default. A missing value stops
-# the script before it contacts the panel. --uart auto (the default) uses the UART only if serlog.py
-# runs and ../../tools/bench/uc.sh exists. --uart no is network-only. It needs
-# rootsh to work already, or --sshshell installed by other means. The script
-# cannot install the sshShell.sh patch without the UART.
+# the script before it contacts the panel.
+# --uart auto (the default) uses the UART only if serlog.py runs and
+# ../../tools/bench/uc.sh exists. --uart no is network-only. It needs the
+# rootsh command in /system/bin/sshShell.sh of the panel, which a panel as
+# Crestron ships it does not have. The script cannot add the command without
+# the UART. Network-only mode runs steps/crestron-admin at each poll until
+# root works (it creates the account, or it checks the console login, and its
+# lines show on the screen). It stops at once on a refused login or a refused
+# account, and after two polls where the console login works but rootsh gives
+# no root shell (the command is missing).
+# Test hook: TSX_ROOT_POLL_S (default 20) is the time between two polls.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INSTALLER=$(cd "$HERE/.." && pwd)
 SERIALDIR=$(cd "$INSTALLER/../tools/bench" && pwd 2>/dev/null || echo "$INSTALLER/../tools/bench")
@@ -82,19 +89,54 @@ wait_android_stable() { local timeout=$1 waited=0 poll=20 fw ls raw bc
 		sleep "$poll"
 	done
 }
-wait_android_stable_net() { local timeout=$1 waited=0 poll=20 fw ls bc mounted admin_tried=0
+# admin_console: steps/crestron-admin PANEL. It creates the Crestron account on a
+# factory-fresh /data, else it checks the console login once. Its lines go to
+# the screen and to the results file. ADMIN_RC gets its exit status (0 login
+# works, 1 no answer yet, 3 login refused or host blocked, 4 account refused).
+admin_console() {
+	local rcf; rcf=$(mktemp)
+	{ "$CRESTRONADMIN" "$PANEL" 2>&1 && echo 0 > "$rcf" || echo $? > "$rcf"; } | while IFS= read -r l; do log "    $l"; done
+	ADMIN_RC=$(cat "$rcf"); rm -f "$rcf"
+}
+# admin_stop: stop for the exit status of crestron-admin that no later poll can
+# change. The sshd counts each failed login, so the script never tries again.
+admin_stop() {
+	case "$ADMIN_RC" in
+	2) die "steps/crestron-admin: a missing login (see above)";;
+	3) die "the Crestron sshd refused the login of $TSX_ADMIN_USER, or it blocks this host (see above). Check --admin-user and --admin-password-file. After 3 failed logins the sshd blocks the host for 24 hours, so the installer does not try again";;
+	4) die "the panel refused to create the Crestron account (see the answer above). Use another password, for example a longer one";;
+	esac
+}
+noroot_msg() { echo "the Crestron console accepts the login of $TSX_ADMIN_USER, but 'ssh -tt $TSX_ADMIN_USER@$PANEL rootsh' gives no root shell: the panel does not have the rootsh method in /system/bin/sshShell.sh (a panel as Crestron ships it does not). A network-only install REQUIRES this method, and the installer does not set it up over the network. Read docs/install.md \"Root over the Crestron sshd\": add the method once over the UART (--uart yes --sshshell FILE). Nothing was changed on the panel except the Crestron account"; }
+wait_android_stable_net() { local timeout=$1 waited=0 poll=${TSX_ROOT_POLL_S:-20} fw ls bc mounted rooted=0 noroot=0 now
 	log "  waiting for stock Android to settle (network-only, tolerates one self-reboot, timeout ${timeout}s)"
 	while :; do
 		# In network-only mode every check below needs rootsh, and rootsh needs a
-		# Crestron account. A factory-fresh unit (for example right after
-		# tsx-restore-factory) has none. So create it first (once) and do not
-		# wait for the timeout.
-		if [ "$admin_tried" = 0 ] && ! rootsh_ok && [ "$("$CRESTRONADMIN" --status "$PANEL" 2>/dev/null)" = none ]; then
-			admin_tried=1
-			log "  no Crestron account yet (factory-fresh /data): creating it now (steps/crestron-admin). Root over ssh needs it"
-			"$CRESTRONADMIN" "$PANEL" >>"$RESULTS" 2>&1 || log "  crestron-admin did not confirm console login yet (root is tried again on the next poll)"
+		# Crestron account. A factory-fresh unit has none. Until root works once,
+		# each poll first runs crestron-admin: it creates the account, or it
+		# checks the console login. Only a working console login leads to a
+		# rootsh try, so a wrong password costs one failed login, not one per
+		# poll.
+		now=0
+		if [ "$rooted" = 0 ]; then
+			log "  Crestron account and console login (steps/crestron-admin)"
+			admin_console; admin_stop
+			if [ "$ADMIN_RC" = 0 ]; then
+				if rootsh_ok; then rooted=1 now=1
+				else
+					noroot=$((noroot + 1))
+					# The same sshd and the same login give the console, but no root
+					# shell: the rootsh command is missing. Two tries, a poll apart,
+					# rule out a restart of the sshd.
+					[ "$noroot" -lt 2 ] || die "$(noroot_msg)"
+					log "  the console login works, but rootsh gives no root shell (try $noroot of 2)"
+				fi
+			else
+				noroot=0
+				log "  no console login yet (see above). Android may still start: trying again on the next poll"
+			fi
 		fi
-		if rootsh_ok; then
+		if [ "$rooted" = 1 ] && { [ "$now" = 1 ] || rootsh_ok; }; then
 			fw=$("$ROOTSH" "$PANEL" 'fw_printenv fwUpgrade' 2>/dev/null) || fw=
 			ls=$("$ROOTSH" "$PANEL" 'ls /mnt/sdcard/ROMDISK/romdisk/user/system/image' 2>/dev/null) || true
 			bc=$("$ROOTSH" "$PANEL" 'getprop sys.boot_completed' 2>/dev/null) || bc=
@@ -133,7 +175,8 @@ if rootsh_ok; then
 	exit 0
 fi
 log "  rootsh is not root yet. Trying crestron-admin (factory-fresh unit may have no account)"
-"$CRESTRONADMIN" "$PANEL" >>"$RESULTS" 2>&1 || log "  crestron-admin did not confirm console login (continuing. An account may already exist)"
+admin_console; admin_stop
+[ "$ADMIN_RC" = 0 ] || log "  crestron-admin did not confirm the console login (see above). Continuing"
 if rootsh_ok; then log "== done: rootsh now answers uid=0 (account was the only thing missing)"; exit 0; fi
 
 [ "$UART_MODE" = yes ] || die "root over ssh needs the patched sshShell.sh installed already (see docs/install.md). network-only mode cannot install it. Re-run with --uart yes, or install it by hand once."

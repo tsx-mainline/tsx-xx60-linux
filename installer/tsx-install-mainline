@@ -57,6 +57,15 @@
 #                        [--release-url URL] [--stage-wait SECONDS]
 #                        [--ssh-ciphers LIST] [--common DIR]
 #
+# REQUIREMENT (stock Android with no UART, docs/install.md "Root over the
+# Crestron sshd"): the panel must have the rootsh method. Then
+# `ssh -tt <user>@<panel> rootsh` gives a root shell: the interactive (tty)
+# branch of the /system/bin/sshShell.sh of the panel starts a root shell for
+# the command rootsh. A panel as Crestron ships it does not have the method.
+# This installer does not set it up over the network. The other way in is the
+# UART (--uart yes --sshshell FILE). Without the method, step 1 stops with an
+# error that names the docs section.
+#
 # OPTIONS AND ENVIRONMENT VARIABLES: an option wins over its environment
 # variable. The environment variables are for automation. The logins have no
 # default value (see "Logins" at the end of this text).

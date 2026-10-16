@@ -23,9 +23,20 @@
 #                                  print "none" (no account yet) or "exists".
 #                                  It does not log in, change anything or need
 #                                  a password.
-# Exit 0 = the console answers with that login (--status: it printed the state).
-# 1 = it does not (--status: the web UI does not answer). 2 = usage, or a
-# missing user or password.
+# The script checks the console with one login. After it creates the
+# account, it tries the console up to 6 times in 60 s, because the panel can
+# restart its services after the change. It never tries again after a
+# refused password: the Crestron sshd blocks a host for 24 hours after 3
+# failed logins.
+# Exit status:
+#   0  the console answers `ver` with that login (--status: it printed the state)
+#   1  no answer: the web UI or the console does not answer (yet)
+#      (--status: the web UI does not answer)
+#   2  usage, or a missing user or password
+#   3  the Crestron sshd refused the login (a wrong user or password), or it
+#      blocks this host
+#   4  the panel refused to create the account (its answer is in the output)
+# Test hook: TSX_ADMIN_POLL_S replaces the waits of 5 s and 10 s.
 set -uo pipefail
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/tsx-creds.sh"
 STATUS=0 H=
@@ -63,22 +74,54 @@ if [ "$STATUS" = 1 ]; then [ -n "$st" ] || { say "web UI https://$H/ does not an
 case "$st" in
 none)
 	say "no Crestron account yet (authentication off, no users): creating '$U'"
-	body=$(printf '{"Device":{"Authentication":{"AuthenticationState":{"AdminUsername":"%s","AdminPassword":"%s","IsEnabled":true}}}}' "$U" "$PW")
-	ans=$(curl -sk -m 30 -c "$JAR" -b "$JAR" -H 'Content-Type: application/json' -H 'X-Requested-With: XMLHttpRequest' \
-		-H "Origin: https://$H" -H "Referer: https://$H/createUser.html" --data "$body" "https://$H/Device/Authentication")
+	# python3 makes the JSON, so a quote or a backslash in the user or the
+	# password cannot break it. curl reads the body on stdin: the password is
+	# not on a command line.
+	body=$(U=$U PW=$PW python3 -c 'import json, os
+print(json.dumps({"Device": {"Authentication": {"AuthenticationState": {"AdminUsername": os.environ["U"], "AdminPassword": os.environ["PW"], "IsEnabled": True}}}}, separators=(",", ":")))') \
+		|| { say "python3 could not make the request"; exit 1; }
+	ans=$(printf '%s' "$body" | curl -sk -m 30 -c "$JAR" -b "$JAR" -H 'Content-Type: application/json' -H 'X-Requested-With: XMLHttpRequest' \
+		-H "Origin: https://$H" -H "Referer: https://$H/createUser.html" --data-binary @- "https://$H/Device/Authentication")
+	body=
 	say "answer: ${ans:-(empty)}"
 	if ! grep -q '"StatusId":0' <<<"$ans"; then
 		# a unit without forced authentication (TSW-760 tested) enables it and
 		# restarts its web service before it answers: ask again
-		for i in 1 2 3 4 5 6; do sleep 5; st=$(account_state); [ "$st" = exists ] && break; done
-		[ "$st" = exists ] || { say "account creation refused (still no account after 30 s)"; exit 1; }
+		for i in 1 2 3 4 5 6; do sleep "${TSX_ADMIN_POLL_S:-5}"; st=$(account_state); [ "$st" = exists ] && break; done
+		if [ "$st" != exists ]; then
+			case "$ans" in
+			*'"StatusId"'*) say "the panel refused the account (answer above). The password may not meet the password rules of the panel"; exit 4;;
+			*) say "no account after 30 s, and no answer from the web UI"; exit 1;;
+			esac
+		fi
 		say "no answer to the request, but the account now exists (web UI restarted)"
 	fi
-	sleep 3;;
-exists) say "the web UI already has an account (or authentication on): not changing it";;
+	TRIES=6;;
+exists) say "the web UI already has an account (or authentication on): not changing it"; TRIES=1;;
 *) say "web UI https://$H/ does not answer"; exit 1;;
 esac
-out=$(printf 'ver\r\nbye\r\n' | SSHPASS=$PW timeout 30 sshpass -e ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 "$U@$H" 2>&1 | tr -d '\r')
-v=$(printf '%s\n' "$out" | grep -E '\[v[0-9]' | head -n 1)
-[ -n "$v" ] && { say "ok: console login $U works: $v"; exit 0; }
-say "the Crestron SSH console does not accept $U with that password"; exit 1
+# console_ver: one login to the Crestron SSH console with the command ver.
+# Returns 0 when the console answers, 5 when sshpass saw the password refused,
+# else the status of ssh or timeout. OUT holds the output of the session.
+console_ver() {
+	local f rc
+	f=$(mktemp)
+	printf 'ver\r\nbye\r\n' | SSHPASS=$PW timeout 30 sshpass -e ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 "$U@$H" > "$f" 2>&1; rc=$?
+	OUT=$(tr -d '\r' < "$f"); rm -f "$f"
+	printf '%s\n' "$OUT" | grep -qE '\[v[0-9]' && return 0
+	[ "$rc" = 0 ] && rc=1
+	return "$rc"
+}
+for i in $(seq 1 "$TRIES"); do
+	rc=0; console_ver || rc=$?
+	if [ "$rc" = 0 ]; then say "ok: console login $U works: $(printf '%s\n' "$OUT" | grep -E '\[v[0-9]' | head -n 1)"; exit 0; fi
+	if grep -qi 'blocked' <<<"$OUT"; then
+		say "the Crestron sshd blocks this host: $(grep -i -m 1 'blocked' <<<"$OUT"). Run REMBLOCKEDIP <this-host-ip> on the Crestron console from another machine"; exit 3
+	fi
+	if [ "$rc" = 5 ]; then
+		say "the Crestron sshd refused the password of $U. This script does not try again: after 3 failed logins the sshd blocks this host for 24 hours"; exit 3
+	fi
+	say "no answer from the Crestron SSH console yet (try $i of $TRIES, ssh status $rc)${OUT:+: $(printf '%s' "$OUT" | tail -n 1)}"
+	[ "$i" -lt "$TRIES" ] && sleep "${TSX_ADMIN_POLL_S:-10}"
+done
+say "the Crestron SSH console did not answer"; exit 1

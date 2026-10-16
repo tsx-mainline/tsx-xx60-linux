@@ -16,7 +16,7 @@ Before you start, make sure these items are ready:
 - The panel runs stock Android and the host can reach it over the network.
 - The host has the tools of "Host requirements".
 - The host can open ssh connections to the panel (TCP port 22). The panel needs no connection to the host (see "Network requirements").
-- A root shell over the Crestron sshd works (see "Root over the Crestron sshd").
+- REQUIREMENT for a network-only install: the panel has the `rootsh` method. `ssh -tt <user>@<panel-ip> rootsh` must give a root shell. The installer does not set up this method over the network. See "Root over the Crestron sshd".
 - You have a payload (see "Get the payload").
 
 Steps:
@@ -397,10 +397,23 @@ The release workflow signs `SHA256SUMS` with the private key of the project (the
 
 A first install needs a Crestron admin account and a root shell on the panel over the Crestron SSH daemon.
 
-1. A Crestron admin account must exist. A factory-fresh panel has none. `installer/steps/crestron-admin --admin-user <user> --admin-password-file FILE <panel-ip>` creates it with the call that the first-run form makes. Some panels redirect every web UI page to that form. Others serve the web UI with authentication off. The script handles both. `installer/steps/crestron-admin --status <panel-ip>` shows whether an account exists. The installer runs the script for you.
-2. The admin account must get a root shell over SSH. The installer gets it with `installer/steps/rootsh`.
+**Requirement: the `rootsh` method.** An install from stock Android with no UART (`--uart no`, or `--uart auto` with no serial logger) needs the `rootsh` method on the panel. The Crestron sshd runs `/system/bin/sshShell.sh` for each login. In the method, the interactive (tty) branch of that script starts a root shell when the command is `rootsh`, and the Crestron console for any other command. So `ssh -tt <user>@<panel-ip> rootsh` gives a root shell, and a plain `ssh <user>@<panel-ip>` gives the console. The installer does not set up the method over the network. The other way in is the UART (see below).
 
-**Lockout.** The Crestron sshd blocks an IP address for 24 hours after 3 failed logins (console commands `SETLOGINATTEMPTS` and `SETLOCKOUTTIME`). The block also stops `installer/steps/rootsh` from that host ("Your IP address is blocked"). The installer reads the SSH identification line first and never tries a login on a host that answers as `CrestronSSH`. To clear a block, log in to the Crestron console from another machine and run `REMBLOCKEDIP <blocked-ip>`. `LISTBLOCKEDIP` shows the list.
+1. A Crestron admin account must exist. A factory-fresh panel has none. `installer/steps/crestron-admin --admin-user <user> --admin-password-file FILE <panel-ip>` creates it with the call that the first-run form makes. Some panels redirect every web UI page to that form. Others serve the web UI with authentication off. The script handles both. `installer/steps/crestron-admin --status <panel-ip>` shows whether an account exists. The installer runs the script for you.
+2. The admin account must get a root shell over SSH. The installer gets it with `installer/steps/rootsh` (`ssh -tt <user>@<panel-ip> rootsh`).
+3. The `rootsh` method must be in `/system/bin/sshShell.sh` of the panel. A panel as Crestron ships it does not have the method. A panel that `installer/tsx-restore-factory` restored has it (see [recovery.md](recovery.md) "Root over SSH", which also shows the change).
+
+Without the `rootsh` method, the network-only mode cannot get root. The installer then stops after two tries with an error that names this section. It changes nothing on the panel except the Crestron account. To add the method, use the UART once:
+
+1. Connect the UART of the panel to the host and start the serial logger (see `--uart`).
+2. Make a copy of the `sshShell.sh` of the panel firmware with the change of [recovery.md](recovery.md) "Root over SSH".
+3. Run the installer with `--uart yes --sshshell FILE`. `FILE` is that copy.
+
+After that, later installs of the panel work with no UART.
+
+The installer runs `installer/steps/crestron-admin` at each poll until root works. The script shows its lines on the screen: the answer of the panel to the new account, and the result of the console login. It stops the install at once when the panel refuses the account (for example a password that does not meet the rules of the panel) or when the sshd refuses the login.
+
+**Lockout.** The Crestron sshd blocks an IP address for 24 hours after 3 failed logins (console commands `SETLOGINATTEMPTS` and `SETLOCKOUTTIME`). The block also stops `installer/steps/rootsh` from that host ("Your IP address is blocked"). The installer reads the SSH identification line first and never tries a root login on a host that answers as `CrestronSSH`. It logs in with the admin account only after the console check passes, and it never tries again after a refused password. To clear a block, log in to the Crestron console from another machine and run `REMBLOCKEDIP <blocked-ip>`. `LISTBLOCKEDIP` shows the list.
 
 ### The payload
 
@@ -554,6 +567,9 @@ Every driver script prints progress and does not run silently:
 |---|---|---|
 | `Your IP address is blocked` from `rootsh` | The Crestron sshd blocked the host after 3 failed logins. | Run `REMBLOCKEDIP <blocked-ip>` on the Crestron console from another machine. |
 | The installer cannot get a root shell on stock Android | The admin account gets no root shell over SSH. | Set up the root shell (see "Root over the Crestron sshd"). Then run the installer again. |
+| `the Crestron console accepts the login ..., but ... rootsh gives no root shell` | The panel has the stock `sshShell.sh`, with no `rootsh` command. | Add the command once over the UART: `--uart yes --sshshell FILE` (see "Root over the Crestron sshd"). |
+| `the Crestron sshd refused the login` | A wrong admin user or password, or an account from an earlier run with another password. | Give the right login with `--admin-user` and `--admin-password-file`. The installer tried one login only. |
+| `the panel refused to create the Crestron account` | The password does not meet the rules of the panel. The answer of the panel is in the output. | Use another password, for example a longer one. |
 | The install stops before it writes anything and asks for a root password or key | `panel.conf` has no `ROOT_PASSWORD_HASH` and no `SSH_AUTHORIZED_KEY`. | Give a password or a key in the prompts or in `--config FILE`. |
 | The rescue asks for a password | The rescue cannot read `/data` (first install). | Read the one-time password on the panel screen. Type it when the installer asks, or put it in a file and run the same command again with `--rescue-password-file FILE`. |
 | The run stops after the rescue is up | A network or host interruption. | Run the same command again. It resumes in the rescue. |

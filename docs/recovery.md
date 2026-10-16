@@ -96,7 +96,7 @@ The driver checks the tools before it touches the panel. It checks the package a
 
 #### Root over SSH
 
-By default, the restored `system.img` is the image of the `.puf` with one change. In `/system/bin/sshShell.sh`, the line `/system/bin/telnetSSHProxy SSH $1` in the interactive branch becomes `if [ "$command" == "rootsh" ]; then /system/bin/bash -l; else /system/bin/telnetSSHProxy SSH $1; fi`. After a Crestron account exists, `ssh -tt admin@PANEL rootsh` (`installer/steps/rootsh`) gives a root shell with no UART. A plain `ssh admin@PANEL` still gives the Crestron console.
+By default, the restored `system.img` is the image of the `.puf` with one change. In `/system/bin/sshShell.sh`, the line `/system/bin/telnetSSHProxy SSH $1` in the interactive branch becomes `if [ "$command" == "rootsh" ]; then /system/bin/bash -l; else /system/bin/telnetSSHProxy SSH $1; fi`. After a Crestron account exists, `ssh -tt <user>@PANEL rootsh` (`installer/steps/rootsh`) gives a root shell with no UART. A plain `ssh <user>@PANEL` still gives the Crestron console.
 
 `mkbundle.sh` makes the change with an awk recipe and keeps the mode, owner and SELinux label of the file. It verifies that the diff against the stock file is exactly that line. It refuses a firmware whose `sshShell.sh` lacks the line (an unknown release or a modified image). In that case, use one of these:
 
