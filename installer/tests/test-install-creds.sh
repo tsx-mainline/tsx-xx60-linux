@@ -72,6 +72,9 @@ OUT=$(TSX_ADMIN_USER=envadmin TSX_ADMIN_PW=envpw77 drv --dry-run --results "$W/r
 grep -q -e envpw77 -e filepw2 "$W/r3.txt" "$W/r4.txt" && bad "a password is in the results file" || ok "no password in the results files"
 OUT=$(KIND=mainline drv --dry-run --yes --results "$W/r5.txt"); rc=$?
 case "$OUT" in *"admin login"*) bad "a reinstall asks for the Crestron login";; *) ok "a reinstall (mainline) needs no Crestron login";; esac
+reset; OUT=$(KIND=rescue-locked drv --yes --results "$W/r6.txt"); rc=$?
+[ $rc != 0 ] && nocalls && case "$OUT" in *"runs the rescue, and it takes none of the logins"*"--rescue-password-file FILE"*) true;; *) false;; esac \
+	&& ok "a rescue that asks for its one-time password: stops at once and names --rescue-password-file" || bad "rescue-locked: rc $rc $OUT $(calls)"
 OUT=$("$DRIVER" --help 2>&1)
 case "$OUT" in *"REQUIREMENT"*"rootsh method"*"option wins over its environment variable"*"--admin-password-file FILE"*"--rescue-password-file FILE"*"process list"*) ok "--help shows the rule, the options and the warning";; *) bad "--help: $OUT";; esac
 OUT=$(drv --stage-wait soon --admin-user a --admin-password x 2>&1); rc=$?

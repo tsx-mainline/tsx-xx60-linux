@@ -169,7 +169,7 @@
 # has no fixed root password (docs/rootfs.md "Root login"), so the script logs
 # in to a running mainline panel with your ssh key. If the panel has a root
 # password, give it with --mainline-password-file.
-# Test hook: TSX_PANEL_KIND=android|mainline|rescue|unreachable skips the
+# Test hook: TSX_PANEL_KIND=android|mainline|rescue|rescue-locked|unreachable skips the
 # network probe that picks the path.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -368,16 +368,27 @@ stage_panel() {
 # Detect what PANEL_IP is now: android | mainline | rescue | unreachable | other.
 # Do not log in where a failed login counts. is_crestron_sshd runs first.
 panel_kind() {
-	case "${TSX_PANEL_KIND:-}" in android|mainline|rescue|unreachable|other) echo "$TSX_PANEL_KIND"; return 0;; esac
+	case "${TSX_PANEL_KIND:-}" in android|mainline|rescue|rescue-locked|unreachable|other) echo "$TSX_PANEL_KIND"; return 0;; esac
 	case "$(ssh_server_id "$PANEL")" in
 	"") echo unreachable;;
 	*CrestronSSH*) echo android;;
 	*)	if ssh_test_rescue "$PANEL" "$RPW"; then echo rescue
 		elif is_mainline_kiosk; then echo mainline
-		else echo other; fi;;
+		else case "$(ssh_server_id "$PANEL")" in *dropbear*) echo rescue-locked;; *) echo other;; esac; fi;;
 	esac
 }
 KIND=$(panel_kind)
+# The rescue answers, but it takes none of our logins: it shows a one-time
+# password on the panel screen (docs/recovery.md "Rescue login"). Ask for it on
+# a terminal, else stop: the other paths cannot reach this panel.
+if [ "$KIND" = rescue-locked ]; then
+	if [ "$YES" != 1 ] && [ "$DRYRUN" != 1 ] && [ -t 0 ]; then
+		read -r -s -p "$PANEL runs the rescue. Type the one-time password from the panel screen: " RPW || RPW=
+		echo >&2
+		[ -n "$RPW" ] && ssh_test_rescue "$PANEL" "$RPW" && KIND=rescue
+	fi
+	[ "$KIND" = rescue ] || die "$PANEL runs the rescue, and it takes none of the logins of this host. Read the one-time password on the panel screen and run the same command again with --rescue-password-file FILE (the file holds that password), or power-cycle the panel once to go back to the system before the rescue boot"
+fi
 case "$KIND" in
 android) log "== $PANEL: stock Android (Crestron sshd): Android -> mainline install";;
 mainline) log "== $PANEL: already the mainline kiosk (root on eMMC p8): reinstall from the kiosk (no Android root needed)";;
@@ -591,6 +602,14 @@ GOT=$("$HERE/steps/rootsh" "$PANEL" "mkdir -p /data/tsx-inst && busybox tar -xf 
 [ "$GOT" = "$RSHA" ] || die "rescue.img in /data/tsx-inst has sha256 ${GOT:-none}, want $RSHA. Nothing was written to the boot slots or the env"
 log "  arm payload unpacked in /data/tsx-inst (rescue.img ${RSHA:0:16}...)"
 stage_panel
+# Without a stage, the images go over ssh into the rescue. From stock Android
+# the rescue has no login of this host: it shows a one-time password on the
+# panel screen (docs/recovery.md "Rescue login"), and step 3 asks for it on a
+# terminal. With no terminal and no --rescue-password-file, stop before the arm
+# step: the rescue would wait for a password that nobody can give.
+if [ "$STAGED" != 1 ] && [ -z "$RPW" ] && ! [ -t 0 ]; then
+	die "no stage on the panel, and this run has no terminal for the one-time password of the rescue. Run the installer on a terminal, or make the stage work (see above). Nothing was armed: the panel stays on stock Android"
+fi
 log "  running preflight"
 PREOUT=$("$HERE/steps/rootsh" "$PANEL" 'bash /data/tsx-inst/steps/tsx-rescue-arm.sh preflight --rescue /data/tsx-inst/rescue.img 2>&1') || true
 logblock "preflight" "$PREOUT"

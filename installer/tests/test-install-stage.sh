@@ -192,6 +192,9 @@ for st in auto no; do
 	*) bad "dry run --stage $st (rc $rc): $OUT";;
 	esac
 done
+# stock Android: no stage, no terminal and no rescue password stop before the arm step
+awk '/^stage_panel$/ {s=1} s && /running preflight/ {exit} s' "$HERE/tsx-install-mainline" | grep -qF '[ "$STAGED" != 1 ] && [ -z "$RPW" ] && ! [ -t 0 ]' \
+	&& ok "stock Android: no stage and no way to the one-time rescue password stops before the arm step" || bad "no guard between stage_panel and the arm step"
 OUT=$("$HERE/tsx-install-mainline" 192.0.2.10 --payload "$W/dpay" --kernel lts --stage maybe --dry-run 2>&1); rc=$?
 [ $rc = 2 ] && ok "--stage maybe is refused (rc 2)" || bad "--stage maybe: rc $rc"
 
