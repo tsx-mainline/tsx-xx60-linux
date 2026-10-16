@@ -156,6 +156,9 @@ OUT=$(PATH="$W/pty/bin:$PATH" TSX_ADMIN_USER=x TSX_ADMIN_PW=x "$HERE/steps/roots
 [ $rc = 0 ] && ok "rootsh --put rc 0" || bad "rootsh --put rc $rc: $OUT"
 cmp -s "$W/put.bin" "$W/pty/dst/put.bin" && ok "every byte value passed the pty unchanged (^C, ^D, ^S, DEL, CR, ~.)" || bad "the copy differs"
 case "$OUT" in *"verified ("*"sha256 "*) ok "the copy is sha256 checked";; *) bad "no verify line: $OUT";; esac
+ln -s "$W/put.bin" "$W/put-link.bin"
+OUT=$(PATH="$W/pty/bin:$PATH" TSX_ADMIN_USER=x TSX_ADMIN_PW=x "$HERE/steps/rootsh" --put fakepanel "$W/put-link.bin" "$W/pty/dst/put-link.bin" 2>&1); rc=$?
+[ $rc = 0 ] && cmp -s "$W/put.bin" "$W/pty/dst/put-link.bin" && ok "a FILE that is a link: the whole target file arrives (the stage links root.img.gz)" || bad "link: rc $rc: $OUT"
 REALBB=$(command -v busybox)
 cat > "$W/pty/bin/busybox" <<EOF
 #!/bin/bash
