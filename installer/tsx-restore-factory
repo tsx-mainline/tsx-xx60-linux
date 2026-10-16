@@ -473,7 +473,8 @@ if [ "$FROM_STEP" -le 7 ] && [ "$TO_STEP" -ge 7 ]; then
 	fi
 	acct=$("$HERE/steps/crestron-admin" --status "$ANDROID_IP" 2>/dev/null || true)
 	case "$acct" in
-	none) log "  ok: web UI up, no Crestron account (factory-fresh /data): create one at https://$ANDROID_IP/ or with installer/steps/crestron-admin (tsx-install-mainline does it)";;
+	none) log "  ok: web UI up, no Crestron account (factory-fresh /data): create one at https://$ANDROID_IP/ or with installer/steps/crestron-admin (tsx-install-mainline does it)"
+		log "  NOTE: the Crestron auto update is ON, and the restored panel reports PUF: Unknown. With internet access it installs the same firmware again at its AUTIME (about 15 min, with a reboot): do not power it off then. tsx-install-mainline turns the auto update off (AUENABLE OFF) and waits for an update that runs. By hand: create the account, then AUENABLE OFF on the Crestron console";;
 	*)	tsx_creds_need_admin 1 || die "a Crestron account already exists, and step 7 needs its login to check the console"
 		out=$(printf 'ver\r\nbye\r\n' | SSHPASS=$TSX_ADMIN_PW timeout 30 sshpass -e ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$TSX_ADMIN_USER@$ANDROID_IP" 2>&1 | tr -d '\r' || true)
 		logblock "Crestron SSH console ($TSX_ADMIN_USER, 'ver', account state: ${acct:-web UI did not answer})" "$out"

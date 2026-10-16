@@ -413,6 +413,15 @@ After that, later installs of the panel work with no UART.
 
 The installer runs `installer/steps/crestron-admin` at each poll until root works. The script shows its lines on the screen: the answer of the panel to the new account, and the result of the console login. It stops the install at once when the panel refuses the account (for example a password that does not meet the rules of the panel) or when the sshd refuses the login.
 
+**Crestron auto update.** Stock Android checks for a firmware update every day at its `AUTIME` (console `AUSTATUS`, `AUENABLE`, `AUTIME`), when the panel has internet access. The auto update is on by default. A restored panel, or a panel that reports `PUF: Unknown` in `ver`, downloads the same firmware again and installs it. The update unpacks the firmware into `/mnt/sdcard/ROMDISK/romdisk/user/system/image`, writes the golden boot image to `p1:boot.img` and the golden system to card `p2`, then the eMMC, and reboots. It takes about 15 minutes. A reboot during the update leaves a half-written card. So the installer does these steps on stock Android:
+
+1. After the first console login, it turns the auto update off (`AUENABLE OFF`).
+2. It waits until Android is settled and no Crestron update is staged or running. While Crestron installs an update (`fwUpgrade=1`, or its update script runs), the installer waits longer and says so. It never interrupts the update. Do not power off the panel then.
+3. If an update is staged but nothing applies it (`fwUpgrade=0`, no update script, `AUSTATUS` reports no update in progress), it removes the staged files. Crestron's own update script does the same when an update stops.
+4. Right before the arm step, it checks the same again.
+
+The arm step reboots the panel. When the host run stops after the arm step started on the panel, the panel goes on by itself: it reboots into the rescue. A stop of the host does not cancel it.
+
 **Lockout.** The Crestron sshd blocks an IP address for 24 hours after 3 failed logins (console commands `SETLOGINATTEMPTS` and `SETLOCKOUTTIME`). The block also stops `installer/steps/rootsh` from that host ("Your IP address is blocked"). The installer reads the SSH identification line first and never tries a root login on a host that answers as `CrestronSSH`. It logs in with the admin account only after the console check passes, and it never tries again after a refused password. To clear a block, log in to the Crestron console from another machine and run `REMBLOCKEDIP <blocked-ip>`. `LISTBLOCKEDIP` shows the list.
 
 ### The payload

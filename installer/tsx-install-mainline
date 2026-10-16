@@ -610,6 +610,12 @@ stage_panel
 if [ "$STAGED" != 1 ] && [ -z "$RPW" ] && ! [ -t 0 ]; then
 	die "no stage on the panel, and this run has no terminal for the one-time password of the rescue. Run the installer on a terminal, or make the stage work (see above). Nothing was armed: the panel stays on stock Android"
 fi
+# The stage takes some minutes. Check again, right before the arm step, that
+# Android is settled and that no Crestron update is staged or running: the arm
+# step reboots the panel, and a reboot must never cut a Crestron update
+# (step 1 turned the auto update off, this is the second guard).
+log "  re-check before the arm step: Android settled, no Crestron update staged or running"
+"$HERE/steps/tsx-ensure-root" "${ENSURE_ARGS[@]}" || die "the re-check before the arm step failed (see above). Nothing was armed"
 log "  running preflight"
 PREOUT=$("$HERE/steps/rootsh" "$PANEL" 'bash /data/tsx-inst/steps/tsx-rescue-arm.sh preflight --rescue /data/tsx-inst/rescue.img 2>&1') || true
 logblock "preflight" "$PREOUT"

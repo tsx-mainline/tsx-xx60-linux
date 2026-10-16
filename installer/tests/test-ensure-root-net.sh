@@ -48,10 +48,14 @@ case " $* " in
 *" rootsh "*)
 	if [ "${PATCHED:-0}" = 1 ]; then
 		IFS= read -r line; cat > /dev/null
+		# $W/pending: a staged Crestron update (image/ and the zip in ROMDISK)
 		case "$line" in
 		*"BEGIN; id;"*) r="uid=0(root) gid=0(root)";;
-		*fw_printenv*) r="fwUpgrade=0";;
-		*"ls /mnt"*) r="ls: /mnt/sdcard/ROMDISK/romdisk/user/system/image: No such file or directory";;
+		*"echo CLEARED"*) if [ "${FWUP:-0}" = 0 ]; then rm -f "$W/pending"; echo cleared >> "$W/cleared"; r=CLEARED; else r=; fi;;
+		*fw_printenv*) r="fwUpgrade=${FWUP:-0}";;
+		*"grep -c '^image_"*) if [ -e "$W/pending" ]; then r=1; else r=0; fi;;
+		*"busybox ps"*) r=${UPDPROC:-0};;
+		*"ls /mnt"*) if [ -e "$W/pending" ]; then r="boot-golden.img"; else r="ls: /mnt/sdcard/ROMDISK/romdisk/user/system/image: No such file or directory"; fi;;
 		*getprop*|*"grep -c"*) r=1;;
 		*) r=;;
 		esac
@@ -60,7 +64,12 @@ case " $* " in
 		# the stock sshShell.sh: the console reads the lines as console commands
 		cat > /dev/null; printf 'TSS-10>Bad or Incomplete Command\r\n'
 	fi;;
-*)	cat > /dev/null; printf 'TSS-10>ver\r\nTSS-10 Cntrl Eng [v3.002.1061 (Sep 01 2026), #00000000]\r\n';;
+*)	IFS= read -r first; cat > /dev/null; first=${first%$'\r'}
+	case "$first" in
+	"AUENABLE OFF") touch "$W/auoff"; printf 'TSS-10>AUENABLE OFF\r\nSuccess. New Auto Updates State: OFF\r\n';;
+	AUSTATUS) printf 'Auto Update Status\r\n Enabled: No\r\n Update in Progress: %s\r\n' "${AUBUSY:-No}";;
+	*) printf 'TSS-10>ver\r\nTSS-10 Cntrl Eng [v3.002.1061 (Sep 01 2026), #00000000]\r\n';;
+	esac;;
 esac
 exit 0
 EOF
@@ -93,7 +102,27 @@ rm -f "$W/account"
 run patched PATCHED=1
 [ $RC = 0 ] && case "$OUT" in *"ok: Android settled (network-only)"*"== done: rootsh already answers uid=0"*) true;; *) false;; esac \
 	&& ok "account, root, Android settled: rc 0" || bad "rc $RC: $OUT"
-[ "$(cat "$W/posts" 2>/dev/null | wc -l)" = 1 ] && [ "$(count 'tsxadmin@192.0.2.10$')" = 1 ] && ok "one account request, one console login" || bad "calls: $(cat "$W/calls")"
+[ "$(cat "$W/posts" 2>/dev/null | wc -l)" = 1 ] && [ "$(count 'tsxadmin@192.0.2.10$')" = 3 ] && ok "one account request, three console logins (ver, AUENABLE OFF, AUSTATUS)" || bad "calls: $(cat "$W/calls")"
+
+echo "== 2b. a staged Crestron update that no process applies: removed, then settled"
+touch "$W/pending"; rm -f "$W/cleared" "$W/auoff"
+run pending PATCHED=1
+[ $RC = 0 ] && [ -e "$W/cleared" ] && [ ! -e "$W/pending" ] && case "$OUT" in *"removed a staged Crestron update that no process applies"*"ok: Android settled"*) true;; *) false;; esac \
+	&& ok "fwUpgrade=0, auto update idle: the stale image is removed, then root and settled" || bad "stale: rc $RC $(printf '%s' "$OUT" | tail -n 4)"
+[ -e "$W/auoff" ] && ok "the console got AUENABLE OFF" || bad "no AUENABLE OFF"
+
+echo "== 2c. Crestron applies an update (fwUpgrade=1): wait, never remove"
+touch "$W/pending"; rm -f "$W/cleared"
+run applying PATCHED=1 FWUP=1 TSX_SETTLE_S=2 TSX_CRESTRON_UPDATE_S=4
+[ $RC != 0 ] && [ -e "$W/pending" ] && [ ! -e "$W/cleared" ] \
+	&& case "$OUT" in *"not settled yet: Crestron is installing a firmware update"*"Do not power off the panel"*"timeout (4s)"*) true;; *) false;; esac \
+	&& ok "the wait names the Crestron update, the limit grows (2 s to 4 s), nothing is removed" || bad "applying: rc $RC $(printf '%s' "$OUT" | tail -n 4)"
+
+echo "== 2d. the auto update reports a download in progress: wait, never remove"
+run downloading PATCHED=1 AUBUSY=Yes TSX_SETTLE_S=2 TSX_CRESTRON_UPDATE_S=4
+[ $RC != 0 ] && [ -e "$W/pending" ] && [ ! -e "$W/cleared" ] && case "$OUT" in *"the auto update reports an update in progress: yes"*) true;; *) false;; esac \
+	&& ok "an update in progress: no removal, the wait says why" || bad "downloading: rc $RC $(printf '%s' "$OUT" | tail -n 4)"
+rm -f "$W/pending"
 
 echo "== 3. an account that exists with another password"
 touch "$W/account"

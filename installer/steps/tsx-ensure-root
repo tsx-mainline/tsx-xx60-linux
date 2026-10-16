@@ -26,7 +26,8 @@
 # lines show on the screen). It stops at once on a refused login or a refused
 # account, and after two polls where the console login works but rootsh gives
 # no root shell (the command is missing).
-# Test hook: TSX_ROOT_POLL_S (default 20) is the time between two polls.
+# Test hooks: TSX_ROOT_POLL_S (default 20) is the time between two polls,
+# TSX_SETTLE_S (default 720) the time limit of the network-only wait.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INSTALLER=$(cd "$HERE/.." && pwd)
 SERIALDIR=$(cd "$INSTALLER/../tools/bench" && pwd 2>/dev/null || echo "$INSTALLER/../tools/bench")
@@ -95,7 +96,7 @@ wait_android_stable() { local timeout=$1 waited=0 poll=20 fw ls raw bc
 # works, 1 no answer yet, 3 login refused or host blocked, 4 account refused).
 admin_console() {
 	local rcf; rcf=$(mktemp)
-	{ "$CRESTRONADMIN" "$PANEL" 2>&1 && echo 0 > "$rcf" || echo $? > "$rcf"; } | while IFS= read -r l; do log "    $l"; done
+	{ "$CRESTRONADMIN" --autoupdate-off "$PANEL" 2>&1 && echo 0 > "$rcf" || echo $? > "$rcf"; } | while IFS= read -r l; do log "    $l"; done
 	ADMIN_RC=$(cat "$rcf"); rm -f "$rcf"
 }
 # admin_stop: stop for the exit status of crestron-admin that no later poll can
@@ -109,16 +110,20 @@ admin_stop() {
 	esac
 }
 noroot_msg() { echo "the Crestron console accepts the login of $TSX_ADMIN_USER, but 'ssh -tt $TSX_ADMIN_USER@$PANEL rootsh' gives no root shell: the panel does not have the rootsh method in /system/bin/sshShell.sh (a panel as Crestron ships it does not). A network-only install REQUIRES this method, and the installer does not set it up over the network. Read docs/install.md \"Root over the Crestron sshd\": add the method once over the UART (--uart yes --sshshell FILE). Nothing was changed on the panel except the Crestron account"; }
-wait_android_stable_net() { local timeout=$1 waited=0 poll=${TSX_ROOT_POLL_S:-20} fw ls bc mounted rooted=0 noroot=0 now
+# crestron_update_msg: what the screen says while Crestron installs its own
+# firmware update.
+crestron_update_msg() { echo "Crestron is installing a firmware update (its auto update; a restored panel reports \"PUF: Unknown\" and installs the same firmware again). It writes the card and the eMMC and ends with a reboot, about 15 min in total. The installer waits and does not interrupt it. Do not power off the panel"; }
+wait_android_stable_net() { local timeout=$1 limit=$1 t0 el poll=${TSX_ROOT_POLL_S:-20} fw ls bc mounted proc zip busy rooted=0 noroot=0 now why= ROMD=/mnt/sdcard/ROMDISK/romdisk/user/system
 	log "  waiting for stock Android to settle (network-only, tolerates one self-reboot, timeout ${timeout}s)"
+	t0=$(date +%s)
 	while :; do
 		# In network-only mode every check below needs rootsh, and rootsh needs a
 		# Crestron account. A factory-fresh unit has none. Until root works once,
 		# each poll first runs crestron-admin: it creates the account, or it
-		# checks the console login. Only a working console login leads to a
-		# rootsh try, so a wrong password costs one failed login, not one per
-		# poll.
-		now=0
+		# checks the console login, and it turns the Crestron auto update off.
+		# Only a working console login leads to a rootsh try, so a wrong
+		# password costs one failed login, not one per poll.
+		now=0 why=
 		if [ "$rooted" = 0 ]; then
 			log "  Crestron account and console login (steps/crestron-admin)"
 			admin_console; admin_stop
@@ -139,14 +144,47 @@ wait_android_stable_net() { local timeout=$1 waited=0 poll=${TSX_ROOT_POLL_S:-20
 		fi
 		if [ "$rooted" = 1 ] && { [ "$now" = 1 ] || rootsh_ok; }; then
 			fw=$("$ROOTSH" "$PANEL" 'fw_printenv fwUpgrade' 2>/dev/null) || fw=
-			ls=$("$ROOTSH" "$PANEL" 'ls /mnt/sdcard/ROMDISK/romdisk/user/system/image' 2>/dev/null) || true
+			ls=$("$ROOTSH" "$PANEL" "ls $ROMD/image" 2>/dev/null) || true
+			zip=$("$ROOTSH" "$PANEL" "ls $ROMD | grep -c '^image_.*\\.zip\$'; true" 2>/dev/null | tail -n 1) || zip=
+			proc=$("$ROOTSH" "$PANEL" "busybox ps | grep -v grep | grep -c -e crestronLocalUpgrade -e crestronUpgrade; true" 2>/dev/null | tail -n 1) || proc=
 			bc=$("$ROOTSH" "$PANEL" 'getprop sys.boot_completed' 2>/dev/null) || bc=
 			mounted=$("$ROOTSH" "$PANEL" 'grep -c mmcblk0p5 /proc/mounts' 2>/dev/null) || mounted=
-			if grep -q 'fwUpgrade=0' <<<"$fw" && grep -qi 'no such file' <<<"$ls" && grep -q '^1$' <<<"$bc" && grep -qE '^[1-9][0-9]*$' <<<"$mounted"; then
-				log "  ok: Android settled (network-only)"; return 0; fi
+			if grep -q 'fwUpgrade=0' <<<"$fw" && grep -qi 'no such file' <<<"$ls" && [ "${zip:-x}" = 0 ] && [ "${proc:-x}" = 0 ] \
+				&& grep -q '^1$' <<<"$bc" && grep -qE '^[1-9][0-9]*$' <<<"$mounted"; then
+				log "  ok: Android settled (network-only), no Crestron update staged or running"; return 0; fi
+			if ! grep -q 'fwUpgrade=0' <<<"$fw" || [ "${proc:-0}" != 0 ]; then
+				# Crestron applies an update now. Never interrupt it: wait longer.
+				why="$(crestron_update_msg) (fwUpgrade=${fw#*=}, update script running: ${proc:-?})"
+				[ "$limit" -ge "${TSX_CRESTRON_UPDATE_S:-2400}" ] || limit=${TSX_CRESTRON_UPDATE_S:-2400}
+			elif ! grep -qi 'no such file' <<<"$ls" || [ "${zip:-0}" != 0 ]; then
+				# A downloaded or unpacked update with fwUpgrade=0 and no update
+				# script: either a download is still running, or an update that a
+				# reboot cut off. Crestron's own update script removes the folder
+				# in that case too. Ask the auto update first.
+				busy=$("$CRESTRONADMIN" --update-busy "$PANEL" 2>/dev/null) || busy=
+				if [ "$busy" = no ]; then
+					if "$ROOTSH" "$PANEL" "fw_printenv fwUpgrade | grep -qx fwUpgrade=0 && ! busybox ps | grep -v grep | grep -q -e crestronLocalUpgrade -e crestronUpgrade && busybox rm -rf $ROMD/image $ROMD/image_*.zip && sync && echo CLEARED" 2>/dev/null | grep -q CLEARED; then
+						log "  removed a staged Crestron update that no process applies (fwUpgrade=0, auto update idle): $ROMD/image and image_*.zip. The install replaces Android anyway"
+						continue
+					fi
+					why="a staged Crestron update could not be removed"
+				else
+					why="$(crestron_update_msg) (the auto update reports an update in progress: ${busy:-no answer})"
+					[ "$limit" -ge "${TSX_CRESTRON_UPDATE_S:-2400}" ] || limit=${TSX_CRESTRON_UPDATE_S:-2400}
+				fi
+			else
+				grep -q '^1$' <<<"$bc" || why="$why, Android has not finished its boot (sys.boot_completed=${bc:-?})"
+				grep -qE '^[1-9][0-9]*$' <<<"$mounted" || why="$why, the sdcard partition p5 is not mounted"
+				why=${why#, }
+			fi
+			[ -z "$why" ] || log "  not settled yet: $why"
+		elif [ "$rooted" = 1 ]; then
+			why="the panel does not answer root over ssh (a reboot?)"
+			log "  not settled yet: $why"
 		fi
-		waited=$((waited + poll)); [ "$waited" -lt "$timeout" ] || die "timeout (${timeout}s) waiting for Android to settle (network-only)"
-		log "  still waiting (network-only): ${waited}/${timeout}s"
+		el=$(( $(date +%s) - t0 ))
+		[ "$el" -lt "$limit" ] || die "timeout (${limit}s) waiting for Android to settle (network-only)${why:+: $why}"
+		log "  still waiting (network-only): ${el}/${limit}s"
 		sleep "$poll"
 	done
 }
@@ -169,7 +207,7 @@ elif is_mainline; then
 	die "panel $PANEL runs mainline and --uart is not yes: network-only mode cannot force it back to stock Android (needs the UART once)"
 fi
 
-if [ "$UART_MODE" = yes ]; then wait_android_stable 720; else wait_android_stable_net 720; fi
+if [ "$UART_MODE" = yes ]; then wait_android_stable 720; else wait_android_stable_net "${TSX_SETTLE_S:-720}"; fi
 
 if rootsh_ok; then
 	log "== done: rootsh already answers uid=0 on $PANEL"

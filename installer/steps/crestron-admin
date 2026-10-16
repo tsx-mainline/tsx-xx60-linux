@@ -19,6 +19,16 @@
 #        The user and the password have no default. An option wins over the
 #        environment variable (TSX_ADMIN_USER, TSX_ADMIN_PW). A missing value
 #        stops the script before it contacts the panel (lib/tsx-creds.sh).
+#   steps/crestron-admin --autoupdate-off [LOGIN] PANEL
+#        as above, and after the console login works, turn the Crestron auto
+#        update off (console AUENABLE OFF). A Crestron panel with internet
+#        checks for a firmware update every day at its AUTIME, and a restored
+#        panel reports "PUF: Unknown", so it installs the same firmware again.
+#        That update writes the card and the eMMC and reboots the panel: it
+#        must not run during an install.
+#   steps/crestron-admin --update-busy [LOGIN] PANEL
+#        print "yes" when the Crestron auto update reports "Update in
+#        Progress: Yes" (a download or an install), else "no".
 #   steps/crestron-admin --status PANEL
 #                                  print "none" (no account yet) or "exists".
 #                                  It does not log in, change anything or need
@@ -39,9 +49,9 @@
 # Test hook: TSX_ADMIN_POLL_S replaces the waits of 5 s and 10 s.
 set -uo pipefail
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/tsx-creds.sh"
-STATUS=0 H=
+STATUS=0 H= AUOFF=0 BUSY=0
 while [ $# -gt 0 ]; do case "$1" in
-	--status) STATUS=1; shift;;
+	--status) STATUS=1; shift;; --autoupdate-off) AUOFF=1; shift;; --update-busy) BUSY=1; shift;;
 	-h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d'; exit 0;;
 	--*) tsx_creds_opt "$@" && shift "$TSX_CREDS_SHIFT" || { echo "crestron-admin: unknown option $1" >&2; exit 2; };;
 	*) [ -z "$H" ] || { echo "crestron-admin: extra argument $1" >&2; exit 2; }; H=$1; shift;;
@@ -69,6 +79,16 @@ print("none" if not a.get("AuthenticationState", {}).get("IsEnabled") and not a.
 	loc=$(curl -sk -m 15 -c "$JAR" -b "$JAR" -o /dev/null -w '%{redirect_url}' "https://$H/index_device.html") || return 0
 	case "$loc" in *createUser.html) echo none;; *) echo exists;; esac
 }
+if [ "$BUSY" = 1 ]; then
+	# console_cmd is defined below: a short copy here keeps the order simple.
+	f=$(mktemp)
+	printf 'AUSTATUS\r\nbye\r\n' | SSHPASS=$PW timeout 30 sshpass -e ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 "$U@$H" > "$f" 2>&1; rc=$?
+	o=$(tr -d '\r' < "$f"); rm -f "$f"
+	[ "$rc" = 5 ] && { say "the Crestron sshd refused the password of $U"; exit 3; }
+	grep -q 'Update in Progress:' <<<"$o" || { say "no AUSTATUS answer from the console"; exit 1; }
+	if grep -q 'Update in Progress: Yes' <<<"$o"; then echo yes; else echo no; fi
+	exit 0
+fi
 st=$(account_state)
 if [ "$STATUS" = 1 ]; then [ -n "$st" ] || { say "web UI https://$H/ does not answer"; exit 1; }; echo "$st"; exit 0; fi
 case "$st" in
@@ -100,21 +120,41 @@ print(json.dumps({"Device": {"Authentication": {"AuthenticationState": {"AdminUs
 exists) say "the web UI already has an account (or authentication on): not changing it"; TRIES=1;;
 *) say "web UI https://$H/ does not answer"; exit 1;;
 esac
-# console_ver: one login to the Crestron SSH console with the command ver.
-# Returns 0 when the console answers, 5 when sshpass saw the password refused,
-# else the status of ssh or timeout. OUT holds the output of the session.
-console_ver() {
+# console_cmd CMD: one login to the Crestron SSH console with the command CMD.
+# Returns the status of sshpass (5: the password was refused) or timeout. OUT
+# holds the output of the session.
+console_cmd() {
 	local f rc
 	f=$(mktemp)
-	printf 'ver\r\nbye\r\n' | SSHPASS=$PW timeout 30 sshpass -e ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 "$U@$H" > "$f" 2>&1; rc=$?
+	printf '%s\r\nbye\r\n' "$1" | SSHPASS=$PW timeout 30 sshpass -e ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 "$U@$H" > "$f" 2>&1; rc=$?
 	OUT=$(tr -d '\r' < "$f"); rm -f "$f"
+	return "$rc"
+}
+# console_ver: the console answers `ver`. Returns 0, 5 (password refused) or
+# another status.
+console_ver() {
+	local rc=0
+	console_cmd ver || rc=$?
 	printf '%s\n' "$OUT" | grep -qE '\[v[0-9]' && return 0
 	[ "$rc" = 0 ] && rc=1
 	return "$rc"
 }
+# autoupdate_off: AUENABLE OFF, then the state from AUSTATUS.
+autoupdate_off() {
+	console_cmd "AUENABLE OFF" || true
+	if grep -q 'Auto Updates State: OFF' <<<"$OUT"; then say "Crestron auto update is OFF now (AUENABLE OFF): no firmware update starts during the install"
+	else say "WARNING: AUENABLE OFF gave no confirmation: $(grep -v -e '^$' -e '^bye' <<<"$OUT" | tail -n 2 | tr '\n' ' ')"; fi
+	console_cmd AUSTATUS || true
+	grep -q 'Update in Progress: Yes' <<<"$OUT" && say "Crestron reports an update in progress: the installer waits until it ends"
+	return 0
+}
 for i in $(seq 1 "$TRIES"); do
 	rc=0; console_ver || rc=$?
-	if [ "$rc" = 0 ]; then say "ok: console login $U works: $(printf '%s\n' "$OUT" | grep -E '\[v[0-9]' | head -n 1)"; exit 0; fi
+	if [ "$rc" = 0 ]; then
+		say "ok: console login $U works: $(printf '%s\n' "$OUT" | grep -E '\[v[0-9]' | head -n 1)"
+		[ "$AUOFF" = 0 ] || autoupdate_off
+		exit 0
+	fi
 	if grep -qi 'blocked' <<<"$OUT"; then
 		say "the Crestron sshd blocks this host: $(grep -i -m 1 'blocked' <<<"$OUT"). Run REMBLOCKEDIP <this-host-ip> on the Crestron console from another machine"; exit 3
 	fi
