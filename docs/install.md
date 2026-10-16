@@ -160,6 +160,7 @@ The stick boot: U-Boot finds `jabil.txt` on the stick and boots `tsx-rescue.img`
 - The rescue mounts the stick read-only and never changes it. One stick installs many panels.
 - The rescue writes the sha256 of the `STAGE` file to `p1:tsxstick.done`. A panel that boots from the same stick again does not install again.
 - If the stick stays in through a reboot after its install, U-Boot boots the stick again. The rescue then sees `p1:tsxstick.done`, renames `jabil.txt` on the stick to `jabil.txt.done` and reboots into the kiosk. Before you use the stick for the next panel, rename `jabil.txt.done` back to `jabil.txt`.
+- The rescue ignores a stick that has no `jabil.txt`, because U-Boot did not start the rescue from that stick. So a stick that stays in after its install does not stop a later factory restore or push install.
 - The rescue of the stick goes to the golden slot (`p1:boot.img`) and to `p1:tsxboot.img`. The old `p1:boot.img`, for example the golden image of Crestron on a stock card, goes to `/data/tsx/backup/p1-boot-<sha256>.img`.
 - A mainline panel keeps a clean `tsxdata` (`/data`). A stock card is always folded and formatted.
 

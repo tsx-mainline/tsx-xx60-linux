@@ -38,6 +38,9 @@
 #      it (the stick stayed in through a reboot) renames jabil.txt on the
 #      stick to jabil.txt.done and reboots, so U-Boot boots the kiosk. Rename
 #      the file back for the next panel.
+#      A stick without jabil.txt did not boot this rescue: the runner ignores
+#      it, so a stick that stays in does not stop a factory restore or a push
+#      install.
 #   2. Check that the RAM can hold the bundle and root.img.gz (plus 64 MiB).
 #      If not, rename STAGE to STAGE.failed and stop: the host then pushes
 #      the images over ssh.
@@ -167,6 +170,11 @@ else
 	fi
 fi
 if [ ! -f "$S/STAGE" ]; then unmount; nostage; fi
+# U-Boot boots a stick only when the stick has jabil.txt. A stick without it
+# (jabil.txt.done after its install) did not boot this rescue: the rescue runs
+# for a different job, for example a factory restore or a push install. Ignore
+# the stick: no install, no screen message, no reboot when the stick goes out.
+if [ "$FROM" = stick ] && [ ! -f "${TSX_STICK_DIR:-$STM}/jabil.txt" ]; then unmount; nostage; fi
 echo running > "$STATE"
 echo "$$ staged install" > "$RUN/tsx-op" 2>/dev/null
 printf '%s\n' "staged install: starting" > "$STATUS" 2>/dev/null

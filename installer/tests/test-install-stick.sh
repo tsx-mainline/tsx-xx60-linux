@@ -9,6 +9,7 @@
 #      rescue of the stick and tsxstick.done, the old p1:boot.img is kept
 #   3. the same stick again: no second install, and jabil.txt is renamed so
 #      the next boot reaches the kiosk
+#   3b. a stick with jabil.txt.done (it did not boot the rescue): ignored
 #   4. a stick without panel.conf: refused on a stock card, nothing written
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -97,6 +98,17 @@ rm -f "$W/p8"
 rr "$S"; rc=$?
 [ $rc = 0 ] && [ ! -e "$W/p8" ] && grep -q 'installed from this USB stick already' "$W/run/st" && ok "no second install, the screen says why" || bad "second run: rc $rc $(cat "$W/run/st" 2>/dev/null)"
 [ ! -e "$S/jabil.txt" ] && [ -f "$S/jabil.txt.done" ] && ok "the stick stayed in: jabil.txt is now jabil.txt.done, so the next boot reaches the kiosk" || bad "jabil.txt not renamed"
+
+echo "== 3b. the stick stays in with jabil.txt.done: the rescue runs for a different job"
+DONE_ID=$(cat "$W/p1/tsxstick.done")
+rr "$S"; rc=$?
+[ $rc = 0 ] && [ "$(cat "$W/run/tsx-staged.state")" = nostage ] && [ ! -e "$W/p8" ] && [ ! -e "$W/run/st" ] \
+	&& ok "a stick without jabil.txt is ignored: no install, no screen message, no wait for the stick" || bad "jabil.txt.done: rc $rc state $(cat "$W/run/tsx-staged.state") screen $(cat "$W/run/st" 2>/dev/null)"
+[ "$(cat "$W/p1/tsxstick.done")" = "$DONE_ID" ] && [ -f "$S/jabil.txt.done" ] && ok "p1 and the stick did not change" || bad "p1 or the stick changed"
+rm -f "$W/p1/tsxstick.done"
+rr "$S"; rc=$?
+[ $rc = 0 ] && [ "$(cat "$W/run/tsx-staged.state")" = nostage ] && [ ! -e "$W/p8" ] && ok "a stick that this panel did not install, without jabil.txt: no install" || bad "new panel, jabil.txt.done: rc $rc state $(cat "$W/run/tsx-staged.state")"
+echo "$DONE_ID" > "$W/p1/tsxstick.done"
 mv "$S/jabil.txt.done" "$S/jabil.txt"
 
 echo "== 4. a stick without panel.conf"
