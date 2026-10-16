@@ -6,7 +6,7 @@
 #   tsx-make-stick --payload DIR --kernel lts|stable --out DIR
 #                  [--config FILE | --no-config] [--kiosk-url URL] [--yes]
 #                  [--tfa-source auto|panel|puf|none] [--psr-source auto|panel|puf|none]
-#                  [--common DIR]
+#                  [--common DIR] [--check-requirements]
 # --common DIR (or TSX_COMMON, the option wins): the tsx-linux-common checkout
 # for tsx-config. The default is the folder tsx-linux-common next to this
 # repository.
@@ -33,20 +33,33 @@
 # panel.conf: only panels that run mainline install from it, and they keep
 # their own panel.conf. A stock Android panel refuses such a stick.
 #
+# CHECK THE HOST: before it writes a file, the script checks that this host has
+# the commands that these options need (lib/tsx-preflight.sh), and it names all
+# that are missing in one message (exit code 3). --check-requirements runs only
+# this check and exits. The stick needs no connection to a panel, so the host
+# needs no ssh, sshpass or ip.
+#
 # The panel needs USB recovery (tsx-usb-recovery enable): every mainline
 # panel has it after tsx-install-mainline. A stock Android panel gets it from
 # installer/android/tsx-install-usb or the arm step of tsx-install-mainline,
 # once. Then plug in the stick and power-cycle the panel.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/lib/tsx-preflight.sh"   # first: it checks the bash version
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' >&2; }
-PAYLOAD= KERNEL= OUT= CONFIG= NOCONF=0 URL= YES=0 TFA_SOURCE=auto PSR_SOURCE=auto
+PAYLOAD= KERNEL= OUT= CONFIG= NOCONF=0 URL= YES=0 TFA_SOURCE=auto PSR_SOURCE=auto CHECKREQ=0
 while [ $# -gt 0 ]; do case "$1" in
 	--payload) PAYLOAD=$2; shift 2;; --kernel) KERNEL=$2; shift 2;; --out) OUT=$2; shift 2;;
 	--config) CONFIG=$2; shift 2;; --no-config) NOCONF=1; shift;; --kiosk-url) URL=$2; shift 2;; --yes) YES=1; shift;;
 	--tfa-source) TFA_SOURCE=$2; shift 2;; --psr-source) PSR_SOURCE=$2; shift 2;; --common) export TSX_COMMON=$2; shift 2;;
+	--check-requirements) CHECKREQ=1; shift;;
 	-h|--help) usage; exit 0;; *) echo "unknown argument $1" >&2; usage; exit 2;;
 esac; done
+# The check of the host (lib/tsx-preflight.sh), before any file is written.
+PF_ARGS=(tfa="$TFA_SOURCE" psr="$PSR_SOURCE")
+[ -n "$CONFIG" ] || [ "$NOCONF" = 1 ] || [ "$YES" = 1 ] || PF_ARGS+=(prompts=1)
+if [ "$CHECKREQ" = 1 ]; then tsx_preflight stick "${PF_ARGS[@]}" check=1 || exit $?; exit 0; fi
+tsx_preflight stick "${PF_ARGS[@]}" || exit $?
 [ -n "$PAYLOAD" ] && [ -n "$OUT" ] || { usage; exit 2; }
 case "$KERNEL" in lts|stable) ;; *) echo "tsx-make-stick: --kernel lts|stable is required" >&2; exit 2;; esac
 case "$TFA_SOURCE" in auto|panel|puf|none) ;; *) echo "--tfa-source must be auto, panel, puf, or none" >&2; exit 2;; esac

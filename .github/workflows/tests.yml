@@ -43,8 +43,10 @@ jobs:
           path: tsx-linux-common
       # gawk: test-tsx-tfa.sh checks the CRC with the awk of the host, and mawk (the
       # awk of the runner) cannot. u-boot-tools: mkimage for test-aml-dt.sh.
-      - name: install build deps (busybox + cpio + gawk for test-tsx-tfa.sh, u-boot-tools for test-aml-dt.sh)
-        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends busybox cpio gawk u-boot-tools
+      # sshpass: the installer drivers check the host first (installer/lib/tsx-preflight.sh).
+      # A dry run on a stock Android panel needs sshpass, and the runner does not have it.
+      - name: install build deps (busybox + cpio + gawk for test-tsx-tfa.sh, u-boot-tools for test-aml-dt.sh, sshpass for the installer host check)
+        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends busybox cpio gawk u-boot-tools sshpass
       # The panels run busybox ash. The sh of the runner is dash. It has no
       # read -t and other parts that the panel scripts use. The steps below that
       # run "sh TEST", and the tests that start sh, need the same sh as the
@@ -114,6 +116,8 @@ jobs:
         run: installer/tests/test-install-netinstall.sh
       - name: installer/tests/test-install-stick.sh - install from a USB stick (tsx-make-stick, the stick stage in the rescue, fake p1)
         run: installer/tests/test-install-stick.sh
+      - name: installer/tests/test-preflight.sh - the check of the host before the panel is contacted, and the list against the scripts
+        run: installer/tests/test-preflight.sh
       - name: installer/tests/test-install-busybox.sh - the host side with busybox tar, find, sha256sum, du, stat and gzip
         run: installer/tests/test-install-busybox.sh
       - name: installer/lib/tests/test-tsx-tfa.sh - TFA9890 DSP files from the panel itself (synthetic boot images/containers)

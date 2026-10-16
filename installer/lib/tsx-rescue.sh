@@ -440,7 +440,7 @@ tsx_rescue_ssh_cur() { tsx_rescue_ssh "${RESCUE_SSH_PW:-}" "$@"; }
 
 # tsx_tar_c ARGS...: tar with the owner root:root in the archive when the tar of
 # the host can (GNU tar). busybox tar has no --owner (the installer runs on any
-# Linux machine with bash, docs/install.md "Host requirements"). Its archive
+# Linux machine with bash, docs/install.md "Requirements on the host"). Its archive
 # keeps the numeric owner, and the rescue extracts as root anyway.
 tsx_tar_c() { if tar --help 2>&1 | grep -q -- '--owner='; then tar --owner=0 --group=0 "$@"; else tar "$@"; fi; }
 

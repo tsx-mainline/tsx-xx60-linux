@@ -14,7 +14,7 @@ Two install methods exist:
 Before you start, make sure these items are ready:
 
 - The panel runs stock Android and the host can reach it over the network.
-- The host has the tools of "Host requirements".
+- The host has the tools of "Requirements on the host". Run the installer with `--check-requirements` to test this.
 - The host can open ssh connections to the panel (TCP port 22). The panel needs no connection to the host (see "Network requirements").
 - REQUIREMENT for a network-only install: the panel has the `rootsh` method. `ssh -tt <user>@<panel-ip> rootsh` must give a root shell. The installer does not set up this method over the network. See "Root over the Crestron sshd".
 - You have a payload (see "Get the payload").
@@ -213,14 +213,54 @@ With `HA_LOGIN_METHOD=token` and a token, the kiosk logs in at first boot. With 
 
 ## Reference
 
-### Host requirements
+### Requirements on the host
 
-The installer runs on any Linux machine with `bash` in `PATH` (in any folder, not only `/bin`) and these tools:
+The installer tools run on a Linux machine. They do not run on macOS, because they use `ip route get`, GNU `stat` and `/proc`. On a Mac, use a Linux virtual machine or a container.
 
-- `ssh`, `python3`, `curl`, `ip`, `tar`, `find`, `sha256sum`, `du`, `stat` and `gzip`. The busybox versions of `tar`, `find`, `sha256sum`, `du`, `stat` and `gzip` also work.
-- `sshpass` for a password login: the Crestron account of stock Android, and a root or rescue password instead of an ssh key.
-- `unzip` (or `busybox` with its `unzip` applet) for the `.puf` download, and `debugfs` (e2fsprogs) for the PSR file from it.
-- A checkout of this repository and a checkout of tsx-linux-common (see "Panel configuration").
+Each tool checks the host before it contacts the panel or writes a file. It names every missing item in one message, with the package names, and exits with code 3. `tsx-install-mainline` does not know at the start what the panel runs. It checks again after the first answer of the panel, still before any login. A reinstall of a mainline panel with an ssh key does not need `sshpass`. A panel on stock Android does.
+
+To test the host first, add `--check-requirements` to the command. The tool checks the host for the options that you give and exits. It needs no panel address. Exit code 0 means the host is ready. Exit code 3 means that something is missing.
+
+```sh
+installer/tsx-install-mainline --check-requirements --payload installer/out/payload --kernel lts
+installer/tsx-restore-factory --check-requirements --puf rootfs/vendor-cache/tsw-xx60_3.002.1061.001.puf
+installer/tsx-make-stick --check-requirements
+```
+
+**Always, for every tool:**
+
+- `bash` 4.1 or newer, with `/dev/tcp`. Every Linux distribution has it.
+- The standard tools `awk`, `basename`, `cat`, `chmod`, `cp`, `cut`, `date`, `dirname`, `du`, `find`, `grep`, `head`, `install`, `ln`, `ls`, `mkdir`, `mktemp`, `mv`, `rm`, `sed`, `seq`, `sha256sum`, `sleep`, `sort`, `stat`, `tail`, `tee`, `timeout`, `tr`, `uname`, `wc` and `xargs`. The busybox versions also work.
+- A checkout of this repository, and a checkout of tsx-linux-common (see "Panel configuration").
+
+**What each mode needs in addition:**
+
+| Mode | Tools |
+|---|---|
+| `tsx-install-mainline`, a panel on stock Android | `ssh`, `sshpass`, `tar`, `ip`, `curl`, `python3`. With `--stage auto` or `yes`, also `gzip`. |
+| `tsx-install-mainline`, reinstall of a mainline panel with an ssh key | `ssh`, `tar`, `ip`. With a payload and `--stage auto` or `yes`, also `gzip` and `python3`. With `--fetch`, nothing more. |
+| The same, with a root or rescue password | Also `sshpass`. |
+| `--tfa-source puf` or `--psr-source puf`, and `auto` when the panel has no file | `curl` or `wget`, `unzip` (or `busybox` with its `unzip` applet), `gzip`, `cpio`, `od`, `dd`. For the PSR file, also `debugfs` (from e2fsprogs). |
+| `--uart yes` | `pgrep`, `tools/bench/uc.sh`, and the serial logger `tools/bench/serlog.py` must run (it needs the python3 module `serial`). With `--sshshell`, also `nohup` and `python3`. |
+| The prompts for `panel.conf` | To save a root password: `openssl`, or `mkpasswd`, or `python3` with the module `crypt`. Also `base64` for the ESPHome key. |
+| `tsx-restore-factory` | `sshpass`, `ssh`, `tar`, `ip`, `curl`, `python3`. |
+| `tsx-restore-factory` without `--bundle` | Also `unzip`, `mke2fs`, `e2fsck`, `cmp`, `diff`, `dd`, `gzip`, `truncate`, `cksum`. Also `debugfs` for the `rootsh` patch (not with `--stock-sshshell`). |
+| `tsx-make-stick` | `gzip`, `python3`. No `ssh` and no network. |
+
+The optional tools make a path faster: `fping` or `ping` for the search of the rescue by MAC address, and `pigz` for the compression of `root.img`.
+
+The host must also have a route to the panel (`ip route get <panel-ip>` shows an address of the host), and `python3` must have the standard modules `argparse`, `json`, `struct`, `sys` and `zlib`.
+
+**Install the packages:**
+
+| System | Command |
+|---|---|
+| Debian, Ubuntu | `sudo apt install sshpass openssh-client python3 curl unzip e2fsprogs iproute2 tar gzip cpio gawk findutils coreutils diffutils procps` |
+| Fedora | `sudo dnf install sshpass openssh-clients python3 curl unzip e2fsprogs iproute tar gzip cpio gawk findutils coreutils diffutils procps-ng` |
+| Arch | `sudo pacman -S sshpass openssh python curl unzip e2fsprogs iproute2 tar gzip cpio gawk findutils coreutils diffutils procps-ng` |
+| Alpine | `apk add bash sshpass openssh-client python3 curl unzip e2fsprogs e2fsprogs-extra iproute2 tar gzip cpio gawk findutils coreutils diffutils procps` |
+
+You need only the packages of your mode. On Debian, the e2fsprogs commands are in `/sbin`. `tsx-restore-factory` looks for them in `PATH`, so run `export PATH=$PATH:/sbin:/usr/sbin` first.
 
 ### Installer options
 
@@ -249,6 +289,7 @@ installer/tsx-install-mainline <panel-ip> --payload DIR --kernel lts|stable [opt
 | `--stage-wait SECONDS` | `2400` | The time that the installer waits for a staged install to finish. |
 | `--ssh-ciphers LIST` | `chacha20-poly1305@openssh.com` first | The ssh cipher list for the streams into the rescue (see "Network requirements"). |
 | `--common DIR` | `tsx-linux-common` next to this repository | The tsx-linux-common checkout (see "Panel configuration"). |
+| `--check-requirements` | off | Check the host for the other options, print the result and exit. Exit code 0: the host is ready. Exit code 3: something is missing. Needs no panel address (see "Requirements on the host"). |
 
 ### Options and environment variables
 

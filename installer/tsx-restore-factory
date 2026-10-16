@@ -90,6 +90,7 @@
 #   --bundle DIR  --results FILE  --from-step N  --to-step N  --yes  --dry-run
 #   --rescue-ip IP  overrides the rescue-IP discovery in UART and network-only mode
 #   --ws-ip IP  --stable-min N
+#   --check-requirements  check this host for the given options and exit
 #   --install-config FILE  the install config file of tsx-install-mainline
 #          (KEY=VALUE, installer/tsx-install.conf.example). This script uses
 #          PANEL, PUF, UART, SSHSHELL, SSH_CIPHERS, ADMIN_USER, ADMIN_PASSWORD
@@ -119,12 +120,18 @@
 #   --root-ssh  accepted, and the default. Step 3 uses these three options only
 #          when it builds a bundle here (no --bundle). With --bundle,
 #          mkbundle.sh has already run and the driver ignores them.
-# Needs: sshpass ssh python3 sha256sum ip awk curl. To build the bundle (no
-# --bundle), also unzip and e2fsprogs (mke2fs, e2fsck, and debugfs for the
-# rootsh patch). UART mode (see --uart) also needs tools/bench/serlog.py to
-# run (logging to tools/bench/boot-2200.log, or $TSX_SERIAL_LOG) and
-# tools/bench/uc.sh. The rescue-IP sweep of network-only mode prefers fping if
-# it is installed.
+# CHECK THE HOST (docs/recovery.md "Restore stock Android without a backup",
+# docs/install.md "Requirements on the host"): before the driver contacts the
+# panel or writes a file, lib/tsx-preflight.sh checks the commands that this
+# run needs. Always: sshpass, ssh, python3, curl, ip, tar and the standard
+# tools. To build the bundle (no --bundle), also unzip, mke2fs, e2fsck, cmp,
+# diff, and debugfs for the rootsh patch (e2fsprogs; on Debian they are in
+# /sbin, so add that folder to PATH). It names ALL that are missing in one
+# message, with package names, and exits with code 3. --check-requirements
+# runs only this check and exits (0 ready, 3 not ready). UART mode (see
+# --uart) also needs tools/bench/serlog.py to run (logging to
+# tools/bench/boot-2200.log, or $TSX_SERIAL_LOG) and tools/bench/uc.sh. The
+# rescue-IP sweep of network-only mode prefers fping if it is installed.
 # Panel commands use this form (sshpass -e reads the password from SSHPASS, so
 # it is not on a command line):
 #   SSHPASS=PASSWORD sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@IP '...'
@@ -133,9 +140,10 @@
 # panel's root password. With none, the script uses your SSH key.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); WORK=$(cd "$HERE/.." && pwd)
+. "$HERE/lib/tsx-preflight.sh"   # first: it checks the bash version
 SERIALDIR=$WORK/tools/bench; UC=$SERIALDIR/uc.sh; SERLOG=${TSX_SERIAL_LOG:-$SERIALDIR/boot-2200.log}
 BUNDLE= PANEL= RESULTS= FROM_STEP=1 TO_STEP=7 YES=0 DRYRUN=0 WSIP= STABLE_MIN=9 RPW= RIP= UART= ICFILE=
-PUF= ENVFILE=
+PUF= ENVFILE= CHECKREQ=0
 ROOTSSH=1 ROOTSSH_SET=0 SSHSHELL_OPT=   # rootsh patch by default
 PRISTINE_PUF_SHA=96438108e3175b66c09f1df284ded5fe155593ba06e069e154688b04f395e40b   # rootfs/vendor-fetch.sh TFA_PUF_SHA256
 PUF_CACHED=$WORK/rootfs/vendor-cache/tsw-xx60_3.002.1061.001.puf   # where rootfs/vendor-fetch.sh keeps it
@@ -149,7 +157,7 @@ while [ $# -gt 0 ]; do case "$1" in
 	--stable-min) STABLE_MIN=$2; shift 2;; --rescue-ip) RIP=$2; shift 2;; --rescue-pw) RPW=$2; shift 2;; --ssh-ciphers) export TSX_SSH_CIPHERS=$2; shift 2;; --uart) UART=$2; shift 2;;
 	--root-ssh) ROOTSSH=1; ROOTSSH_SET=1; shift;; --sshshell) ROOTSSH=1; ROOTSSH_SET=1; SSHSHELL_OPT=$2; shift 2;; --stock-sshshell) ROOTSSH=0; SSHSHELL_OPT=-; shift;; -h|--help) usage; exit 0;;
 	--rescue-password|--rescue-password-file) tsx_creds_opt "$@"; RPW=$TSX_RESCUE_PW; shift 2;;
-	--install-config) ICFILE=$2; shift 2;;
+	--install-config) ICFILE=$2; shift 2;; --check-requirements) CHECKREQ=1; shift;;
 	--*) if tsx_creds_opt "$@"; then shift "$TSX_CREDS_SHIFT"; else echo "unknown option $1" >&2; usage; exit 2; fi;; *) [ -z "$PANEL" ] || { echo "extra argument $1" >&2; exit 2; }; PANEL=$1; shift;; esac; done
 # option > environment variable > install config file (lib/tsx-creds.sh)
 RPW=${RPW:-${TSX_RESCUE_PW:-}} PUF=${PUF:-${TSX_PUF:-}}
@@ -162,6 +170,14 @@ if [ -n "$ICFILE" ]; then
 	[ -n "${TSX_SSH_CIPHERS:-}" ] || [ -z "$IC_SSH_CIPHERS" ] || export TSX_SSH_CIPHERS=$IC_SSH_CIPHERS
 fi
 UART=${UART:-auto}
+# The check of the host (lib/tsx-preflight.sh): before any file and any contact
+# with the panel. With no --bundle, this run builds the bundle here.
+PF_ARGS=(uart="$UART")
+[ -n "$BUNDLE" ] || PF_ARGS+=(build=1)
+[ "$ROOTSSH" != 1 ] || PF_ARGS+=(rootssh=1)
+[ -z "$WSIP" ] || PF_ARGS+=(wsip=1)
+if [ "$CHECKREQ" = 1 ]; then tsx_preflight restore "${PF_ARGS[@]}" check=1 panel="${PANEL:-none}" || exit $?; exit 0; fi
+tsx_preflight restore "${PF_ARGS[@]}" panel="${PANEL:-none}" || exit $?
 [ -n "$PANEL" ] || { echo "tsx-restore-factory: the panel address is missing: give PANEL_IP, or PANEL in the install config file" >&2; usage; exit 2; }
 case "$UART" in auto|yes|no) ;; *) echo "--uart must be auto, yes, or no" >&2; exit 2;; esac
 [ -n "$RESULTS" ] || RESULTS=$HERE/results/tsx-restore-factory-$(date +%Y%m%d-%H%M).txt
@@ -235,7 +251,6 @@ log "== tsx-restore-factory: PANEL=$PANEL BUNDLE=$BUNDLE from-step=$FROM_STEP dr
 
 # ---------------------------------------------------------------- step 1 --
 log "== step 1: inputs"
-for c in sshpass ssh python3 sha256sum ip awk curl; do command -v $c >/dev/null || die "missing $c"; done
 check_bundle() {
 	[ -f "$BUNDLE/factory.manifest" ] && [ -f "$BUNDLE/emmc.manifest" ] && [ -f "$BUNDLE/SHA256SUMS" ] || die "$BUNDLE is not a factory-restore bundle"
 	(cd "$BUNDLE" && sha256sum -c SHA256SUMS >/dev/null) || die "bundle SHA256SUMS mismatch"
@@ -248,7 +263,6 @@ else
 	if [ -z "$PUF" ] && [ -f "$PUF_CACHED" ]; then PUF=$PUF_CACHED; log "  no --puf: using the copy rootfs/vendor-fetch.sh downloaded: $PUF"; fi
 	[ -n "$PUF" ] || die "no .puf given (--puf FILE or \$TSX_PUF), and none in rootfs/vendor-cache/. Run rootfs/vendor-fetch.sh once. It downloads the public Crestron tsw-xx60_3.002.1061.001.puf and checks its sha256. Or pass --puf"
 	[ -f "$PUF" ] || die "no .puf at $PUF (--puf)"
-	for c in unzip mke2fs e2fsck $([ "$ROOTSSH" = 1 ] && echo debugfs); do command -v $c >/dev/null || die "$c is needed to build the bundle (install unzip and e2fsprogs, and check that /sbin is in PATH)"; done
 	PUFSHA=$(sha256sum < "$PUF" | cut -d' ' -f1)
 	if [ "$PUFSHA" = "$PRISTINE_PUF_SHA" ]; then log "  .puf $PUF: pristine 3.002.1061.001 ($PUFSHA)"
 	else log "  WARNING: .puf $PUF sha256 $PUFSHA is not the known pristine package (rootfs/vendor-fetch.sh)$([ "$ROOTSSH" = 1 ] && [ -z "$SSHSHELL" ] && echo ". The rootsh patch (default) refuses a modified sshShell.sh in step 3. Use the pristine .puf, --sshshell FILE or --stock-sshshell")"; fi

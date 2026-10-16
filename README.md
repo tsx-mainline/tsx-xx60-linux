@@ -48,6 +48,21 @@ The support status of each board revision and touch glass is in [docs/compatibil
 
 Read [docs/recovery.md](docs/recovery.md) when an install fails or when you want stock Android back.
 
+## Requirements on the host
+
+The installer tools run on a Linux machine with `bash` 4.1 or newer. They do not run on macOS. Each tool checks the host before it contacts the panel, names every missing command in one message, and exits with code 3. To test the host first, add `--check-requirements` to the command.
+
+| Mode | Tools in addition to the standard tools (`coreutils`, `findutils`, `grep`, `sed`, `awk`) |
+|---|---|
+| Install from stock Android | `ssh`, `sshpass`, `tar`, `ip`, `curl`, `python3`, `gzip` |
+| Reinstall of a mainline panel (ssh key) | `ssh`, `tar`, `ip`. With a payload and a stage: `gzip`, `python3`. With a password: `sshpass`. |
+| Speaker DSP and Bluetooth files from the Crestron `.puf` | `curl` or `wget`, `unzip`, `gzip`, `cpio`, `od`, `dd`, `debugfs` |
+| `--uart yes` | `pgrep`, a running `tools/bench/serlog.py` |
+| `tsx-restore-factory` | `sshpass`, `ssh`, `tar`, `ip`, `curl`, `python3`. To build the bundle: `unzip`, `mke2fs`, `e2fsck`, `debugfs`, `cmp`, `diff`. |
+| `tsx-make-stick` | `gzip`, `python3` |
+
+On Debian and Ubuntu, `sudo apt install sshpass openssh-client python3 curl unzip e2fsprogs iproute2 tar gzip cpio gawk` installs all of them. Fedora (`dnf`), Arch (`pacman`) and Alpine (`apk`) commands, and the full list for each mode, are in [docs/install.md](docs/install.md) "Requirements on the host".
+
 ## Repository layout
 
 | Directory | Contents |

@@ -56,6 +56,17 @@
 #                        [--stage auto|yes|no] [--fetch TAG|URL]
 #                        [--release-url URL] [--stage-wait SECONDS]
 #                        [--ssh-ciphers LIST] [--common DIR]
+#                        [--check-requirements]
+#
+# CHECK THE HOST (docs/install.md "Requirements on the host"): before the
+# script contacts the panel or writes a file, it checks that this host has
+# every command and part that the chosen options need (lib/tsx-preflight.sh).
+# It names ALL that are missing in one message, with the package names for
+# apt, dnf, pacman and apk, and exits with code 3. After it finds out what
+# the panel runs, it checks again, still before any login (stock Android
+# needs sshpass, curl and python3). --check-requirements runs only this
+# check for the given options and exits: 0 when the host is ready, 3 when not.
+# It needs no panel address.
 #
 # REQUIREMENT (stock Android with no UART, docs/install.md "Root over the
 # Crestron sshd"): the panel must have the rootsh method. Then
@@ -160,11 +171,9 @@
 # The prompts and the checks of panel.conf use the tsx-config of tsx-linux-common.
 # --common DIR (or TSX_COMMON) is the top of a checkout. The default is the
 # folder tsx-linux-common next to this repository.
-# Host tools: sshpass ssh python3 curl sha256sum ip. unzip (or busybox with
-# its unzip applet) is needed only for the .puf download, and debugfs
-# (e2fsprogs) only for the PSR file from it.
-# Without that download, a panel that has no DSP files gets no vendor speaker
-# tuning.
+# Host tools: see "CHECK THE HOST" above and docs/install.md "Requirements on
+# the host". Without the .puf download, a panel that has no DSP files gets no
+# vendor speaker tuning.
 # NETWORK (docs/install.md "Network requirements"): this host opens every
 # connection (ssh to the Crestron sshd, the kiosk and the rescue), and every
 # file goes over these connections. The panel never connects to this host, so
@@ -180,6 +189,7 @@
 # network probe that picks the path.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/lib/tsx-preflight.sh"   # first: it checks the bash version
 . "$HERE/lib/tsx-rescue.sh"
 . "$HERE/lib/tsx-tfa.sh"   # tsx_tfa_plan (the rest of it runs in the rescue)
 . "$HERE/lib/tsx-psr.sh"   # tsx_psr_plan (the rest of it runs in the rescue)
@@ -187,7 +197,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' >&2; echo >&2; tsx_creds_help >&2; }   # the whole header comment
 . "$HERE/lib/tsx-creds.sh"   # --admin-user and the other logins: option, environment, prompt
-PANEL= PAYLOAD= KERNEL= UART_OPT= URL= SSHSHELL= CONFIG= YES=0 DRYRUN=0 RESULTS= WIPE_DATA=0 TFA_SOURCE= PSR_SOURCE= STAGE_OPT= FETCH= ICFILE=
+PANEL= PAYLOAD= KERNEL= UART_OPT= URL= SSHSHELL= CONFIG= YES=0 DRYRUN=0 RESULTS= WIPE_DATA=0 TFA_SOURCE= PSR_SOURCE= STAGE_OPT= FETCH= ICFILE= CHECKREQ=0
 while [ $# -gt 0 ]; do case "$1" in
 	--payload) PAYLOAD=$2; shift 2;; --kernel) KERNEL=$2; shift 2;; --uart) UART_OPT=$2; shift 2;;
 	--kiosk-url) URL=$2; shift 2;; --sshshell) SSHSHELL=$2; shift 2;; --results) RESULTS=$2; shift 2;;
@@ -196,7 +206,7 @@ while [ $# -gt 0 ]; do case "$1" in
 	--release-url) export TSX_RELEASE_URL=$2; shift 2;; --stage-wait) export TSX_STAGE_WAIT_S=$2; shift 2;;
 	--ssh-ciphers) export TSX_SSH_CIPHERS=$2; shift 2;; --common) export TSX_COMMON=$2; shift 2;;
 	--install-config) ICFILE=$2; shift 2;;
-	--yes) YES=1; shift;; --dry-run) DRYRUN=1; shift;; -h|--help) usage; exit 0;;
+	--yes) YES=1; shift;; --dry-run) DRYRUN=1; shift;; --check-requirements) CHECKREQ=1; shift;; -h|--help) usage; exit 0;;
 	--*) if tsx_creds_opt "$@"; then shift "$TSX_CREDS_SHIFT"; else echo "unknown option $1" >&2; usage; exit 2; fi;;
 	*) [ -z "$PANEL" ] || { echo "extra argument $1" >&2; exit 2; }; PANEL=$1; shift;;
 esac; done
@@ -216,6 +226,21 @@ fi
 PAYLOAD=${PAYLOAD:-$HERE/out/payload} UART_OPT=${UART_OPT:-auto} STAGE_OPT=${STAGE_OPT:-auto} TFA_SOURCE=${TFA_SOURCE:-auto} PSR_SOURCE=${PSR_SOURCE:-auto}
 # A missing panel address or kernel flavor: ask on a terminal, else stop.
 ASK=0; [ "$YES" != 1 ] && [ "$DRYRUN" != 1 ] && [ -t 0 ] && ASK=1
+# The check of the host (lib/tsx-preflight.sh): before any question, any file
+# and any contact with the panel. PF_ARGS says what this run will do. After the
+# probe of the panel, the check runs again with kind=ANSWER.
+PF_ARGS=(stage="$STAGE_OPT" uart="$UART_OPT" tfa="$TFA_SOURCE" psr="$PSR_SOURCE")
+[ -z "$FETCH" ] || PF_ARGS+=(fetch=1)
+[ -z "${TSX_ADMIN_PW:-}${TSX_MAINLINE_PW:-}${TSX_RESCUE_PW:-}" ] || PF_ARGS+=(pw=1)
+[ -n "$CONFIG" ] || [ "$YES" = 1 ] || [ "$DRYRUN" = 1 ] || PF_ARGS+=(prompts=1)
+[ -z "$SSHSHELL" ] || PF_ARGS+=(sshshell=1)
+[ "$DRYRUN" != 1 ] || PF_ARGS+=(routesoft=1)
+[ -z "${TSX_PANEL_KIND:-}" ] || PF_ARGS+=(kind="$TSX_PANEL_KIND")
+if [ "$CHECKREQ" = 1 ]; then
+	tsx_preflight install "${PF_ARGS[@]}" check=1 panel="${PANEL:-none}" || exit $?
+	exit 0
+fi
+tsx_preflight install "${PF_ARGS[@]}" panel="${PANEL:-none}" || exit $?
 if [ -z "$PANEL" ] && [ "$ASK" = 1 ]; then read -r -p "Panel address (IP or name): " PANEL || PANEL=; [ -z "$PANEL" ] || TSX_CREDS_PROMPTED=1; fi
 [ -n "$PANEL" ] || { echo "tsx-install-mainline: the panel address is missing: give PANEL_IP, or PANEL in the install config file" >&2; usage; exit 2; }
 case "$PANEL" in *[!A-Za-z0-9.:_-]*) echo "tsx-install-mainline: the panel address has a character that an address does not have: $PANEL" >&2; exit 2;; esac
@@ -405,6 +430,9 @@ panel_kind() {
 	esac
 }
 KIND=$(panel_kind)
+# What the panel runs decides what this host needs (stock Android: sshpass, curl,
+# python3). Check again before any login.
+tsx_preflight install "${PF_ARGS[@]}" kind="$KIND" panel="$PANEL" || exit $?
 # The rescue answers, but it takes none of our logins: it shows a one-time
 # password on the panel screen (docs/recovery.md "Rescue login"). Ask for it on
 # a terminal, else stop: the other paths cannot reach this panel.
