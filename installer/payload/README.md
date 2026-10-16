@@ -40,7 +40,7 @@ Then the panel reboots. The kiosk boots from p2. The initramfs formats p4 as `ts
 ### Flow 2: stock Android unit, root shell, by hand
 
 1. Plug the stick into the USB-A socket of the panel. Android must run.
-2. Run `ssh -tt $TSX_ADMIN_USER@<panel-ip>`. Root bash needs the tty. The default user is `admin`.
+2. Run `ssh -tt <admin-user>@<panel-ip>` with your Crestron admin user. Root bash needs the tty.
 3. Run `bash /mnt/media_rw/udisk0/tsx-install/android/tsx-android-install.sh preflight`. This step only reads. Every line must say `ok`.
 4. Run `bash /mnt/media_rw/udisk0/tsx-install/android/tsx-android-install.sh install`.
 5. Type `INSTALL`. The script backs up to the stick and to `/data/local/tsx-backup`. It writes `p2` (kiosk rootfs), `p1:boot.img` (the rescue system), `p1:tsxboot.img` and the U-Boot hook (with the `fw_setenv` of Android). It writes the MBR byte last. Then it reboots.
@@ -176,7 +176,7 @@ With `--uart auto`, the script uses the serial console only if `serlog.py` seems
 Make sure of these conditions before you use this mode:
 
 - Root over ssh works through the Crestron sshd (`steps/rootsh`). The patched `/system/bin/sshShell.sh` (`out/sshShell.sh`, see [docs/install.md](../../docs/install.md) "Prerequisites") is already on the panel.
-- A Crestron admin account exists. Set `$TSX_ADMIN_USER` (default `admin`) and `$TSX_ADMIN_PW` (required).
+- A Crestron admin account exists. Give its user and password with `--admin-user` and `--admin-password-file` (or `TSX_ADMIN_USER` and `TSX_ADMIN_PW`). They have no default.
 
 A factory-fresh unit can have no account but already have the `sshShell.sh` patch. Run `steps/crestron-admin <panel-ip>` first. It creates the account through the first-run call of the web UI. The driver then reaches root without the UART. If the `sshShell.sh` patch is missing, network-only mode cannot install it. The install needs a root shell, from the UART or from an earlier root session. The driver then stops with an error that says so.
 

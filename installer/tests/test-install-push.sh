@@ -152,7 +152,7 @@ EOF
 chmod +x "$W/pty/bin/"*
 python3 -I -c 'import sys; sys.stdout.buffer.write(bytes(range(256)) * 64 + b"\n~.\n~?\r\n\x03\x04\x11\x13\x1a\x7f")' > "$W/put.bin"
 head -c $((2 * MIB)) /dev/urandom >> "$W/put.bin"
-OUT=$(PATH="$W/pty/bin:$PATH" TSX_ADMIN_PW=x "$HERE/steps/rootsh" --put fakepanel "$W/put.bin" "$W/pty/dst/put.bin" 2>&1); rc=$?
+OUT=$(PATH="$W/pty/bin:$PATH" TSX_ADMIN_USER=x TSX_ADMIN_PW=x "$HERE/steps/rootsh" --put fakepanel "$W/put.bin" "$W/pty/dst/put.bin" 2>&1); rc=$?
 [ $rc = 0 ] && ok "rootsh --put rc 0" || bad "rootsh --put rc $rc: $OUT"
 cmp -s "$W/put.bin" "$W/pty/dst/put.bin" && ok "every byte value passed the pty unchanged (^C, ^D, ^S, DEL, CR, ~.)" || bad "the copy differs"
 case "$OUT" in *"verified ("*"sha256 "*) ok "the copy is sha256 checked";; *) bad "no verify line: $OUT";; esac
@@ -164,7 +164,7 @@ cat > "$W/pty/bin/busybox" <<EOF
 EOF
 chmod +x "$W/pty/bin/busybox"
 sed -i 's|exec python3|export PATH='"$W/pty/bin"':$PATH; exec python3|' "$W/pty/bin/ssh"
-OUT=$(PATH="$W/pty/bin:$PATH" TSX_ADMIN_PW=x TSX_PUT_READY_S=6 timeout 60 "$HERE/steps/rootsh" --put fakepanel "$W/put.bin" "$W/pty/dst/put2.bin" 2>&1); rc=$?
+OUT=$(PATH="$W/pty/bin:$PATH" TSX_ADMIN_USER=x TSX_ADMIN_PW=x TSX_PUT_READY_S=6 timeout 60 "$HERE/steps/rootsh" --put fakepanel "$W/put.bin" "$W/pty/dst/put2.bin" 2>&1); rc=$?
 [ $rc = 1 ] && ok "no raw mode: rc 1" || bad "no raw mode: rc $rc: $OUT"
 case "$OUT" in *"did not get ready"*) ok "no raw mode: the message says so, and no byte was sent";; *) bad "no raw mode: $OUT";; esac
 [ ! -s "$W/pty/dst/put2.bin" ] && ok "nothing written without the ready marker" || bad "bytes were written"

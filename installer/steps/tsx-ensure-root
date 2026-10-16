@@ -9,10 +9,14 @@
 #
 #   steps/tsx-ensure-root PANEL_IP [--uart auto|yes|no] [--sshshell FILE]
 #                         [--port N] [--ws-ip IP] [--results FILE] [--dry-run]
+#                         [--admin-user USER] [--admin-password-file FILE]
+#                         [--mainline-password-file FILE]
 #
-# On success, `steps/rootsh PANEL_IP id` answers uid=0. Needs $TSX_ADMIN_PW
-# (the Crestron console and web UI admin password, user $TSX_ADMIN_USER,
-# default admin). --uart auto (the default) uses the UART only if serlog.py
+# On success, `steps/rootsh PANEL_IP id` answers uid=0. Needs the Crestron
+# admin user and password (the console and web UI login): --admin-user and
+# --admin-password-file, or TSX_ADMIN_USER and TSX_ADMIN_PW. An option wins
+# over the environment variable. There is no default. A missing value stops
+# the script before it contacts the panel. --uart auto (the default) uses the UART only if serlog.py
 # runs and ../../tools/bench/uc.sh exists. --uart no is network-only. It needs
 # rootsh to work already, or --sshshell installed by other means. The script
 # cannot install the sshShell.sh patch without the UART.
@@ -23,16 +27,19 @@ UC="$SERIALDIR/uc.sh"
 ROOTSH="$INSTALLER/steps/rootsh"
 . "$INSTALLER/lib/tsx-rescue.sh"   # is_crestron_sshd: never try a root/password login on the Crestron sshd
 CRESTRONADMIN="$INSTALLER/steps/crestron-admin"
-usage() { sed -n '2,18p' "$0" >&2; }
+usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' >&2; }
+. "$INSTALLER/lib/tsx-creds.sh"
 PANEL= UART_OPT=auto SSHSHELL= PORT=8079 WSIP= RESULTS= DRYRUN=0
 while [ $# -gt 0 ]; do case "$1" in
 	--uart) UART_OPT=$2; shift 2;; --sshshell) SSHSHELL=$2; shift 2;; --port) PORT=$2; shift 2;;
 	--ws-ip) WSIP=$2; shift 2;; --results) RESULTS=$2; shift 2;; --dry-run) DRYRUN=1; shift;;
-	-h|--help) usage; exit 0;; --*) echo "unknown option $1" >&2; usage; exit 2;;
+	-h|--help) usage; exit 0;;
+	--*) if tsx_creds_opt "$@"; then shift "$TSX_CREDS_SHIFT"; else echo "unknown option $1" >&2; usage; exit 2; fi;;
 	*) [ -z "$PANEL" ] || { echo "extra argument $1" >&2; exit 2; }; PANEL=$1; shift;;
 esac; done
 [ -n "$PANEL" ] || { usage; exit 2; }
 case "$UART_OPT" in auto|yes|no) ;; *) echo "--uart must be auto, yes, or no" >&2; exit 2;; esac
+[ "$DRYRUN" = 1 ] || tsx_creds_need_admin 0 || exit 2
 [ -n "$RESULTS" ] || RESULTS="results/tsx-ensure-root-$(date +%Y%m%d-%H%M).txt"
 mkdir -p "$(dirname "$RESULTS")"
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$RESULTS" >&2; }
@@ -45,9 +52,10 @@ auto) if command -v pgrep >/dev/null 2>&1 && pgrep -f 'serlog\.py' >/dev/null 2>
 esac
 log "== tsx-ensure-root: PANEL=$PANEL uart=$UART_OPT ($UART_MODE)"
 
-# No fixed root password on the installed system: $TSX_MAINLINE_PW if set, else the ssh key.
+# No fixed root password on the installed system: the mainline password if set
+# (sshpass -e reads SSHPASS), else the ssh key.
 MSSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8"
-if [ -n "${TSX_MAINLINE_PW:-}" ]; then MSSH="sshpass -p $TSX_MAINLINE_PW ssh $MSSH_OPTS root@$PANEL"; else MSSH="ssh -o BatchMode=yes $MSSH_OPTS root@$PANEL"; fi
+if [ -n "${TSX_MAINLINE_PW:-}" ]; then export SSHPASS=$TSX_MAINLINE_PW; MSSH="sshpass -e ssh $MSSH_OPTS root@$PANEL"; else MSSH="ssh -o BatchMode=yes $MSSH_OPTS root@$PANEL"; fi
 is_mainline() { local out; is_crestron_sshd "$PANEL" && return 1; out=$($MSSH uname -r 2>/dev/null) || return 1; case "$out" in [6-9].*|[1-9][0-9].*) return 0;; *) return 1;; esac; }
 rootsh_ok() { local out; out=$(TSX_SSH_TIMEOUT=30 "$ROOTSH" "$PANEL" id 2>/dev/null) || true; grep -q '^uid=0(' <<<"$out"; }
 uart() { local w=5; if [ "$1" = -w ]; then w=$2; shift 2; fi; [ ${#1} -le 80 ] || die "UART command >80 chars: $1"; "$UC" -w "$w" "$1"; }

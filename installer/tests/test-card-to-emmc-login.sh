@@ -1,6 +1,7 @@
 #!/bin/bash
 # Host test: installer/steps/legacy/tsx-card-to-emmc has no fixed password. It uses
-# your SSH key, or the root password in TSX_MAINLINE_PW, and it stops before it
+# your SSH key, or the root password of --mainline-password-file (or
+# TSX_MAINLINE_PW, the option wins), and it stops before it
 # changes anything when it has no login. It needs no panel, no compiler and
 # no network (stub ssh and sshpass).
 set -uo pipefail
@@ -29,7 +30,7 @@ echo "== no login: the script stops =="
 : > "$W_LOG"
 OUT=$(PATH="$W/bin:$PATH" "$S" 192.0.2.9 --img "$W/img" --results "$W/r1.txt" 2>&1); RC=$?
 [ $RC != 0 ] && ok "no login: exit code is not 0" || bad "no login: the script went on"
-echo "$OUT" | grep -q "no fixed password" && echo "$OUT" | grep -q "TSX_MAINLINE_PW" && ok "the message says what to give" || bad "message: $OUT"
+echo "$OUT" | grep -q "no fixed password" && echo "$OUT" | grep -q -- "--mainline-password-file" && ok "the message says what to give" || bad "message: $OUT"
 echo "$OUT" | grep -q "changed nothing" && ok "the message says that nothing changed" || bad "no 'changed nothing'"
 [ "$(wc -l < "$W_LOG" | tr -d ' ')" = 1 ] && grep -q 'BatchMode=yes' "$W_LOG" && ok "one ssh try with the key, no password prompt" || bad "ssh log: $(cat "$W_LOG")"
 grep -q sshpass "$W_LOG" && bad "sshpass used with no password" || ok "no sshpass without TSX_MAINLINE_PW"
@@ -38,6 +39,12 @@ echo "== TSX_MAINLINE_PW: sshpass -e =="
 OUT=$(PATH="$W/bin:$PATH" TSX_MAINLINE_PW=testpw12 "$S" 192.0.2.9 --img "$W/img" --results "$W/r2.txt" 2>&1)
 grep -q 'sshpass -e ssh' "$W_LOG" && grep -q 'SSHPASS=testpw12' "$W_LOG" && ok "the password goes in the environment" || bad "password call: $(cat "$W_LOG")"
 grep -q -- '-p testpw12' "$W_LOG" && bad "the password is on the command line" || ok "the password is not on the command line"
+echo "== --mainline-password-file: the option wins over TSX_MAINLINE_PW =="
+: > "$W_LOG"; printf 'filepw34\n' > "$W/pw"
+OUT=$(PATH="$W/bin:$PATH" TSX_MAINLINE_PW=envpw56 "$S" 192.0.2.9 --mainline-password-file "$W/pw" --img "$W/img" --results "$W/r4.txt" 2>&1)
+grep -q 'SSHPASS=filepw34' "$W_LOG" && ! grep -q envpw56 "$W_LOG" && ok "the password of the file is used, not the environment" || bad "option over env: $(cat "$W_LOG")"
+OUT=$(PATH="$W/bin:$PATH" "$S" 192.0.2.9 --mainline-password-file "$W/nofile" --img "$W/img" --results "$W/r5.txt" 2>&1); RC=$?
+[ $RC = 2 ] && echo "$OUT" | grep -q "cannot read" && ok "a missing password file: exit 2" || bad "missing file: rc $RC $OUT"
 echo "== dry run needs no login =="
 : > "$W_LOG"
 PATH="$W/bin:$PATH" "$S" 192.0.2.9 --img "$W/img" --dry-run --results "$W/r3.txt" >/dev/null 2>&1

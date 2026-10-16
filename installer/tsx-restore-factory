@@ -76,7 +76,9 @@
 #      Both modes then check the Crestron account state (steps/crestron-admin
 #      --status, the /Device/Authentication page of the web UI). A factory-fresh
 #      /data has no account (expected). If an account exists, the Crestron SSH
-#      console (admin, $TSX_ADMIN_PW) must answer `ver`.
+#      console must answer `ver` with the login of --admin-user and
+#      --admin-password-file. They have no default. Without them, step 7
+#      asks on a terminal, else it stops with an error that names them.
 #
 # Options:
 #   --puf FILE  the Crestron firmware package (also $TSX_PUF). The default is
@@ -87,16 +89,22 @@
 #   --env FILE  a 64 KiB env block instead of the live one
 #   --bundle DIR  --results FILE  --from-step N  --to-step N  --yes  --dry-run
 #   --rescue-ip IP  overrides the rescue-IP discovery in UART and network-only mode
-#   --ws-ip IP  --stable-min N  --rescue-pw PW (default: your ssh key)
+#   --ws-ip IP  --stable-min N
+#   --rescue-password-file FILE (or --rescue-password PW, --rescue-pw PW,
+#          TSX_RESCUE_PW)  the rescue login. The default is your ssh key.
+#   --admin-user USER  --admin-password-file FILE (or --admin-password PW,
+#          TSX_ADMIN_USER, TSX_ADMIN_PW)  the Crestron login for step 7
 #   --port N  ignored. The old HTTP download is gone: the bundle goes over ssh.
-#   TSX_SSH_CIPHERS  the ssh cipher list for the push (lib/tsx-rescue.sh)
+#   --ssh-ciphers LIST (or TSX_SSH_CIPHERS)  the ssh cipher list for the push
+#          (lib/tsx-rescue.sh)
+#   An option wins over its environment variable. The logins have no default.
 #   --uart auto|yes|no  the default is auto. UART mode runs only if the serial
 #          logger runs and uc.sh exists. Otherwise steps 2, 6 and 7 fall back to
 #          the network-only checks described above. --uart yes or no forces
 #          the mode.
 #   Root over ssh is ON by default. mkbundle.sh adds a `rootsh` branch to the
 #          sshShell.sh inside the system.img of the .puf. Then
-#          `ssh -tt $TSX_ADMIN_USER@panel rootsh` gets root right after the
+#          `ssh -tt <admin-user>@panel rootsh` gets root right after the
 #          restore with no UART. The Crestron console does not change. This
 #          needs the pristine .puf. Step 3 refuses a modified image.
 #   --sshshell FILE  bake your own sshShell.sh in as it is (also $SSHSHELL)
@@ -110,11 +118,12 @@
 # run (logging to tools/bench/boot-2200.log, or $TSX_SERIAL_LOG) and
 # tools/bench/uc.sh. The rescue-IP sweep of network-only mode prefers fping if
 # it is installed.
-# Panel commands use this allowlisted form:
-#   sshpass -p PASSWORD ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@IP '...'
-# The rescue has no fixed password (docs/recovery.md "Rescue login"): --rescue-pw
-# or $TSX_RESCUE_PW is the one-time password on the panel screen, or the panel's
-# root password. With none, the script uses your SSH key.
+# Panel commands use this form (sshpass -e reads the password from SSHPASS, so
+# it is not on a command line):
+#   SSHPASS=PASSWORD sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@IP '...'
+# The rescue has no fixed password (docs/recovery.md "Rescue login"):
+# --rescue-password-file is the one-time password on the panel screen, or the
+# panel's root password. With none, the script uses your SSH key.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); WORK=$(cd "$HERE/.." && pwd)
 SERIALDIR=$WORK/tools/bench; UC=$SERIALDIR/uc.sh; SERLOG=${TSX_SERIAL_LOG:-$SERIALDIR/boot-2200.log}
@@ -123,17 +132,17 @@ PUF=${TSX_PUF:-} ENVFILE=
 ROOTSSH=1 ROOTSSH_SET=0 SSHSHELL=${SSHSHELL:-}   # rootsh patch by default
 PRISTINE_PUF_SHA=96438108e3175b66c09f1df284ded5fe155593ba06e069e154688b04f395e40b   # rootfs/vendor-fetch.sh TFA_PUF_SHA256
 PUF_CACHED=$WORK/rootfs/vendor-cache/tsw-xx60_3.002.1061.001.puf   # where rootfs/vendor-fetch.sh keeps it
-ADMIN_PW=${TSX_ADMIN_PW:-}   # required before step 7 checks the Crestron console; see below
-ADMIN_USER=${TSX_ADMIN_USER:-admin}
 ENVPY="python3 $HERE/sdcard/tsx-env.py"
 . "$HERE/lib/tsx-rescue.sh"   # is_crestron_sshd (its discovery helpers are redefined below)
-usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' >&2; }   # the whole header comment
+usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' >&2; echo >&2; tsx_creds_help >&2; }   # the whole header comment
+. "$HERE/lib/tsx-creds.sh"   # the logins: option, environment, prompt
 while [ $# -gt 0 ]; do case "$1" in
 	--bundle) BUNDLE=$2; shift 2;; --puf) PUF=$2; shift 2;; --env) ENVFILE=$2; shift 2;; --results) RESULTS=$2; shift 2;; --from-step) FROM_STEP=$2; shift 2;; --to-step) TO_STEP=$2; shift 2;;
 	--yes) YES=1; shift;; --dry-run) DRYRUN=1; shift;; --port) echo "note: --port is ignored: the bundle goes over ssh, with no HTTP server" >&2; shift 2;; --ws-ip) WSIP=$2; shift 2;;
-	--stable-min) STABLE_MIN=$2; shift 2;; --rescue-ip) RIP=$2; shift 2;; --rescue-pw) RPW=$2; shift 2;; --uart) UART=$2; shift 2;;
+	--stable-min) STABLE_MIN=$2; shift 2;; --rescue-ip) RIP=$2; shift 2;; --rescue-pw) RPW=$2; shift 2;; --ssh-ciphers) export TSX_SSH_CIPHERS=$2; shift 2;; --uart) UART=$2; shift 2;;
 	--root-ssh) ROOTSSH=1; ROOTSSH_SET=1; shift;; --sshshell) ROOTSSH=1; ROOTSSH_SET=1; SSHSHELL=$2; shift 2;; --stock-sshshell) ROOTSSH=0; SSHSHELL=; shift;; -h|--help) usage; exit 0;;
-	--*) echo "unknown option $1" >&2; usage; exit 2;; *) [ -z "$PANEL" ] || { echo "extra argument $1" >&2; exit 2; }; PANEL=$1; shift;; esac; done
+	--rescue-password|--rescue-password-file) tsx_creds_opt "$@"; RPW=$TSX_RESCUE_PW; shift 2;;
+	--*) if tsx_creds_opt "$@"; then shift "$TSX_CREDS_SHIFT"; else echo "unknown option $1" >&2; usage; exit 2; fi;; *) [ -z "$PANEL" ] || { echo "extra argument $1" >&2; exit 2; }; PANEL=$1; shift;; esac; done
 [ -n "$PANEL" ] || { usage; exit 2; }
 case "$UART" in auto|yes|no) ;; *) echo "--uart must be auto, yes, or no" >&2; exit 2;; esac
 [ -n "$RESULTS" ] || RESULTS=$HERE/results/tsx-restore-factory-$(date +%Y%m%d-%H%M).txt
@@ -255,10 +264,10 @@ if [ "$DRYRUN" = 1 ]; then
 	log "[dry-run] step 5: gate FACTORY. sh /tmp/b/tsx-emmc-restore run /tmp/b --yes. TSX_SHARE=/usr/share/tsx sh /tmp/b/tsx-factory-restore run /tmp/b --yes"
 	if [ "$UART_ON" = 1 ]; then
 		log "[dry-run] step 6 (UART): reboot -f. wait_serial 'root@Crestron Touchpanel:/ #' 420 (abort: fs_mgr_mount_all returned unexpected error, Kernel panic, TSX RESCUE SYSTEM, tsx: booting tsxboot.img)"
-		log "[dry-run] step 7 (UART): mount|grep mmcblk0p5, fw_printenv fwUpgrade, ls image dir, getprop sys.boot_completed. Stability ${STABLE_MIN} min. steps/crestron-admin --status $PANEL: none (no account, expected) or ssh -tt $ADMIN_USER@$PANEL ver"
+		log "[dry-run] step 7 (UART): mount|grep mmcblk0p5, fw_printenv fwUpgrade, ls image dir, getprop sys.boot_completed. Stability ${STABLE_MIN} min. steps/crestron-admin --status $PANEL: none (no account, expected) or ssh -tt <admin-user>@$PANEL ver"
 	else
 		log "[dry-run] step 6 (network-only): reboot -f. Wait for rescue ssh to go away, then poll https://$PANEL/ (200/301/302) up to 420s. Beyond that, MAC lookup as in step 2 and log the IP found"
-		log "[dry-run] step 7 (network-only): fwUpgrade/boot_completed/p5 checks SKIPPED (no root without UART). With the rootsh patch (default), the load driver gets root over ssh once an account exists. Poll web UI reachable, then stability watch every 30s for ${STABLE_MIN} min (fail on >90s down straight). steps/crestron-admin --status $PANEL: none (no account, expected) or ssh -tt $ADMIN_USER@$PANEL ver"
+		log "[dry-run] step 7 (network-only): fwUpgrade/boot_completed/p5 checks SKIPPED (no root without UART). With the rootsh patch (default), the load driver gets root over ssh once an account exists. Poll web UI reachable, then stability watch every 30s for ${STABLE_MIN} min (fail on >90s down straight). steps/crestron-admin --status $PANEL: none (no account, expected) or ssh -tt <admin-user>@$PANEL ver"
 	fi
 	log "== dry-run done"; exit 0
 fi
@@ -437,7 +446,7 @@ if [ "$FROM_STEP" -le 7 ] && [ "$TO_STEP" -ge 7 ]; then
 	done
 	log "  ok: no reboot in $STABLE_MIN min. uptime: $(uart_last 'cat /proc/uptime' '^[0-9]')"
 	else
-		log "  network-only (--uart $UART): the fwUpgrade, boot_completed and p5-mounted checks are SKIPPED, because a factory unit has no root console without the UART. With the rootsh patch (the default) in system.img, a Crestron account is enough. The load driver (steps/tsx-android-to-card) then gets root over 'ssh -tt $ADMIN_USER@panel rootsh' and needs no UART"
+		log "  network-only (--uart $UART): the fwUpgrade, boot_completed and p5-mounted checks are SKIPPED, because a factory unit has no root console without the UART. With the rootsh patch (the default) in system.img, a Crestron account is enough. The load driver (steps/tsx-android-to-card) then gets root over 'ssh -tt <admin-user>@panel rootsh' and needs no UART"
 		w=0; ok=0; code=000
 		while [ $w -lt 300 ]; do
 			code=$(curl -sk -m 8 -o /dev/null -w '%{http_code}' "https://$ANDROID_IP/" 2>/dev/null || true); code=${code:-000}
@@ -465,10 +474,10 @@ if [ "$FROM_STEP" -le 7 ] && [ "$TO_STEP" -ge 7 ]; then
 	acct=$("$HERE/steps/crestron-admin" --status "$ANDROID_IP" 2>/dev/null || true)
 	case "$acct" in
 	none) log "  ok: web UI up, no Crestron account (factory-fresh /data): create one at https://$ANDROID_IP/ or with installer/steps/crestron-admin (tsx-install-mainline does it)";;
-	*)	[ -n "$ADMIN_PW" ] || die "a Crestron account already exists: set TSX_ADMIN_PW to its password to verify the console (step 7)"
-		out=$(printf 'ver\r\nbye\r\n' | timeout 30 sshpass -p "$ADMIN_PW" ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$ADMIN_USER@$ANDROID_IP" 2>&1 | tr -d '\r' || true)
-		logblock "Crestron SSH console (admin, 'ver', account state: ${acct:-web UI did not answer})" "$out"
-		grep -qiE 'TSW|TSS|\[v3\.' <<<"$out" && log "  ok: Crestron SSH console answers" || log "  WARNING: Crestron SSH console did not answer as expected (password '$ADMIN_PW'?)";;
+	*)	tsx_creds_need_admin 1 || die "a Crestron account already exists, and step 7 needs its login to check the console"
+		out=$(printf 'ver\r\nbye\r\n' | SSHPASS=$TSX_ADMIN_PW timeout 30 sshpass -e ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$TSX_ADMIN_USER@$ANDROID_IP" 2>&1 | tr -d '\r' || true)
+		logblock "Crestron SSH console ($TSX_ADMIN_USER, 'ver', account state: ${acct:-web UI did not answer})" "$out"
+		grep -qiE 'TSW|TSS|\[v3\.' <<<"$out" && log "  ok: Crestron SSH console answers" || log "  WARNING: Crestron SSH console did not answer as expected (wrong user or password?)";;
 	esac
 fi
 log "== done"

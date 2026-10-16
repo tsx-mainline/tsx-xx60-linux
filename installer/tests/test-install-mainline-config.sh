@@ -20,6 +20,9 @@ DRIVER="$HERE/tsx-install-mainline"
 command -v busybox >/dev/null 2>&1 || { echo "SKIPPED test-install-mainline-config: no busybox on this host"; exit 0; }
 W=$(mktemp -d); trap 'rm -rf "$W" "${TSX_CONFIG_STAGE:-}"' EXIT
 N=0 F=0
+# The Android path needs the Crestron admin login (no default). The automation
+# form: the environment. test-install-creds.sh checks the options and the stop.
+export TSX_ADMIN_USER=testadmin TSX_ADMIN_PW=testpw
 ok() { echo "  ok: $*"; N=$((N+1)); }
 bad() { echo "  FAIL: $*"; F=$((F+1)); }
 

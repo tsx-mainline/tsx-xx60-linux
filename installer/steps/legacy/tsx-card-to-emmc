@@ -18,13 +18,15 @@
 #   7 optional --wake-local: WAKE=local in /etc/tsx/voice.conf, restart tsx-voice,
 #     log check, 30 s CPU sample
 #   tsx-card-to-emmc PANEL_IP [--img FILE] [--from-step N] [--to-step N] [--wake-local]
-#                    [--results FILE] [--dry-run]
-#   Login: your SSH key, or the root password of the panel in $TSX_MAINLINE_PW. There
-#           is no fixed password. With neither, the script stops before it changes anything.
+#                    [--results FILE] [--dry-run] [--mainline-password-file FILE]
+#   Login: your SSH key, or the root password of the panel in --mainline-password-file
+#           FILE (or --mainline-password PW, or TSX_MAINLINE_PW). The option wins
+#           over the environment variable. There is no fixed password. With neither, the script stops before it changes anything.
 #   --img   the eMMC boot image (default emmc/out/tsxboot-emmc.img). Its sha256 comes
 #           from FILE.sha256 if that exists (as the default's does), else the script computes it.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); WORK=$(cd "$HERE/../.." && pwd)   # installer/steps/legacy/ -> installer/
+. "$WORK/lib/tsx-creds.sh"
 IMG=$WORK/emmc/out/tsxboot-emmc.img; MIG=$WORK/emmc/migrate-to-emmc.sh; P1U=$WORK/emmc/tsx-update-boot
 SERLOG=${TSX_SERIAL_LOG:-$WORK/../tools/bench/boot-2200.log}
 # The serial log is optional (a UART logger writes it). Without a log, the
@@ -32,8 +34,8 @@ SERLOG=${TSX_SERIAL_LOG:-$WORK/../tools/bench/boot-2200.log}
 ser_mark() { if [ -f "$SERLOG" ]; then wc -l < "$SERLOG"; else echo 0; fi; }
 ser_since() { [ -f "$SERLOG" ] || return 0; tail -n +$(($1 + 1)) "$SERLOG" | tr -d '\0'; }
 PANEL= FROM=1 TO=7 RESULTS= DRY=0 WAKE=0
-while [ $# -gt 0 ]; do case "$1" in --from-step) FROM=$2; shift 2;; --to-step) TO=$2; shift 2;; --results) RESULTS=$2; shift 2;; --dry-run) DRY=1; shift;; --wake-local) WAKE=1; shift;; --img) IMG=$2; shift 2;; -h|--help) sed -n '2,25p' "$0"; exit 0;; --*) echo "unknown $1" >&2; exit 2;; *) PANEL=$1; shift;; esac; done
-[ -n "$PANEL" ] || { sed -n '2,25p' "$0" >&2; exit 2; }
+while [ $# -gt 0 ]; do case "$1" in --from-step) FROM=$2; shift 2;; --to-step) TO=$2; shift 2;; --results) RESULTS=$2; shift 2;; --dry-run) DRY=1; shift;; --wake-local) WAKE=1; shift;; --img) IMG=$2; shift 2;; -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 0;; --*) if tsx_creds_opt "$@"; then shift "$TSX_CREDS_SHIFT"; else echo "unknown $1" >&2; exit 2; fi;; *) PANEL=$1; shift;; esac; done
+[ -n "$PANEL" ] || { sed -n '2,/^set -euo/p' "$0" | sed '$d' >&2; exit 2; }
 [ -n "$RESULTS" ] || RESULTS=$HERE/results/tsx-card-to-emmc-$(date +%Y%m%d-%H%M).txt; mkdir -p "$(dirname "$RESULTS")"
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$RESULTS" >&2; }
 logblock() { log "-- $1 --"; printf '%s\n' "$2" | while IFS= read -r l; do log "  $l"; done; log "-- end $1 --"; }
@@ -72,7 +74,7 @@ if [ -f "$IMG.sha256" ]; then SHA=$(awk '{print $1}' "$IMG.sha256")
 else SHA=$(sha256sum < "$IMG" | cut -d' ' -f1); log "  no $IMG.sha256: computed sha256 $SHA"
 fi
 if [ "$DRY" != 1 ] && [ "$FROM" -le 1 ] && ! $SSH true >/dev/null 2>&1; then
-	die "no login to root@$PANEL. This panel has no fixed password. Use an ssh key that is in its panel.conf (SSH_AUTHORIZED_KEY), or give its root password in TSX_MAINLINE_PW. The script changed nothing"
+	die "no login to root@$PANEL. This panel has no fixed password. Use an ssh key that is in its panel.conf (SSH_AUTHORIZED_KEY), or give its root password with --mainline-password-file FILE. The script changed nothing"
 fi
 log "== tsx-card-to-emmc: PANEL=$PANEL image $(basename "$IMG") $SHA from=$FROM to=$TO dry=$DRY"
 [ "$(sha256sum < "$IMG" | cut -d' ' -f1)" = "$SHA" ] || die "$IMG does not match its .sha256"

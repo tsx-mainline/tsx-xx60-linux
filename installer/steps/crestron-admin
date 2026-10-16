@@ -15,17 +15,31 @@
 # nothing. Afterwards the Crestron SSH console must answer `ver` with that
 # login.
 #
-#   steps/crestron-admin PANEL     (user $TSX_ADMIN_USER, default admin.
-#                                      Password: required, $TSX_ADMIN_PW)
+#   steps/crestron-admin [--admin-user USER] [--admin-password-file FILE] PANEL
+#        The user and the password have no default. An option wins over the
+#        environment variable (TSX_ADMIN_USER, TSX_ADMIN_PW). A missing value
+#        stops the script before it contacts the panel (lib/tsx-creds.sh).
 #   steps/crestron-admin --status PANEL
 #                                  print "none" (no account yet) or "exists".
 #                                  It does not log in, change anything or need
 #                                  a password.
 # Exit 0 = the console answers with that login (--status: it printed the state).
-# 1 = it does not (--status: the web UI does not answer). 2 = usage.
+# 1 = it does not (--status: the web UI does not answer). 2 = usage, or a
+# missing user or password.
 set -uo pipefail
-STATUS=0; [ "${1:-}" = --status ] && { STATUS=1; shift; }
-H=${1:?PANEL}; U=${TSX_ADMIN_USER:-admin}
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/tsx-creds.sh"
+STATUS=0 H=
+while [ $# -gt 0 ]; do case "$1" in
+	--status) STATUS=1; shift;;
+	-h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d'; exit 0;;
+	--*) tsx_creds_opt "$@" && shift "$TSX_CREDS_SHIFT" || { echo "crestron-admin: unknown option $1" >&2; exit 2; };;
+	*) [ -z "$H" ] || { echo "crestron-admin: extra argument $1" >&2; exit 2; }; H=$1; shift;;
+esac; done
+[ -n "$H" ] || { echo "usage: crestron-admin [--status] [--admin-user USER --admin-password-file FILE] PANEL" >&2; exit 2; }
+if [ "$STATUS" = 0 ]; then
+	tsx_creds_need_admin 0 || exit 2
+	U=$TSX_ADMIN_USER PW=$TSX_ADMIN_PW
+fi
 say() { echo "crestron-admin: $*" >&2; }
 JAR=$(mktemp); trap 'rm -f "$JAR"' EXIT
 # account_state: "none" | "exists" | "" (web UI does not answer)
@@ -46,7 +60,6 @@ print("none" if not a.get("AuthenticationState", {}).get("IsEnabled") and not a.
 }
 st=$(account_state)
 if [ "$STATUS" = 1 ]; then [ -n "$st" ] || { say "web UI https://$H/ does not answer"; exit 1; }; echo "$st"; exit 0; fi
-PW=${TSX_ADMIN_PW:?set TSX_ADMIN_PW to the Crestron console/web-UI admin password to use}
 case "$st" in
 none)
 	say "no Crestron account yet (authentication off, no users): creating '$U'"
@@ -65,7 +78,7 @@ none)
 exists) say "the web UI already has an account (or authentication on): not changing it";;
 *) say "web UI https://$H/ does not answer"; exit 1;;
 esac
-out=$(printf 'ver\r\nbye\r\n' | timeout 30 sshpass -p "$PW" ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 "$U@$H" 2>&1 | tr -d '\r')
+out=$(printf 'ver\r\nbye\r\n' | SSHPASS=$PW timeout 30 sshpass -e ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 "$U@$H" 2>&1 | tr -d '\r')
 v=$(printf '%s\n' "$out" | grep -E '\[v[0-9]' | head -n 1)
 [ -n "$v" ] && { say "ok: console login $U works: $v"; exit 0; }
 say "the Crestron SSH console does not accept $U with that password"; exit 1

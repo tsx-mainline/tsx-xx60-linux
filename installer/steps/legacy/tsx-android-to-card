@@ -40,6 +40,12 @@
 #                       the preflight output first)
 #   --dry-run           print what each step would do, without hardware or an
 #                       HTTP server
+#   --admin-user USER, --admin-password-file FILE (or --admin-password PW)
+#                       the Crestron login (also TSX_ADMIN_USER, TSX_ADMIN_PW;
+#                       the option wins). No default: the script stops before
+#                       it contacts the panel when one is missing.
+#   --mainline-password-file FILE (or --mainline-password PW, TSX_MAINLINE_PW)
+#                       the root password of a mainline panel (else your key)
 #
 # Needs on the host: bash, sshpass, ssh, python3, split, sha256sum, ip, awk.
 # It reuses steps/rootsh (root over the patched Crestron sshd),
@@ -62,7 +68,7 @@ ROOTSH="$INSTALLER/steps/rootsh"
 MKPANELFETCH="$INSTALLER/steps/mkpanelfetch.sh"
 CRESTRONADMIN="$INSTALLER/steps/crestron-admin"
 INSTALLER_REL=tsx-install/android/tsx-android-install.sh
-MAINLINE_PW=${TSX_MAINLINE_PW:-}   # no fixed root password on the installed system: this, else the ssh key
+. "$INSTALLER/lib/tsx-creds.sh"
 
 usage() { sed -n '2,54p' "$0" >&2; }
 log() { local ts; ts=$(date '+%Y-%m-%d %H:%M:%S'); printf '[%s] %s\n' "$ts" "$*" | tee -a "$RESULTS" >&2; }
@@ -109,12 +115,13 @@ while [ $# -gt 0 ]; do
 	--yes) YES=1; shift;;
 	--dry-run) DRYRUN=1; shift;;
 	-h|--help) usage; exit 0;;
-	--*) echo "tsx-android-to-card: unknown option $1" >&2; usage; exit 2;;
+	--*) if tsx_creds_opt "$@"; then shift "$TSX_CREDS_SHIFT"; else echo "tsx-android-to-card: unknown option $1" >&2; usage; exit 2; fi;;
 	*) [ -z "$PANEL" ] || die "unexpected extra argument: $1"; PANEL=$1; shift;;
 	esac
 done
 [ -n "$PAYLOAD" ] && [ -n "$ROOTFS" ] && [ -n "$PANEL" ] || { usage; exit 2; }
 case "$UART_OPT" in auto|yes|no) ;; *) echo "tsx-android-to-card: --uart must be auto, yes, or no (got: $UART_OPT)" >&2; usage; exit 2;; esac
+[ "$DRYRUN" = 1 ] || tsx_creds_need_admin 1 || exit 2
 [ -n "$RESULTS" ] || RESULTS="results/tsx-android-to-card-$(date +%Y%m%d).txt"
 mkdir -p "$(dirname "$RESULTS")"
 log "== tsx-android-to-card: PANEL=$PANEL PAYLOAD=$PAYLOAD ROOTFS=$ROOTFS from-step=$FROM_STEP dry-run=$DRYRUN uart=$UART_OPT"
@@ -208,7 +215,8 @@ fi
 
 # --- small helpers used by steps 2-7 --------------------------------------
 MSSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8"
-if [ -n "$MAINLINE_PW" ]; then MSSH="sshpass -p $MAINLINE_PW ssh $MSSH_OPTS root@$PANEL"; else MSSH="ssh -o BatchMode=yes $MSSH_OPTS root@$PANEL"; fi
+MAINLINE_PW=${TSX_MAINLINE_PW:-}   # no fixed root password on the installed system: this, else the ssh key
+if [ -n "$MAINLINE_PW" ]; then export SSHPASS=$MAINLINE_PW; MSSH="sshpass -e ssh $MSSH_OPTS root@$PANEL"; else MSSH="ssh -o BatchMode=yes $MSSH_OPTS root@$PANEL"; fi
 is_mainline() {
 	local out; out=$($MSSH uname -r 2>/dev/null) || return 1
 	case "$out" in [6-9].*|[1-9][0-9].*) return 0;; *) return 1;; esac   # 6.x LTS, 7.x stable, ...

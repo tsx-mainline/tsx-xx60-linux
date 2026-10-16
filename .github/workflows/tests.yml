@@ -102,6 +102,8 @@ jobs:
         run: installer/tests/test-install-mainline-config.sh
       - name: installer/tests/test-install-mainline-dryrun.sh
         run: installer/tests/test-install-mainline-dryrun.sh
+      - name: installer/tests/test-install-creds.sh - the logins come from options or the environment, no default, the stop before any contact
+        run: installer/tests/test-install-creds.sh
       - name: installer/tests/test-install-push.sh - the images go over the ssh connections of the host (fake rescue, pty root shell)
         run: installer/tests/test-install-push.sh
       - name: installer/tests/test-install-stage.sh - stage on the panel first, the rescue installs it by itself (fake kiosk, fake tsx-rescue-install)

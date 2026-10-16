@@ -8,11 +8,15 @@
 # one that the no-UART enabler writes) start /system/bin/sh after the root bash
 # returns. The second exit ends that shell. If the session already closed, the
 # session never reads it.
-#   steps/rootsh HOST 'command ...'   (user $TSX_ADMIN_USER, default admin.
-#                                       Password: required, $TSX_ADMIN_PW)
+#   steps/rootsh [LOGIN] HOST 'command ...'
+#   steps/rootsh [LOGIN] --put HOST FILE DEST
+# LOGIN: --admin-user USER and --admin-password-file FILE (or --admin-password
+# PW). An option wins over the environment variable (TSX_ADMIN_USER,
+# TSX_ADMIN_PW). Neither has a default: a missing value stops the script with
+# exit 2 before it contacts the panel. The drivers give both values in the
+# environment (lib/tsx-creds.sh).
 #
-#   steps/rootsh --put HOST FILE DEST
-# copies the host file FILE to DEST on the panel over the same root shell. The
+# --put copies the host file FILE to DEST on the panel over the same root shell. The
 # host opens the connection, so the panel needs no connection to the host
 # (docs/install.md "Network requirements"). The remote root shell first sets
 # its tty to raw mode with no echo and prints a ready marker. Only then does
@@ -24,8 +28,10 @@
 # Test hooks: TSX_PUT_READY_S (default 60) and TSX_PUT_DONE_S (default 120 +
 # 1 s per MiB) are the time limits of the two waits.
 set -uo pipefail
-U=${TSX_ADMIN_USER:-admin}
-PW=${TSX_ADMIN_PW:?set TSX_ADMIN_PW to the Crestron console admin password}
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/tsx-creds.sh"
+while [ $# -gt 0 ] && tsx_creds_opt "$@"; do shift "$TSX_CREDS_SHIFT"; done
+tsx_creds_need_admin 0 || exit 2
+U=$TSX_ADMIN_USER PW=$TSX_ADMIN_PW
 SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR)
 
 if [ "${1:-}" = --put ]; then
@@ -88,6 +94,6 @@ H=${1:?HOST}; C=${2:?command}
 # drops the tty echo of the input (it shows the format strings, not the markers)
 # and the bash prompts.
 C=${C%"${C##*[![:space:];]}"}; case "$C" in *'&') SEP=' ';; *) SEP='; ';; esac   # "cmd &; x" is a syntax error
-out=$(printf '%s\n' "printf '\\n__RS_%s__\\n' BEGIN; $C${SEP}printf '\\n__RS_END=%d__\\n' \$?" exit exit | timeout "${TSX_SSH_TIMEOUT:-900}" sshpass -p "$PW" ssh -tt "${SSH_OPTS[@]}" "$U@$H" rootsh 2>/dev/null | tr -d '\r')
+out=$(printf '%s\n' "printf '\\n__RS_%s__\\n' BEGIN; $C${SEP}printf '\\n__RS_END=%d__\\n' \$?" exit exit | SSHPASS=$PW timeout "${TSX_SSH_TIMEOUT:-900}" sshpass -e ssh -tt "${SSH_OPTS[@]}" "$U@$H" rootsh 2>/dev/null | tr -d '\r')
 printf '%s\n' "$out" | awk '/^__RS_BEGIN__$/ {on=1; n=0; next} on && /^__RS_END=[0-9]+__$/ {exit} on {buf[++n]=$0} END {if (n && buf[n] == "") n--; for (i = 1; i <= n; i++) print buf[i]}'
 rc=$(printf '%s\n' "$out" | /bin/grep -a -o '^__RS_END=[0-9]*__$' | tail -n 1 | tr -dc 0-9); exit "${rc:-255}"

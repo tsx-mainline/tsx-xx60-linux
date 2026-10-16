@@ -11,6 +11,9 @@ DRIVER="$HERE/tsx-install-mainline"
 . "$HERE/lib/tsx-config-prompt.sh"   # sets TSX_CONFIG_BIN (tsx-config of tsx-linux-common with the xx60 board file)
 W=$(mktemp -d); trap 'rm -rf "$W" "${TSX_CONFIG_STAGE:-}"' EXIT
 N=0 F=0
+# The Android path needs the Crestron admin login (no default). The automation
+# form: the environment. test-install-creds.sh checks the options and the stop.
+export TSX_ADMIN_USER=testadmin TSX_ADMIN_PW=testpw
 ok() { echo "  ok: $*"; N=$((N+1)); }
 bad() { echo "  FAIL: $*"; F=$((F+1)); }
 

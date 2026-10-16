@@ -47,7 +47,7 @@
 #               `if [ -t $fd ]; then` (an unknown or already modified image: use the
 #               pristine .puf, --sshshell or --stock-sshshell). This repo keeps nothing
 #               from the firmware, because the patch is the awk recipe below.
-#               `ssh -tt $TSX_ADMIN_USER@panel rootsh` then gets root right after the
+#               `ssh -tt <admin-user>@panel rootsh` then gets root right after the
 #               restore, with no UART (installer/steps/rootsh). The Crestron console is unchanged.
 #   --sshshell  optional: put FILE (your own sshShell.sh) in as it is, instead of patching the
 #               copy in the image. (The old forms `--root-ssh` and `--root-ssh FILE` still work.)

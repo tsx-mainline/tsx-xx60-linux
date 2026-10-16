@@ -6,6 +6,10 @@
 #   tsx-make-stick --payload DIR --kernel lts|stable --out DIR
 #                  [--config FILE | --no-config] [--kiosk-url URL] [--yes]
 #                  [--tfa-source auto|panel|puf|none] [--psr-source auto|panel|puf|none]
+#                  [--common DIR]
+# --common DIR (or TSX_COMMON, the option wins): the tsx-linux-common checkout
+# for tsx-config. The default is the folder tsx-linux-common next to this
+# repository.
 #
 # The folder holds:
 #   jabil.txt         three lines for the stock stick boot of U-Boot
@@ -40,7 +44,7 @@ PAYLOAD= KERNEL= OUT= CONFIG= NOCONF=0 URL= YES=0 TFA_SOURCE=auto PSR_SOURCE=aut
 while [ $# -gt 0 ]; do case "$1" in
 	--payload) PAYLOAD=$2; shift 2;; --kernel) KERNEL=$2; shift 2;; --out) OUT=$2; shift 2;;
 	--config) CONFIG=$2; shift 2;; --no-config) NOCONF=1; shift;; --kiosk-url) URL=$2; shift 2;; --yes) YES=1; shift;;
-	--tfa-source) TFA_SOURCE=$2; shift 2;; --psr-source) PSR_SOURCE=$2; shift 2;;
+	--tfa-source) TFA_SOURCE=$2; shift 2;; --psr-source) PSR_SOURCE=$2; shift 2;; --common) export TSX_COMMON=$2; shift 2;;
 	-h|--help) usage; exit 0;; *) echo "unknown argument $1" >&2; usage; exit 2;;
 esac; done
 [ -n "$PAYLOAD" ] && [ -n "$OUT" ] || { usage; exit 2; }

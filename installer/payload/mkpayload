@@ -180,5 +180,5 @@ say "done: $(du -sh "$OUT" | cut -f1) in $OUT"
 if [ $USB = 1 ]; then
 	say "USB install: root shell on the panel, from the stick: sh tsx-install-usb"
 else
-	say "Android flow: ssh -tt \$TSX_ADMIN_USER@<panel> (default admin), then: bash /mnt/media_rw/udisk0/tsx-install/android/tsx-android-install.sh preflight"
+	say "Android flow: ssh -tt <admin-user>@<panel> (your Crestron admin user), then: bash /mnt/media_rw/udisk0/tsx-install/android/tsx-android-install.sh preflight"
 fi

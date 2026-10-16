@@ -8,25 +8,31 @@
 # speaker DSP tuning"). Use this script for a panel that was installed without
 # them. The speakers still work, just without the vendor EQ and volume-step
 # presets.
-#   steps/tsx-deploy-tfa.sh PANEL_IP [--dry-run]
+#   steps/tsx-deploy-tfa.sh PANEL_IP [--dry-run] [--mainline-password-file FILE]
 # The exit status is 0 even if the fetch or deploy fails (the DSP is optional).
 # A caller that wants a hard failure must check the printed WARNING and ERROR lines.
 # Needs: rootfs/vendor-fetch.sh (this repo, unmodified, see docs/rootfs.md),
-# sshpass, ssh, scp. Panel login: root with your ssh key, or with $TSX_MAINLINE_PW.
+# sshpass, ssh, scp. Panel login: root with your ssh key, or the root password
+# of --mainline-password-file FILE (or --mainline-password PW, or
+# TSX_MAINLINE_PW). The option wins over the environment variable.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/../lib/tsx-creds.sh"
 FETCH="$HERE/../../rootfs/vendor-fetch.sh"
 PANEL= DRY=0
-while [ $# -gt 0 ]; do case "$1" in --dry-run) DRY=1; shift;; -h|--help) sed -n '2,15p' "$0"; exit 0;; --*) echo "unknown $1" >&2; exit 2;; *) PANEL=$1; shift;; esac; done
-[ -n "$PANEL" ] || { sed -n '2,15p' "$0" >&2; exit 2; }
+while [ $# -gt 0 ]; do case "$1" in --dry-run) DRY=1; shift;; -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d'; exit 0;;
+	--*) if tsx_creds_opt "$@"; then shift "$TSX_CREDS_SHIFT"; else echo "unknown $1" >&2; exit 2; fi;; *) PANEL=$1; shift;; esac; done
+[ -n "$PANEL" ] || { sed -n '2,/^set -uo/p' "$0" | sed '$d' >&2; exit 2; }
 say() { echo "tsx-deploy-tfa: $*" >&2; }
 VARIANTS="settings_yushan settings_yushan_2nd settings_yushan_3rd"
 LOCAL=${TFA_VENDOR_LOCAL:-"$HERE/../../rootfs/vendor-local/tfa9890"}
 MPW=${TSX_MAINLINE_PW:-}
-# No fixed root password on the installed system: $TSX_MAINLINE_PW if set, else the ssh key.
+# No fixed root password on the installed system: the mainline password if set
+# (sshpass -e reads SSHPASS), else the ssh key.
 if [ -n "$MPW" ]; then
-	SSH="sshpass -p $MPW ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$PANEL"
-	SCP="sshpass -p $MPW scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+	export SSHPASS=$MPW
+	SSH="sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$PANEL"
+	SCP="sshpass -e scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 else
 	SSH="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$PANEL"
 	SCP="scp -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
