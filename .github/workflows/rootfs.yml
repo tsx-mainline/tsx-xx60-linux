@@ -10,7 +10,11 @@ jobs:
     # linux/arm/v7) natively, so the job needs no qemu-user binfmt.
     runs-on: ubuntu-24.04-arm
     steps:
+      # The full history: build-rootfs.sh lists the initramfs stamps of the
+      # older commits (TSX_STAMP_OLDER_OK below).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # The image comes from packages. The published apk tree of this project
       # (https://tsx-aports.unexceptional.net) holds them. The cache keeps the
@@ -31,9 +35,19 @@ jobs:
       # user, on their own machine, keeps fetching them by default). The
       # no-proprietary-files step below checks this on the build's output,
       # not just this env var.
+      # TSX_STAMP_OLDER_OK: the kernel packages of the published tree come from
+      # the last release. After a change of the initramfs sources (rootfs/initramfs,
+      # install.sh, tsx-disk.sh, packages.pin), their initramfs has the stamp of
+      # an older commit of this history until the kernel packages of the next
+      # release are live. The build then gives a warning with both stamps. A
+      # stamp that no commit of this history has, an initramfs without a stamp
+      # and a kernel that is not the pin still stop the build. The release
+      # workflow checks that the boot images it builds have the stamp of the
+      # tag (check-boot-images.py --image).
       - name: build rootfs + initramfs from packages (rootfs/build-rootfs.sh all)
         env:
           TFA_VENDOR_FETCH: "no"
+          TSX_STAMP_OLDER_OK: "1"
           TSX_APK_LOCAL: ${{ github.workspace }}/apk-tree
         run: rootfs/build-rootfs.sh all
 

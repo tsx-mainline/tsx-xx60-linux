@@ -213,7 +213,13 @@ Each release of this repo gets two signed tags on the same commit:
 
 A release without the `v` tag has no install payload, and a fresh install then starts from the payload of an older release. Push the `v` tag after the tsx-aports packages of the release are live, so that the payloads have the packages of the release. If the `v` tag goes out earlier, run the images-only run below after the packages are live.
 
-The run builds new kernel bundles. The kernel recipes of tsx-aports keep their `_kbundle_tag` until `scripts/pin-kernel.sh` of tsx-aports moves them. The release build takes the initramfs packages of `rootfs/initramfs/packages.pin` from the published tree, and tsx-aports keeps these versions (`keep/keep.txt` there, see [rootfs.md](../../docs/rootfs.md)).
+The run builds new kernel bundles, and it checks that their boot images have the pinned kernels and the initramfs stamp of the tag. The kernel recipes of tsx-aports keep their `_kbundle_tag` until `scripts/pin-kernel.sh` of tsx-aports moves them.
+
+A release that changes the initramfs sources (`rootfs/initramfs`, `install.sh`, `tsx-disk.sh`, `packages.pin`) needs new kernel packages. Until they are live, `rootfs.yml` gives a warning with the two stamps and does not fail (see [kernel.md](../../docs/kernel.md) "Package guard"). Do these steps in this order:
+
+1. Push the tags. `release.yml` builds the kernel bundles with the new initramfs.
+2. In tsx-aports, raise `pkgrel` (or `pkgver` for a new kernel) of `tsx-xx60-kernel-lts` and `tsx-xx60-kernel-stable`. Then run `scripts/pin-kernel.sh <v tag>` and publish the packages.
+3. Run the images-only run below. The payloads then have the new kernel packages in the root image too. The release build takes the initramfs packages of `rootfs/initramfs/packages.pin` from the published tree, and tsx-aports keeps these versions (`keep/keep.txt` there, see [rootfs.md](../../docs/rootfs.md)).
 
 ### Rebuild the images of a release (images only)
 

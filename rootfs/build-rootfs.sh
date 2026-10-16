@@ -53,6 +53,12 @@
 # and /xx60). The build never fetches it.
 # TSX_SKIP_BOOT_CHECK=1 skips the check of the kernel packages (comparison
 # builds only).
+# TSX_STAMP_OLDER_OK=1 (rootfs.yml) accepts kernel packages whose initramfs has
+# the stamp of an older commit of this checkout: initramfs-stamp-history.sh
+# lists these stamps (it needs git and the full history), and
+# check-boot-images.py prints a warning with both stamps instead of an error.
+# This is the state after a change of the initramfs sources, until the kernel
+# packages of the next release are live. Every other difference still fails.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 TOP=$(cd "$HERE/../.." && pwd)
@@ -133,7 +139,11 @@ need_apk_tree() {
 
 rootfs() {
 	need_apk_tree; need_armv7
-	local mnt=()
+	local mnt=() older=
+	if [ "${TSX_STAMP_OLDER_OK:-0}" = 1 ]; then
+		older=$("$HERE/initramfs-stamp-history.sh" | awk '{ printf "%s%s:%s", (NR > 1 ? " " : ""), $1, $2 }')
+		echo "initramfs stamps of the older commits: $(echo "$older" | wc -w)"
+	fi
 	[ -d "$MODULES" ] && mnt=(-v "$MODULES:/modules:ro")
 	mnt+=(-v "$(cd "$TSX_APK_LOCAL" && pwd):/aports:ro")
 	mnt+=(-v "$(cd "$HERE/../kernel" && pwd):/kernel:ro")   # the kernel pins (check-boot-images.py)
@@ -141,7 +151,7 @@ rootfs() {
 		-e ALPINE="$ALPINE" -e PROFILE="${PROFILE:-ha}" -e TSX_DEV_ROOT_HASH="${TSX_DEV_ROOT_HASH:-}" -e KVER="$KVER" -e OUT=/w/out -e UIDGID="$UIDGID" -e IMG_MB="$IMG_MB" \
 		-e TSX_APK_URL="${TSX_APK_URL:-https://tsx-aports.unexceptional.net}" \
 		-e TFA_VENDOR_FETCH="${TFA_VENDOR_FETCH:-yes}" \
-		-e TSX_SKIP_BOOT_CHECK="${TSX_SKIP_BOOT_CHECK:-0}" \
+		-e TSX_SKIP_BOOT_CHECK="${TSX_SKIP_BOOT_CHECK:-0}" -e TSX_STAMP_OLDER="$older" \
 		"$IMAGE" $(arm32) /w/mkrootfs.sh
 }
 

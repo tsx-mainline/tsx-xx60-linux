@@ -1,8 +1,9 @@
 #!/bin/bash
-# Host test for rootfs/check-boot-images.py and rootfs/initramfs-stamp.sh. No
-# kernel build, no container: fake boot images (an Android boot image v0 with a
-# kernel that holds a gzip stream with a "Linux version" line, and a gzip cpio
-# ramdisk) in a fake rootfs tree.
+# Host test for rootfs/check-boot-images.py, rootfs/initramfs-stamp.sh and
+# rootfs/initramfs-stamp-history.sh. No kernel build, no container: fake boot
+# images (an Android boot image v0 with a kernel that holds a gzip stream with a
+# "Linux version" line, and a gzip cpio ramdisk) in a fake rootfs tree, and a
+# temporary git repository for the stamp history (needs git).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 CHECK=$HERE/check-boot-images.py
@@ -73,11 +74,14 @@ cp -a "$HERE" "$W/copy3"
 echo "# changed" >> "$W/copy3/initramfs/overlay/usr/sbin/tsx-confont"
 echo "# changed" >> "$W/copy3/overlay/usr/local/lib/tsx/board.sh"
 [ "$(sh "$W/copy3/initramfs-stamp.sh")" = "$GOODSTAMP" ] && ok "the stamp ignores the tools that come from packages and the board file of the rootfs" || bad "stamp covers tsx-confont or board.sh"
-# The kernel packages in the published apk tree carry an initramfs with this stamp.
-# A changed file under rootfs/initramfs (or install.sh, tsx-disk.sh) needs new kernel
-# packages. Change this value together with the new packages.
-PUBLISHED_STAMP=c406788b5722
-[ "${GOODSTAMP:0:12}" = "$PUBLISHED_STAMP" ] && ok "the stamp is the stamp of the published kernel packages ($PUBLISHED_STAMP)" || bad "the stamp is ${GOODSTAMP:0:12}, the published kernel packages have $PUBLISHED_STAMP (new kernel packages needed)"
+# The stamp of the initramfs sources of this checkout. The kernel packages of
+# the next release carry it. A changed file under rootfs/initramfs (or
+# install.sh, tsx-disk.sh, packages.pin) needs new kernel packages. rootfs.yml
+# only warns while the published kernel packages have an older stamp, so this
+# value catches a change that nobody planned. Change it together with the
+# initramfs sources, and release new kernel packages.
+SOURCE_STAMP=c406788b5722
+[ "${GOODSTAMP:0:12}" = "$SOURCE_STAMP" ] && ok "the stamp is the planned stamp ($SOURCE_STAMP)" || bad "the stamp is ${GOODSTAMP:0:12}, the planned stamp is $SOURCE_STAMP (a change of the initramfs sources needs new kernel packages: change SOURCE_STAMP with it)"
 
 echo "== 2. both images match the pins and the initramfs"
 fakeroot "$W/root" $GOODL $GOODS "$GOODSTAMP" "$GOODSTAMP"
@@ -135,6 +139,84 @@ grep -q 'initramfs-stamp.sh' "$HERE/initramfs/mkinitramfs-switchroot.sh" && ok "
 grep -q "cpio -o -H newc -R 0:0" "$HERE/initramfs/mkinitramfs-switchroot.sh" && ok "the initramfs cpio has root-owned files" || bad "the initramfs cpio keeps the owner of the checkout"
 for f in check-boot-images.py initramfs-stamp.sh; do [ $(grep -c "$f" "$HERE/../tools/build/remote-build.sh") -ge 2 ] && ok "remote-build.sh sends $f" || bad "remote-build.sh does not send $f"; done
 grep -q ':/kernel:ro' "$HERE/build-rootfs.sh" && ok "build-rootfs.sh mounts the pins" || bad "build-rootfs.sh does not mount the pins"
+
+OLDSTAMP=1111111111111111111111111111111111111111111111111111111111111111
+OLDC=0123456789abcdef0123456789abcdef01234567
+echo "== 13. an older stamp of this history (TSX_STAMP_OLDER) gives a warning"
+printf '# lts\n%s\n' "$LTS_REV" > "$W/pins/KERNEL_REV.lts"
+fakeroot "$W/root" $GOODL $GOODS "$OLDSTAMP" "$GOODSTAMP"
+TSX_STAMP_OLDER="2222222222222222222222222222222222222222222222222222222222222222:aaaa $OLDSTAMP:$OLDC" run && ok "accepted" || bad "refused: $(cat "$W/out.txt")"
+grep -q "^::warning title=initramfs stamp (lts)::.*$OLDSTAMP of the older commit ${OLDC:0:12}\. This checkout has the stamp $GOODSTAMP\." "$W/out.txt" && ok "a warning with both stamps and the commit" || bad "warning: $(cat "$W/out.txt")"
+grep -q "^check-boot-images: stable $GOODS matches" "$W/out.txt" && ok "stable still checked" || bad "stable not checked"
+fakeroot "$W/root" $GOODL $GOODS "$OLDSTAMP" "$OLDSTAMP"
+TSX_STAMP_OLDER="$OLDSTAMP:$OLDC" run && ok "both flavors with the older stamp: accepted" || bad "refused: $(cat "$W/out.txt")"
+[ "$(grep -c '^::warning' "$W/out.txt")" = 2 ] && ok "one warning for each flavor" || bad "warnings: $(cat "$W/out.txt")"
+
+echo "== 14. TSX_STAMP_OLDER does not hide another difference"
+fakeroot "$W/root" $GOODL $GOODS 3333333333333333333333333333333333333333333333333333333333333333 "$GOODSTAMP"
+TSX_STAMP_OLDER="$OLDSTAMP:$OLDC" run && bad "accepted a stamp that the history does not have" || ok "a stamp outside the history: refused"
+grep -q "lts: the initramfs stamp is 333333333333" "$W/out.txt" && ok "message names the stamp" || bad "message: $(cat "$W/out.txt")"
+grep -q '^::warning' "$W/out.txt" && bad "a warning for a refused stamp" || ok "no warning"
+fakeroot "$W/root" $GOODL $GOODS "$OLDSTAMP" none
+TSX_STAMP_OLDER="$OLDSTAMP:$OLDC" run && bad "accepted an initramfs without a stamp" || ok "no stamp: refused"
+fakeroot "$W/root" $GOODL 7.2.8-00063-g0dc16c8ba529 "$OLDSTAMP" "$OLDSTAMP"
+TSX_STAMP_OLDER="$OLDSTAMP:$OLDC" run && bad "accepted a stale stable kernel" || ok "a kernel that is not the pin: refused"
+fakeroot "$W/root" $GOODL $GOODS "$OLDSTAMP" "$OLDSTAMP"
+echo 7.2.8-00063-g0dc16c8ba529 > "$W/root/usr/share/tsx/kernel-stable.release"
+TSX_STAMP_OLDER="$OLDSTAMP:$OLDC" run && bad "accepted a stale release file" || ok "a stale release file: refused"
+fakeroot "$W/root" $GOODL $GOODS "$OLDSTAMP" "$GOODSTAMP"
+TSX_STAMP_OLDER="${OLDSTAMP:0:12}:$OLDC not-a-stamp" run && bad "accepted a short stamp in TSX_STAMP_OLDER" || ok "only full 64 digit stamps count"
+run && bad "accepted an older stamp without TSX_STAMP_OLDER" || ok "without TSX_STAMP_OLDER an older stamp fails as before"
+
+echo "== 15. one boot image (--image, release.yml)"
+fakeroot "$W/root" $GOODL $GOODS "$GOODSTAMP" "$OLDSTAMP"
+"$CHECK" --image lts "$W/root/boot/tsxboot-emmc-lts.img" "$W/pins" >"$W/out.txt" 2>&1 && ok "a good lts image: accepted" || bad "refused: $(cat "$W/out.txt")"
+grep -q "^check-boot-images: lts $GOODL matches" "$W/out.txt" && ok "reported" || bad "report: $(cat "$W/out.txt")"
+TSX_STAMP_OLDER="$OLDSTAMP:$OLDC" "$CHECK" --image stable "$W/root/boot/tsxboot-emmc-stable.img" "$W/pins" >"$W/out.txt" 2>&1 \
+	&& bad "accepted an older stamp in --image" || ok "an older stamp: refused, also with TSX_STAMP_OLDER"
+grep -q "stable: the initramfs stamp of .* is '111111111111', this checkout has ${GOODSTAMP:0:12}" "$W/out.txt" && ok "message names both stamps" || bad "message: $(cat "$W/out.txt")"
+"$CHECK" --image stable "$W/root/boot/tsxboot-emmc-lts.img" "$W/pins" >"$W/out.txt" 2>&1 && bad "accepted the lts kernel as stable" || ok "the kernel of the other flavor: refused"
+fakeroot "$W/root" $GOODL $GOODS none "$GOODSTAMP"
+"$CHECK" --image lts "$W/root/boot/tsxboot-emmc-lts.img" "$W/pins" >"$W/out.txt" 2>&1 && bad "accepted an image without a stamp" || ok "no stamp: refused"
+"$CHECK" --image lts >"$W/out.txt" 2>&1; [ $? = 2 ] && ok "no image: usage, exit 2" || bad "no image: $(cat "$W/out.txt")"
+"$CHECK" --image bad "$W/root/boot/tsxboot-emmc-lts.img" >"$W/out.txt" 2>&1; [ $? = 2 ] && ok "a bad flavor: usage, exit 2" || bad "bad flavor: $(cat "$W/out.txt")"
+
+echo "== 16. initramfs-stamp-history.sh"
+if ! command -v git >/dev/null; then
+	bad "git is missing"
+else
+	G=$W/repo
+	mkdir -p "$G/rootfs"
+	cp -a "$HERE/initramfs" "$HERE/install.sh" "$HERE/tsx-disk.sh" "$HERE/initramfs-stamp.sh" "$HERE/initramfs-stamp-history.sh" "$G/rootfs/"
+	gc() { git -C "$G" -c user.name=t -c user.email=t@example.org -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"; }
+	gc init -q
+	gc add -A; gc commit -qm one
+	S1=$(sh "$G/rootfs/initramfs-stamp.sh"); C1=$(gc rev-parse HEAD)
+	echo "# changed" >> "$G/rootfs/initramfs/packages.pin"
+	gc commit -qam two
+	S2=$(sh "$G/rootfs/initramfs-stamp.sh"); C2=$(gc rev-parse HEAD)
+	echo "other" > "$G/README"; gc add README; gc commit -qm three
+	echo "# changed" >> "$G/rootfs/initramfs/overlay/usr/sbin/tsx-confont"
+	gc commit -qam four
+	C4=$(gc rev-parse HEAD)
+	sh "$G/rootfs/initramfs-stamp-history.sh" > "$W/hist.txt" 2>"$W/hist.err" && ok "runs" || bad "history: $(cat "$W/hist.err")"
+	[ "$S1" != "$S2" ] && ok "the two stamps differ" || bad "the change did not change the stamp"
+	printf '%s %s\n%s %s\n%s %s\n' "$S2" "$C4" "$S2" "$C2" "$S1" "$C1" | cmp -s - "$W/hist.txt" \
+		&& ok "one line for each commit that changed the sources, newest first, with the stamp of that commit" || bad "history: $(cat "$W/hist.txt")"
+	sh "$G/rootfs/initramfs-stamp-history.sh" "$C2^" > "$W/hist.txt" 2>"$W/hist.err"
+	[ "$(cat "$W/hist.txt")" = "$S1 $C1" ] && ok "REV selects the history" || bad "history of $C2^: $(cat "$W/hist.txt")"
+	git clone -q --depth 1 "file://$G" "$W/shallow" 2>/dev/null
+	sh "$W/shallow/rootfs/initramfs-stamp-history.sh" > "$W/hist.txt" 2>"$W/hist.err" && bad "a shallow clone gave a history" || ok "a shallow clone: refused"
+	grep -q "shallow" "$W/hist.err" && ok "message names the shallow clone" || bad "message: $(cat "$W/hist.err")"
+fi
+
+echo "== 17. the wiring of the stamp checks"
+WF=$HERE/../.github/workflows
+grep -q 'TSX_STAMP_OLDER_OK: "1"' "$WF/rootfs.yml" && ok "rootfs.yml accepts an older stamp" || bad "rootfs.yml has no TSX_STAMP_OLDER_OK"
+grep -q 'fetch-depth: 0' "$WF/rootfs.yml" && ok "rootfs.yml checks out the full history" || bad "rootfs.yml has a shallow checkout"
+grep -q 'TSX_STAMP_OLDER_OK' "$WF/release.yml" && bad "release.yml accepts an older stamp" || ok "release.yml does not accept an older stamp"
+grep -q 'check-boot-images.py --image ${{ matrix.flavor }} rootfs/out/tsxboot.img' "$WF/release.yml" && ok "release.yml checks the boot image it builds" || bad "release.yml does not check its boot image"
+grep -q 'initramfs-stamp-history.sh' "$HERE/build-rootfs.sh" && grep -q -- '-e TSX_STAMP_OLDER=' "$HERE/build-rootfs.sh" && ok "build-rootfs.sh passes the history to the check" || bad "build-rootfs.sh does not pass TSX_STAMP_OLDER"
 
 echo "boot images: $N ok, $F failed"
 [ "$F" = 0 ]

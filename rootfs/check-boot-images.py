@@ -19,6 +19,20 @@ be true:
 A failure stops the build with exit status 1. This keeps a payload from
 booting an old kernel or an old rescue login when tsx-kernel-flavor runs on
 the panel.
+
+TSX_STAMP_OLDER (environment) lists stamps of older commits of this checkout,
+as "<stamp>:<commit>" words (rootfs/initramfs-stamp-history.sh,
+build-rootfs.sh with TSX_STAMP_OLDER_OK=1). An initramfs with one of these
+stamps comes from an older version of the same initramfs sources. Only the
+initramfs sources differ, so the script prints a warning with both stamps and
+does not fail. This is the state between a change of the initramfs sources and
+the kernel packages of the next release. Every other difference still fails.
+
+  check-boot-images.py --image FLAVOR IMG [PIN_DIR]
+
+checks one boot image (for example rootfs/out/tsxboot.img of a release
+build): the kernel release must end with the pin of FLAVOR, and the initramfs
+must have the stamp of this checkout. TSX_STAMP_OLDER does not apply.
 """
 import gzip
 import os
@@ -85,42 +99,100 @@ def cpio_file(blob, want):
     return None
 
 
+def read_pin(pins, fl):
+    """The 40 digit revision of KERNEL_REV.<fl>, or None after bad()."""
+    pin = os.path.join(pins, "KERNEL_REV." + fl)
+    if not os.path.isfile(pin):
+        bad("no " + pin)
+        return None
+    lines = [l.strip() for l in open(pin) if not l.startswith("#") and l.strip()]
+    rev = lines[0] if lines else ""
+    if not re.fullmatch(r"[0-9a-f]{40}", rev):
+        bad("%s has no 40 digit revision" % pin)
+        return None
+    return rev
+
+
+def image_parts(fl, img, rev):
+    """(release, stamp) of the boot image IMG, or None after bad()."""
+    try:
+        kernel, ramdisk = split_image(open(img, "rb").read())
+    except ValueError as e:
+        bad("%s: %s" % (fl, e))
+        return None
+    rel = kernel_release(kernel)
+    if not rel:
+        bad("%s: no kernel release found in the boot image" % fl)
+        return None
+    if not rel.endswith("-g" + rev[:12]):
+        bad("%s: the boot image has kernel %s, the pin is %s (rebuild the tsx-xx60-kernel-%s package)"
+            % (fl, rel, rev, fl))
+        return None
+    try:
+        cpio = gzip.decompress(ramdisk)
+    except (OSError, EOFError, zlib.error):
+        bad("%s: the initramfs in the boot image is not gzip data" % fl)
+        return None
+    got = cpio_file(cpio, STAMP_PATH)
+    return rel, (got.decode().strip() if got is not None else "")
+
+
+def older_stamps():
+    """{stamp: commit} from TSX_STAMP_OLDER."""
+    out = {}
+    for word in os.environ.get("TSX_STAMP_OLDER", "").split():
+        stamp, _, commit = word.partition(":")
+        if re.fullmatch(r"[0-9a-f]{64}", stamp):
+            out[stamp] = commit
+    return out
+
+
+def check_image(argv):
+    if len(argv) < 2 or argv[0] not in ("lts", "stable"):
+        print("usage: check-boot-images.py --image lts|stable IMG [PIN_DIR]", file=sys.stderr)
+        return 2
+    fl, img = argv[0], argv[1]
+    pins = argv[2] if len(argv) > 2 else os.path.join(HERE, "..", "kernel")
+    want_stamp = this_stamp()
+    rev = read_pin(pins, fl)
+    parts = image_parts(fl, img, rev) if rev else None
+    if parts:
+        rel, got = parts
+        if got != want_stamp:
+            bad("%s: the initramfs stamp of %s is '%s', this checkout has %s"
+                % (fl, img, got[:12], want_stamp[:12]))
+        else:
+            print("check-boot-images: %s %s matches %s, initramfs %s" % (fl, rel, rev[:12], got[:12]))
+    return 1 if failed else 0
+
+
+def this_stamp():
+    return subprocess.run(["sh", os.path.join(HERE, "initramfs-stamp.sh")],
+                          check=True, capture_output=True, text=True).stdout.strip()
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--image":
+        return check_image(sys.argv[2:])
     if len(sys.argv) < 2:
         print("usage: check-boot-images.py ROOT [PIN_DIR]", file=sys.stderr)
         return 2
     root = sys.argv[1]
     pins = sys.argv[2] if len(sys.argv) > 2 else os.path.join(HERE, "..", "kernel")
-    want_stamp = subprocess.run(["sh", os.path.join(HERE, "initramfs-stamp.sh")],
-                                check=True, capture_output=True, text=True).stdout.strip()
+    want_stamp = this_stamp()
+    older = older_stamps()
     for fl in ("lts", "stable"):
-        pin = os.path.join(pins, "KERNEL_REV." + fl)
-        if not os.path.isfile(pin):
-            bad("no " + pin)
+        rev = read_pin(pins, fl)
+        if not rev:
             continue
-        lines = [l.strip() for l in open(pin) if not l.startswith("#") and l.strip()]
-        rev = lines[0] if lines else ""
-        if not re.fullmatch(r"[0-9a-f]{40}", rev):
-            bad("%s has no 40 digit revision" % pin)
-            continue
-        short = rev[:12]
         img = os.path.join(root, "boot", "tsxboot-emmc-%s.img" % fl)
         if not os.path.isfile(img):
             bad("%s: no /boot/tsxboot-emmc-%s.img in the rootfs" % (fl, fl))
             continue
-        try:
-            kernel, ramdisk = split_image(open(img, "rb").read())
-        except ValueError as e:
-            bad("%s: %s" % (fl, e))
+        parts = image_parts(fl, img, rev)
+        if not parts:
             continue
-        rel = kernel_release(kernel)
-        if not rel:
-            bad("%s: no kernel release found in the boot image" % fl)
-            continue
-        if not rel.endswith("-g" + short):
-            bad("%s: the boot image has kernel %s, the pin is %s (rebuild the tsx-xx60-kernel-%s package)"
-                % (fl, rel, rev, fl))
-            continue
+        rel, got = parts
         rf = os.path.join(root, "usr/share/tsx/kernel-%s.release" % fl)
         have = open(rf).read().strip() if os.path.isfile(rf) else ""
         if have != rel:
@@ -129,22 +201,24 @@ def main():
         if not os.path.isdir(os.path.join(root, "lib/modules", rel)):
             bad("%s: no /lib/modules/%s in the rootfs" % (fl, rel))
             continue
-        try:
-            cpio = gzip.decompress(ramdisk)
-        except (OSError, EOFError, zlib.error):
-            bad("%s: the initramfs in the boot image is not gzip data" % fl)
-            continue
-        got = cpio_file(cpio, STAMP_PATH)
-        got = got.decode().strip() if got is not None else ""
         if not got:
             bad("%s: the initramfs has no %s, so it is older than this checkout (rebuild the tsx-xx60-kernel-%s package)"
                 % (fl, STAMP_PATH, fl))
+            continue
+        if got != want_stamp and got in older:
+            # A workflow command: GitHub shows the line as a warning of the run.
+            print("::warning title=initramfs stamp (%s)::the kernel package tsx-xx60-kernel-%s has the initramfs stamp %s "
+                  "of the older commit %s. This checkout has the stamp %s. Only the initramfs sources differ "
+                  "(rootfs/initramfs, install.sh, tsx-disk.sh, packages.pin). The kernel packages of the next "
+                  "release carry the new stamp." % (fl, fl, got, older[got][:12], want_stamp))
+            print("check-boot-images: %s %s matches %s, initramfs %s is OLDER than this checkout (%s)"
+                  % (fl, rel, rev[:12], got[:12], want_stamp[:12]))
             continue
         if got != want_stamp:
             bad("%s: the initramfs stamp is %s, this checkout has %s (rebuild the tsx-xx60-kernel-%s package)"
                 % (fl, got[:12], want_stamp[:12], fl))
             continue
-        print("check-boot-images: %s %s matches %s, initramfs %s" % (fl, rel, short, got[:12]))
+        print("check-boot-images: %s %s matches %s, initramfs %s" % (fl, rel, rev[:12], got[:12]))
     return 1 if failed else 0
 
 

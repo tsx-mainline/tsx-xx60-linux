@@ -55,6 +55,10 @@ The rootfs build checks the kernel packages when it installs from a local apk tr
 
 A stale package stops the build. To fix it, rebuild the `tsx-xx60-kernel-<flavor>` package with the current initramfs.
 
+One difference does not stop the build when `TSX_STAMP_OLDER_OK=1` is set (`rootfs.yml` sets it): a kernel package whose initramfs has the stamp of an older commit of this checkout. `rootfs/initramfs-stamp-history.sh` lists these stamps from the git history (a full clone is necessary). Such a package comes from an older version of the same initramfs sources, so the build prints a warning with both stamps and the commit. This is the state after a change of the initramfs sources, until the kernel packages of the next release are live. An initramfs without a stamp, a stamp that is not in the history and a kernel that is not the pin still stop the build.
+
+`release.yml` checks each boot image that it builds with `check-boot-images.py --image <flavor> rootfs/out/tsxboot.img`. The kernel must be the pin, and the initramfs must have the stamp of the tag. An older stamp fails there.
+
 ### Carried commits per flavor
 
 `xdarklight/meson-mx-integration-6.20-20251223` has 98 commits on top of `v6.19-rc2`. Each flavor carries the commits that this board needs, minus the commits that its base has.

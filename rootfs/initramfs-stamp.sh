@@ -11,7 +11,8 @@
 # stamp must stay the same until the next release of the kernel packages,
 # because each kernel package carries an initramfs with this stamp. So do not
 # change a file of rootfs/initramfs, install.sh or tsx-disk.sh without a new
-# kernel package.
+# kernel package. initramfs-stamp-history.sh lists the stamps of the older
+# commits.
 # Usage: initramfs-stamp.sh
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)

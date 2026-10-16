@@ -21,6 +21,10 @@
 #   TSX_SKIP_BOOT_CHECK  1 skips the check of the kernel packages against the
 #                  kernel pins and the initramfs stamp. For a comparison build
 #                  only. Never use it for an image that goes on a panel.
+#   TSX_STAMP_OLDER  stamps of older commits of the initramfs sources
+#                  ("<stamp>:<commit>" words, build-rootfs.sh with
+#                  TSX_STAMP_OLDER_OK=1). check-boot-images.py gives a warning
+#                  for a kernel package with one of these stamps.
 #   TSX_APK_LOCAL  required. A local copy of the published tree of the apk
 #                  repository of this project, <ALPINE>/common and
 #                  <ALPINE>/xx60. The image installs the profile meta package

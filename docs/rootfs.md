@@ -202,7 +202,9 @@ The initramfs uses the same packages. `mkinitramfs-switchroot.sh` fetches the ve
 `tsx-boot-ok` and `uboot-env.conf` from `tsx-xx60-board`, and `tsx-orientation` from `tsx-kiosk`.
 The initramfs stamp (`initramfs-stamp.sh`) covers `packages.pin`. Each kernel package carries an
 initramfs with this stamp. Do not change a file of `rootfs/initramfs`, `install.sh` or
-`tsx-disk.sh` without new kernel packages. Each version in `packages.pin` must be in the published
+`tsx-disk.sh` without new kernel packages. `SOURCE_STAMP` in `tests/test-boot-images.sh` must
+change with the files, and the next release then needs new kernel packages
+(see [kernel.md](kernel.md) "Package guard" and `tools/build/README.md` "Release tags"). Each version in `packages.pin` must be in the published
 apk tree, because the release build of the kernel packages takes the files from that tree.
 tsx-aports keeps these versions: its `keep/keep.txt` lists them, and its prune never deletes them
 (`scripts/pin-kernel.sh` writes the list for the tag that the kernel packages pin).

@@ -276,6 +276,12 @@ jobs:
           KDIR: ../out-${{ matrix.flavor }}
         run: rootfs/mkbootimg.sh
 
+      # The boot image goes into the payload and into the kernel bundle of
+      # tsx-aports. Its kernel must be the pin, and its initramfs must have the
+      # stamp of this tag. No older stamp is accepted here.
+      - name: check the boot image (pinned kernel, initramfs stamp of this tag)
+        run: python3 rootfs/check-boot-images.py --image ${{ matrix.flavor }} rootfs/out/tsxboot.img
+
       # --bytes is the eMMC "system/root" region size (2932 MiB, i.e. the
       # rest of a 4 GB Hynix device past the "boot" region -- see
       # docs/boot.md's eMMC region table). mk-tsxroot-emmc.sh refuses if the
